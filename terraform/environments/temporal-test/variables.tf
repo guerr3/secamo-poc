@@ -47,7 +47,7 @@ variable "volume_size" {
 variable "github_repo_url" {
   description = "GitHub repo URL for secamo-poc (HTTPS)"
   type        = string
-  default     = "https://github.com/secamo/secamo-poc.git"
+  default     = "https://github.com/guerr3/secamo-poc.git"
 }
 
 # ── Worker Secrets (Graph API) ───────────────────────────────
