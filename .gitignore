@@ -1,0 +1,47 @@
+# ── Python ────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# ── Environment & Secrets ────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── IDE ──────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Terraform ────────────────────────────────────────────────
+terraform/**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.*
+terraform/**/.terraform.lock.hcl
+terraform/**/terraform.tfvars
+terraform/**/*.auto.tfvars
+
+# ── Docker ───────────────────────────────────────────────────
+*.tar
+
+# ── OS ───────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+
+# ── Misc ─────────────────────────────────────────────────────
+*.log
+.antigravity/
+
+# ── Scratch / test scripts with hardcoded secrets ────────────
+start.py
+test_connection.py
+run_workflow.py
+shared.py

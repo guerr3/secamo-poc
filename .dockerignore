@@ -1,0 +1,16 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.git/
+.github/
+.antigravity/
+.env
+.env.*
+terraform/
+*.md
+*.log
+.vscode/
+.idea/
+.dockerignore
+Dockerfile
