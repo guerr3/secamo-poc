@@ -79,3 +79,11 @@ variable "graph_secret1_id" {
   default     = ""
   sensitive   = true
 }
+
+# ── Ingress (Front Door) ─────────────────────────────────────
+
+variable "microsoft_allowed_cidrs" {
+  description = "Microsoft IP ranges allowed to invoke the ingress API"
+  type        = list(string)
+  default     = ["20.190.128.0/18", "40.126.0.0/18"]
+}

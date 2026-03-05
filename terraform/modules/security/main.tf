@@ -58,6 +58,31 @@ resource "aws_security_group" "database" {
   }
 }
 
+# ── Lambda Security Group ────────────────────────────────────
+
+resource "aws_security_group" "lambda" {
+  name_prefix = "${var.name_prefix}-lambda-"
+  description = "Security group for ingress Proxy Lambda (VPC-placed)"
+  vpc_id      = var.vpc_id
+
+  # Outbound: allow all (Temporal gRPC 7233, CloudWatch, etc.)
+  egress {
+    description = "Allow all outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = merge(var.extra_tags, {
+    Name = "${var.name_prefix}-lambda-sg"
+  })
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
 # ══════════════════════════════════════════════════════════════
 # IAM — Worker EC2 Instance Profile
 # ══════════════════════════════════════════════════════════════
@@ -221,6 +246,12 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
 
+# VPC access — allows Lambda to create ENIs in the VPC
+resource "aws_iam_role_policy_attachment" "lambda_vpc" {
+  role       = aws_iam_role.ingress_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
 # Lambda needs to read SSM params and write to DynamoDB for request tracking
 resource "aws_iam_role_policy" "lambda_ssm" {
   name = "${var.name_prefix}-lambda-ssm"
@@ -284,4 +315,56 @@ resource "aws_ssm_parameter" "temporal_namespace" {
   lifecycle {
     ignore_changes = [value]
   }
+}
+
+# ══════════════════════════════════════════════════════════════
+# IAM — Authorizer Lambda Execution Role
+# ══════════════════════════════════════════════════════════════
+
+resource "aws_iam_role" "authorizer_lambda" {
+  name = "${var.name_prefix}-authorizer-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      },
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "apigateway.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = var.extra_tags
+}
+
+resource "aws_iam_role_policy_attachment" "authorizer_basic" {
+  role       = aws_iam_role.authorizer_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+# Allow API Gateway to invoke Lambda via authorizer credentials
+resource "aws_iam_role_policy" "authorizer_invoke_lambda" {
+  name = "${var.name_prefix}-authorizer-invoke-lambda"
+  role = aws_iam_role.authorizer_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = "*"
+      }
+    ]
+  })
 }

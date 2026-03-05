@@ -244,31 +244,8 @@ echo "Namespace '$NAMESPACE' created"
 NSEOF
 chmod +x "$TEMPORAL_DIR/scripts/create-namespace.sh"
 
-# ── Start Temporal Stack (without worker for now) ────────────
-echo "[3/6] Starting Temporal via docker-compose..."
-cd "$TEMPORAL_DIR"
-
-# Start only the Temporal infra first (worker needs the repo clone)
-docker compose up -d postgresql temporal-admin-tools temporal temporal-create-namespace temporal-ui
-
-# ── Wait for Temporal Health ─────────────────────────────────
-echo "[4/6] Waiting for Temporal server to become healthy..."
-MAX_WAIT=300
-ELAPSED=0
-until docker exec temporal nc -z localhost 7233 2>/dev/null; do
-  if [ $ELAPSED -ge $MAX_WAIT ]; then
-    echo "ERROR: Temporal server did not become healthy within $${MAX_WAIT}s"
-    docker compose logs --tail=50
-    exit 1
-  fi
-  sleep 5
-  ELAPSED=$((ELAPSED + 5))
-  echo "  Waiting... ($${ELAPSED}s / $${MAX_WAIT}s)"
-done
-echo "Temporal server is healthy!"
-
-# ── Clone Secamo Repo & Build Worker ─────────────────────────
-echo "[5/6] Cloning secamo-poc repo and building worker image..."
+# ── Clone Secamo Repo ────────────────────────────────────────
+echo "[3/6] Cloning secamo-poc repo..."
 REPO_DIR="/opt/secamo-poc"
 
 git clone ${github_repo_url} "$REPO_DIR"
@@ -285,6 +262,13 @@ GRAPH_CLIENT1_ID=${graph_client1_id}
 GRAPH_SECRET1_VALUE=${graph_secret1_value}
 GRAPH_SECRET1_ID=${graph_secret1_id}
 WORKERENVEOF
+
+# ── Start Temporal Stack ─────────────────────────────────────
+echo "[4/6] Starting Temporal via docker-compose..."
+cd "$TEMPORAL_DIR"
+
+# Start Temporal infra first (worker builds from the cloned repo)
+docker compose up -d postgresql temporal-admin-tools temporal temporal-create-namespace temporal-ui
 
 # ── Start Worker Container ───────────────────────────────────
 echo "[6/6] Building and starting secamo-worker container..."

@@ -26,3 +26,8 @@ output "instance_id" {
   description = "EC2 instance ID (for SSM sessions)"
   value       = aws_instance.temporal.id
 }
+
+output "ingress_api_url" {
+  description = "REST API Gateway invoke URL for the ingress service"
+  value       = module.ingress.api_invoke_url
+}

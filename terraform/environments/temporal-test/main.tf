@@ -184,12 +184,12 @@ resource "aws_instance" "temporal" {
   key_name               = var.key_pair_name != "" ? var.key_pair_name : null
 
   user_data = base64encode(templatefile("${path.module}/../../scripts/temporal-startup.sh", {
-    temporal_namespace = var.temporal_namespace
-    github_repo_url    = var.github_repo_url
-    graph_tenant1_id   = var.graph_tenant1_id
-    graph_client1_id   = var.graph_client1_id
+    temporal_namespace  = var.temporal_namespace
+    github_repo_url     = var.github_repo_url
+    graph_tenant1_id    = var.graph_tenant1_id
+    graph_client1_id    = var.graph_client1_id
     graph_secret1_value = var.graph_secret1_value
-    graph_secret1_id   = var.graph_secret1_id
+    graph_secret1_id    = var.graph_secret1_id
   }))
 
   root_block_device {
@@ -214,3 +214,263 @@ resource "aws_instance" "temporal" {
     ignore_changes = [ami, user_data]
   }
 }
+
+# ══════════════════════════════════════════════════════════════
+# PRIVATE SUBNETS (for VPC Lambda placement)
+# ══════════════════════════════════════════════════════════════
+
+resource "aws_subnet" "private" {
+  count = 2
+
+  vpc_id            = aws_vpc.temporal.id
+  cidr_block        = cidrsubnet("10.99.0.0/16", 8, 100 + count.index)
+  availability_zone = data.aws_availability_zones.available.names[count.index]
+
+  tags = {
+    Name = "${local.name_prefix}-private-${data.aws_availability_zones.available.names[count.index]}"
+    Tier = "private"
+  }
+}
+
+# ── fck-nat Instance (cost-effective NAT for private subnets) ─
+
+data "aws_ami" "fck_nat" {
+  most_recent = true
+  owners      = ["568608671756"]
+
+  filter {
+    name   = "name"
+    values = ["fck-nat-al2023-*-arm64-ebs"]
+  }
+
+  filter {
+    name   = "architecture"
+    values = ["arm64"]
+  }
+}
+
+resource "aws_security_group" "fck_nat" {
+  name_prefix = "${local.name_prefix}-fck-nat-"
+  description = "Security group for fck-nat instance"
+  vpc_id      = aws_vpc.temporal.id
+
+  ingress {
+    description = "All traffic from private subnets"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = [for s in aws_subnet.private : s.cidr_block]
+  }
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-fck-nat-sg"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_network_interface" "fck_nat" {
+  subnet_id         = aws_subnet.public.id
+  security_groups   = [aws_security_group.fck_nat.id]
+  source_dest_check = false
+
+  tags = {
+    Name = "${local.name_prefix}-fck-nat-eni"
+  }
+}
+
+resource "aws_instance" "fck_nat" {
+  ami           = data.aws_ami.fck_nat.id
+  instance_type = "t4g.nano"
+
+  network_interface {
+    network_interface_id = aws_network_interface.fck_nat.id
+    device_index         = 0
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-fck-nat"
+  }
+}
+
+resource "aws_eip" "fck_nat" {
+  domain            = "vpc"
+  network_interface = aws_network_interface.fck_nat.id
+
+  tags = {
+    Name = "${local.name_prefix}-fck-nat-eip"
+  }
+
+  depends_on = [
+    aws_internet_gateway.temporal,
+    aws_instance.fck_nat
+  ]
+}
+
+# ── Private Route Table (via fck-nat) ────────────────────────
+
+resource "aws_route_table" "private" {
+  vpc_id = aws_vpc.temporal.id
+
+  route {
+    cidr_block           = "0.0.0.0/0"
+    network_interface_id = aws_network_interface.fck_nat.id
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-private-rt"
+  }
+}
+
+resource "aws_route_table_association" "private" {
+  count = 2
+
+  subnet_id      = aws_subnet.private[count.index].id
+  route_table_id = aws_route_table.private.id
+}
+
+# ══════════════════════════════════════════════════════════════
+# LAMBDA SECURITY GROUP + TEMPORAL SG INGRESS RULE
+# ══════════════════════════════════════════════════════════════
+
+resource "aws_security_group" "lambda" {
+  name_prefix = "${local.name_prefix}-lambda-"
+  description = "Security group for ingress Proxy Lambda"
+  vpc_id      = aws_vpc.temporal.id
+
+  egress {
+    description = "All outbound"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-lambda-sg"
+  }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Allow Lambda → Temporal Server on gRPC port
+resource "aws_security_group_rule" "temporal_from_lambda" {
+  type                     = "ingress"
+  description              = "Temporal gRPC from Lambda"
+  from_port                = 7233
+  to_port                  = 7233
+  protocol                 = "tcp"
+  security_group_id        = aws_security_group.temporal.id
+  source_security_group_id = aws_security_group.lambda.id
+}
+
+# ══════════════════════════════════════════════════════════════
+# IAM — Ingress Lambda Roles
+# ══════════════════════════════════════════════════════════════
+
+# Proxy Lambda execution role
+resource "aws_iam_role" "ingress_lambda" {
+  name = "${local.name_prefix}-ingress-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_basic" {
+  role       = aws_iam_role.ingress_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_vpc" {
+  role       = aws_iam_role.ingress_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
+}
+
+# Authorizer Lambda execution role
+resource "aws_iam_role" "authorizer_lambda" {
+  name = "${local.name_prefix}-authorizer-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+      },
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "apigateway.amazonaws.com"
+        }
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "authorizer_basic" {
+  role       = aws_iam_role.authorizer_lambda.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_iam_role_policy" "authorizer_invoke_lambda" {
+  name = "${local.name_prefix}-authorizer-invoke-lambda"
+  role = aws_iam_role.authorizer_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = "lambda:InvokeFunction"
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+# ══════════════════════════════════════════════════════════════
+# INGRESS MODULE — REST API + Proxy Lambda + Authorizer
+# ══════════════════════════════════════════════════════════════
+
+module "ingress" {
+  source = "../../modules/ingress"
+
+  name_prefix         = local.name_prefix
+  lambda_role_arn     = aws_iam_role.ingress_lambda.arn
+  authorizer_role_arn = aws_iam_role.authorizer_lambda.arn
+
+  private_subnet_ids = aws_subnet.private[*].id
+  lambda_sg_id       = aws_security_group.lambda.id
+
+  temporal_host      = "${aws_instance.temporal.private_ip}:7233"
+  temporal_namespace = var.temporal_namespace
+
+  allowed_cidr_blocks = var.microsoft_allowed_cidrs
+}
+

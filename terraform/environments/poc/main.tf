@@ -46,14 +46,14 @@ module "security" {
 module "database" {
   source = "../../modules/database"
 
-  name_prefix        = local.name_prefix
-  db_instance_class  = var.db_instance_class
-  db_name            = var.db_name
-  db_username        = var.db_username
-  db_password        = random_password.db_password.result
-  private_subnet_ids = module.vpc.private_subnet_ids
+  name_prefix          = local.name_prefix
+  db_instance_class    = var.db_instance_class
+  db_name              = var.db_name
+  db_username          = var.db_username
+  db_password          = random_password.db_password.result
+  private_subnet_ids   = module.vpc.private_subnet_ids
   db_security_group_id = module.security.db_security_group_id
-  extra_tags         = var.extra_tags
+  extra_tags           = var.extra_tags
 }
 
 # ── Compute (EC2 Workers) ───────────────────────────────────
@@ -61,17 +61,17 @@ module "database" {
 module "compute" {
   source = "../../modules/compute"
 
-  name_prefix           = local.name_prefix
-  instance_type         = var.worker_instance_type
-  ami_id                = var.worker_ami_id
-  key_pair_name         = var.worker_key_pair_name
-  private_subnet_id     = module.vpc.private_subnet_ids[0]
+  name_prefix              = local.name_prefix
+  instance_type            = var.worker_instance_type
+  ami_id                   = var.worker_ami_id
+  key_pair_name            = var.worker_key_pair_name
+  private_subnet_id        = module.vpc.private_subnet_ids[0]
   worker_security_group_id = module.security.worker_security_group_id
-  instance_profile_name = module.security.worker_instance_profile_name
-  db_endpoint           = module.database.db_endpoint
-  db_name               = var.db_name
-  db_username           = var.db_username
-  extra_tags            = var.extra_tags
+  instance_profile_name    = module.security.worker_instance_profile_name
+  db_endpoint              = module.database.db_endpoint
+  db_name                  = var.db_name
+  db_username              = var.db_username
+  extra_tags               = var.extra_tags
 }
 
 # ── Ingress (API Gateway + Lambda) ──────────────────────────
@@ -79,11 +79,11 @@ module "compute" {
 module "ingress" {
   source = "../../modules/ingress"
 
-  name_prefix        = local.name_prefix
-  lambda_memory      = var.ingress_lambda_memory
-  lambda_timeout     = var.ingress_lambda_timeout
-  lambda_role_arn    = module.security.ingress_lambda_role_arn
-  extra_tags         = var.extra_tags
+  name_prefix     = local.name_prefix
+  lambda_memory   = var.ingress_lambda_memory
+  lambda_timeout  = var.ingress_lambda_timeout
+  lambda_role_arn = module.security.ingress_lambda_role_arn
+  extra_tags      = var.extra_tags
 }
 
 # ── Storage (S3 + DynamoDB) ─────────────────────────────────

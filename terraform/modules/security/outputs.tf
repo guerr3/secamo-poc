@@ -31,3 +31,13 @@ output "db_password_ssm_parameter_name" {
   description = "SSM parameter name for the DB password"
   value       = aws_ssm_parameter.db_password.name
 }
+
+output "lambda_security_group_id" {
+  description = "Security group ID for the ingress Proxy Lambda"
+  value       = aws_security_group.lambda.id
+}
+
+output "authorizer_lambda_role_arn" {
+  description = "IAM role ARN for the Authorizer Lambda"
+  value       = aws_iam_role.authorizer_lambda.arn
+}

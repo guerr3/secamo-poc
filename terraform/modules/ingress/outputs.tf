@@ -2,22 +2,27 @@
 # Ingress Module — Outputs
 # ──────────────────────────────────────────────────────────────
 
-output "api_endpoint" {
-  description = "HTTP API Gateway invoke URL"
-  value       = aws_apigatewayv2_api.ingress.api_endpoint
+output "api_invoke_url" {
+  description = "REST API Gateway invoke URL (stage v1)"
+  value       = aws_api_gateway_stage.v1.invoke_url
 }
 
 output "api_id" {
-  description = "ID of the HTTP API Gateway"
-  value       = aws_apigatewayv2_api.ingress.id
+  description = "ID of the REST API Gateway"
+  value       = aws_api_gateway_rest_api.ingress.id
 }
 
-output "lambda_function_name" {
-  description = "Name of the ingress Lambda function"
-  value       = aws_lambda_function.ingress.function_name
+output "proxy_lambda_function_name" {
+  description = "Name of the Proxy Lambda function"
+  value       = aws_lambda_function.proxy.function_name
 }
 
-output "lambda_function_arn" {
-  description = "ARN of the ingress Lambda function"
-  value       = aws_lambda_function.ingress.arn
+output "proxy_lambda_function_arn" {
+  description = "ARN of the Proxy Lambda function"
+  value       = aws_lambda_function.proxy.arn
+}
+
+output "authorizer_lambda_function_name" {
+  description = "Name of the Authorizer Lambda function"
+  value       = aws_lambda_function.authorizer.function_name
 }
