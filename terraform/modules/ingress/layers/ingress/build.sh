@@ -4,8 +4,7 @@
 # ──────────────────────────────────────────────────────────────
 #
 # Installs Python dependencies into the layer directory alongside
-# the ingress_sdk package. The result can be zipped by Terraform's
-# archive_file data source or packaged manually.
+# the ingress_sdk package, and copies the shared models package.
 #
 # Usage:
 #   chmod +x build.sh
@@ -20,11 +19,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LAYER_DIR="${SCRIPT_DIR}/python"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../../.." && pwd)"
 
 echo "── Installing dependencies into ${LAYER_DIR} ──"
 
 pip install \
   temporalio \
+  pydantic \
   --target "${LAYER_DIR}" \
   --platform manylinux2014_aarch64 \
   --implementation cp \
@@ -32,6 +33,11 @@ pip install \
   --only-binary=:all: \
   --upgrade \
   --quiet
+
+# Copy shared package into the layer so the proxy Lambda can import it
+echo "Copying shared package into layer..."
+rm -rf "${LAYER_DIR}/shared"
+cp -r "${REPO_ROOT}/shared" "${LAYER_DIR}/shared"
 
 # Clean up unnecessary files to reduce layer size
 find "${LAYER_DIR}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
@@ -41,3 +47,4 @@ find "${LAYER_DIR}" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
 echo "── Layer build complete ──"
 echo "Contents: $(du -sh "${LAYER_DIR}" | cut -f1)"
 echo "SDK modules: $(find "${LAYER_DIR}/ingress_sdk" -name '*.py' | wc -l) files"
+echo "Shared modules: $(find "${LAYER_DIR}/shared" -name '*.py' | wc -l) files"
