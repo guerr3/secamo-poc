@@ -51,34 +51,8 @@ variable "github_repo_url" {
 }
 
 # ── Worker Secrets (Graph API) ───────────────────────────────
-
-variable "graph_tenant1_id" {
-  description = "Microsoft Graph tenant ID"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "graph_client1_id" {
-  description = "Microsoft Graph client (app) ID"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "graph_secret1_value" {
-  description = "Microsoft Graph client secret value"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
-
-variable "graph_secret1_id" {
-  description = "Microsoft Graph client secret ID"
-  type        = string
-  default     = ""
-  sensitive   = true
-}
+# Secrets are now fetched dynamically from AWS SSM Parameter Store
+# under the path: /secamo/tenants/*/graph/
 
 # ── Ingress (Front Door) ─────────────────────────────────────
 
