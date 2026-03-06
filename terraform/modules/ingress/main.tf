@@ -4,6 +4,7 @@
 #
 # Routes:  POST /api/v1/ingress/defender  → Proxy Lambda (start workflow)
 #          POST /api/v1/ingress/teams     → Proxy Lambda (signal workflow)
+#          POST /api/v1/ingress/iam       → Proxy Lambda (start IAM workflow)
 # Auth:    Lambda Authorizer (REQUEST type)
 # Policy:  Resource Policy — deny all except allowed CIDRs
 
@@ -159,6 +160,7 @@ resource "aws_api_gateway_rest_api" "ingress" {
 # ── Resource Path Hierarchy ─────────────────────────────────
 # /api → /api/v1 → /api/v1/ingress → /api/v1/ingress/defender
 #                                    → /api/v1/ingress/teams
+#                                    → /api/v1/ingress/iam
 
 resource "aws_api_gateway_resource" "api" {
   rest_api_id = aws_api_gateway_rest_api.ingress.id
@@ -188,6 +190,12 @@ resource "aws_api_gateway_resource" "teams" {
   rest_api_id = aws_api_gateway_rest_api.ingress.id
   parent_id   = aws_api_gateway_resource.ingress.id
   path_part   = "teams"
+}
+
+resource "aws_api_gateway_resource" "iam" {
+  rest_api_id = aws_api_gateway_rest_api.ingress.id
+  parent_id   = aws_api_gateway_resource.ingress.id
+  path_part   = "iam"
 }
 
 # ── Lambda Authorizer ───────────────────────────────────────
@@ -240,6 +248,25 @@ resource "aws_api_gateway_integration" "teams_post" {
   uri                     = aws_lambda_function.proxy.invoke_arn
 }
 
+# ── POST /api/v1/ingress/iam ────────────────────────────────
+
+resource "aws_api_gateway_method" "iam_post" {
+  rest_api_id   = aws_api_gateway_rest_api.ingress.id
+  resource_id   = aws_api_gateway_resource.iam.id
+  http_method   = "POST"
+  authorization = "CUSTOM"
+  authorizer_id = aws_api_gateway_authorizer.lambda.id
+}
+
+resource "aws_api_gateway_integration" "iam_post" {
+  rest_api_id             = aws_api_gateway_rest_api.ingress.id
+  resource_id             = aws_api_gateway_resource.iam.id
+  http_method             = aws_api_gateway_method.iam_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.proxy.invoke_arn
+}
+
 # ── Deployment & Stage ──────────────────────────────────────
 
 resource "aws_api_gateway_deployment" "ingress" {
@@ -250,10 +277,13 @@ resource "aws_api_gateway_deployment" "ingress" {
     redeployment = sha1(jsonencode([
       aws_api_gateway_resource.defender.id,
       aws_api_gateway_resource.teams.id,
+      aws_api_gateway_resource.iam.id,
       aws_api_gateway_method.defender_post.id,
       aws_api_gateway_method.teams_post.id,
+      aws_api_gateway_method.iam_post.id,
       aws_api_gateway_integration.defender_post.id,
       aws_api_gateway_integration.teams_post.id,
+      aws_api_gateway_integration.iam_post.id,
       aws_api_gateway_authorizer.lambda.id,
     ]))
   }

@@ -10,10 +10,6 @@
 # Template variables (injected by Terraform):
 #   ${temporal_namespace}   — Namespace to create
 #   ${github_repo_url}      — GitHub repo URL to clone
-#   ${graph_tenant1_id}     — Microsoft Graph tenant ID
-#   ${graph_client1_id}     — Microsoft Graph client ID
-#   ${graph_secret1_value}  — Microsoft Graph client secret value
-#   ${graph_secret1_id}     — Microsoft Graph client secret ID
 # ──────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -255,12 +251,6 @@ cat > "$REPO_DIR/.env" <<WORKERENVEOF
 # Temporal (internal Docker network)
 TEMPORAL_ADDRESS=temporal:7233
 TEMPORAL_NAMESPACE=${temporal_namespace}
-
-# Microsoft Graph
-GRAPH_TENANT1_ID=${graph_tenant1_id}
-GRAPH_CLIENT1_ID=${graph_client1_id}
-GRAPH_SECRET1_VALUE=${graph_secret1_value}
-GRAPH_SECRET1_ID=${graph_secret1_id}
 WORKERENVEOF
 
 # ── Start Temporal Stack ─────────────────────────────────────

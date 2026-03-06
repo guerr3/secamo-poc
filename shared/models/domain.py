@@ -1,23 +1,27 @@
+"""
+shared.models.domain — Temporal workflow domain contracts (Pydantic v2).
 
+These models are the canonical inputs/outputs for Temporal workflows.
+Migrated from dataclasses — field names and types are unchanged for
+backwards compatibility.
+"""
 
-from dataclasses import dataclass, field
+from __future__ import annotations
+
 from typing import Optional
-from enum import Enum
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from shared.models.common import LifecycleAction
 
 
 # ──────────────────────────────────────────────
 # WF-01  User Lifecycle Management
 # ──────────────────────────────────────────────
 
-class LifecycleAction(str, Enum):
-    CREATE = "create"
-    UPDATE = "update"
-    DELETE = "delete"
-    PASSWORD_RESET = "password_reset"
+class UserData(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
 
-
-@dataclass
-class UserData:
     email: str
     first_name: str
     last_name: str
@@ -27,33 +31,36 @@ class UserData:
     license_sku: Optional[str] = None
 
 
-@dataclass
-class LifecycleRequest:
+class LifecycleRequest(BaseModel):
     """Workflow input for WF-01 (IAM Onboarding)."""
+    model_config = ConfigDict(from_attributes=True)
+
     tenant_id: str
     action: LifecycleAction
     user_data: UserData
     requester: str
-    ticket_id: str
+    ticket_id: str = ""
 
-    def __post_init__(self):
-        if isinstance(self.action, list):
-            self.action = LifecycleAction("".join(self.action))
-        elif isinstance(self.action, str):
-            self.action = LifecycleAction(self.action)
-        if isinstance(self.user_data, dict):
-            self.user_data = UserData(**self.user_data)
+    @field_validator("action", mode="before")
+    @classmethod
+    def _coerce_action(cls, v):
+        """Accept plain str or list-of-chars (legacy edge case)."""
+        if isinstance(v, list):
+            v = "".join(v)
+        return LifecycleAction(v) if isinstance(v, str) else v
 
 
-@dataclass
-class TenantSecrets:
+class TenantSecrets(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     client_id: str
-    client_secret: str
+    client_secret: str = Field(repr=False)
     tenant_azure_id: str
 
 
-@dataclass
-class GraphUser:
+class GraphUser(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
     user_id: str
     email: str
     display_name: str
@@ -64,9 +71,10 @@ class GraphUser:
 # WF-02  Defender Alert Enrichment & Ticketing
 # ──────────────────────────────────────────────
 
-@dataclass
-class AlertData:
+class AlertData(BaseModel):
     """Raw alert payload coming from Microsoft Defender / Sentinel."""
+    model_config = ConfigDict(from_attributes=True)
+
     alert_id: str
     severity: str          # low | medium | high | critical
     title: str
@@ -77,17 +85,19 @@ class AlertData:
     destination_ip: Optional[str] = None
 
 
-@dataclass
-class DefenderAlertRequest:
+class DefenderAlertRequest(BaseModel):
     """Workflow input for WF-02 (Defender Alert Enrichment)."""
+    model_config = ConfigDict(from_attributes=True)
+
     tenant_id: str
     alert: AlertData
     requester: str
 
 
-@dataclass
-class EnrichedAlert:
+class EnrichedAlert(BaseModel):
     """Output of graph_enrich_alert — alert + extra Graph context."""
+    model_config = ConfigDict(from_attributes=True)
+
     alert_id: str
     severity: str
     title: str
@@ -99,9 +109,10 @@ class EnrichedAlert:
     device_compliance: Optional[str] = None
 
 
-@dataclass
-class ThreatIntelResult:
+class ThreatIntelResult(BaseModel):
     """Result of threat intelligence lookup for an IP or indicator."""
+    model_config = ConfigDict(from_attributes=True)
+
     indicator: str
     is_malicious: bool
     provider: str
@@ -109,18 +120,20 @@ class ThreatIntelResult:
     details: str = ""
 
 
-@dataclass
-class RiskScore:
+class RiskScore(BaseModel):
     """Calculated risk score for an alert."""
+    model_config = ConfigDict(from_attributes=True)
+
     alert_id: str
     score: float              # 0.0 – 100.0
     level: str                # low | medium | high | critical
-    factors: list[str] = field(default_factory=list)
+    factors: list[str] = Field(default_factory=list)
 
 
-@dataclass
-class TicketData:
+class TicketData(BaseModel):
     """Input for creating or updating a ticket."""
+    model_config = ConfigDict(from_attributes=True)
+
     tenant_id: str
     title: str
     description: str
@@ -130,17 +143,19 @@ class TicketData:
     related_alert_id: Optional[str] = None
 
 
-@dataclass
-class TicketResult:
+class TicketResult(BaseModel):
     """Result after ticket creation / update."""
+    model_config = ConfigDict(from_attributes=True)
+
     ticket_id: str
     status: str
     url: str
 
 
-@dataclass
-class NotificationResult:
+class NotificationResult(BaseModel):
     """Result of a Teams or e-mail notification."""
+    model_config = ConfigDict(from_attributes=True)
+
     success: bool
     channel: str              # "teams" | "email"
     message_id: Optional[str] = None
@@ -150,9 +165,10 @@ class NotificationResult:
 # WF-05  Impossible Travel Alert Triage (HITL)
 # ──────────────────────────────────────────────
 
-@dataclass
-class ImpossibleTravelRequest:
+class ImpossibleTravelRequest(BaseModel):
     """Workflow input for WF-05 (Impossible Travel Alert Triage)."""
+    model_config = ConfigDict(from_attributes=True)
+
     tenant_id: str
     alert: AlertData
     user_email: str
@@ -161,20 +177,22 @@ class ImpossibleTravelRequest:
     requester: str
 
 
-@dataclass
-class ApprovalDecision:
+class ApprovalDecision(BaseModel):
     """Signal payload for the HITL approval step in WF-05."""
+    model_config = ConfigDict(from_attributes=True)
+
     approved: bool
     reviewer: str
     action: str              # "dismiss" | "isolate" | "disable_user"
     comments: str = ""
 
 
-@dataclass
-class EvidenceBundle:
+class EvidenceBundle(BaseModel):
     """Collected evidence bundle for compliance/audit trail."""
+    model_config = ConfigDict(from_attributes=True)
+
     workflow_id: str
     tenant_id: str
     alert_id: str
-    items: list[dict] = field(default_factory=list)
+    items: list[dict] = Field(default_factory=list)
     bundle_url: str = ""

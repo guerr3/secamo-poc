@@ -2,6 +2,7 @@ import asyncio
 import logging
 
 from temporalio.client import Client, TLSConfig
+from temporalio.contrib.pydantic import pydantic_data_converter
 from temporalio.worker import Worker
 
 from shared.config import (
@@ -102,12 +103,14 @@ async def main() -> None:
             namespace=TEMPORAL_NAMESPACE,
             api_key=TEMPORAL_API_KEY,
             tls=True,
+            data_converter=pydantic_data_converter,
         )
     else:
         # Self-hosted: geen TLS, geen API key
         client = await Client.connect(
             TEMPORAL_ADDRESS,
             namespace=TEMPORAL_NAMESPACE,
+            data_converter=pydantic_data_converter,
         )
 
     logger.info(f"Verbinding met {mode} succesvol.")

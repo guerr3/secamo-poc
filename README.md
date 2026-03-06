@@ -4,112 +4,79 @@ Multi-tenant security automation platform built on [Temporal](https://temporal.i
 
 ## Architecture Overview
 
-All components run as Docker containers on a **single EC2 instance** (t3.medium) provisioned via Terraform.
+All components run as Docker containers on a **single EC2 instance** (t3.medium), protected by a Serverless **Front Door Ingress architecture**. Infrastructure is provisioned via Terraform.
 
 ```text
-┌──────────────────────── AWS Cloud ───────────────────────────────────┐
-│                                                                    │
-│  [ Webhooks / Clients ]                                            │
-│           │ POST /api/v1/ingress/...                               │
-│  ┌────────▼───────┐                                                │
-│  │ API Gateway    │◄──── (Resource Policy IP Allowlist)            │
-│  │ (REST API)     │                                                │
-│  └──────┬─┬───────┘                                                │
-│         │ └─────────────────────────┐                              │
-│  ┌──────▼───────┐   ┌───────────────▼─────────┐                    │
-│  │ Authorizer   │   │ Proxy Lambda (VPC)      │◄── Lambda Layer    │
-│  │ Lambda       │   │ ingress_sdk routing     │    (temporalio)    │
-│  └──────────────┘   └───────────────┬─────────┘                    │
-│                                     │ gRPC :7233                   │
-│ ┌───────────────────────────────────▼────────────────────────────┐ │
-│ │                  EC2 Instance (t3.medium)                      │ │
-│ │  Docker Compose Network: temporal-network                      │ │
-│ │  ┌──────────────┐  ┌───────────────────────┐  ┌───────────────┐│ │
-│ │  │ PostgreSQL   │  │ Temporal Server 1.29.1│  │ Temporal UI   ││ │
-│ │  │ :5432        │◄─│ gRPC :7233            │  │ :8080         ││ │
-│ │  └──────────────┘  └───────────┬───────────┘  └───────────────┘│ │
-│ │                                │                               │ │
-│ │                    ┌───────────▼────────────┐                  │ │
-│ │                    │ secamo-worker          │                  │ │
-│ │                    │ Python 3.11            │                  │ │
-│ │                    │ ┌─────────┐ ┌────────┐ │                  │ │
-│ │                    │ │ Activit.│ │Workfl. │ │                  │ │
-│ │                    │ │ Graph   │ │IAM     │ │                  │ │
-│ │                    │ │ SOC     │ │Defender│ │                  │ │
-│ │                    │ │ Audit   │ │Travel  │ │                  │ │
-│ │                    │ └─────────┘ └────────┘ │                  │ │
-│ │                    └────────────────────────┘                  │ │
-│ └────────────────────────────────────────────────────────────────┘ │
-└────────────────────────────────────────────────────────────────────┘
+┌──────────────────────── AWS Cloud ───────────────────────────────────────────┐
+│                                                                            │
+│  [ Webhooks / Clients ]                                                    │
+│           │ POST /api/v1/ingress/{defender, teams, iam}                    │
+│  ┌────────▼───────┐                                                        │
+│  │ API Gateway    │◄──── (Resource Policy IP Allowlist)                    │
+│  │ (REST API)     │                                                        │
+│  └──────┬─┬───────┘                                                        │
+│         │ └─────────────────────────┐                                      │
+│  ┌──────▼───────┐   ┌───────────────▼─────────┐                            │
+│  │ Authorizer   │   │ Proxy Lambda (VPC)      │◄── Lambda Layer            │
+│  │ Lambda       │   │ ingress_sdk routing     │    (temporalio)            │
+│  └──────────────┘   └───────────────┬─────────┘                            │
+│                                     │ gRPC :7233                           │
+│ ┌───────────────────────────────────▼────────────────────────────────────┐ │
+│ │                  EC2 Instance (t3.medium)                              │ │
+│ │  Docker Compose Network: temporal-network                              │ │
+│ │  ┌──────────────┐  ┌───────────────────────┐  ┌───────────────┐        │ │
+│ │  │ PostgreSQL   │  │ Temporal Server 1.29.1│  │ Temporal UI   │        │ │
+│ │  │ :5432        │◄─│ gRPC :7233            │  │ :8080         │        │ │
+│ │  └──────────────┘  └───────────┬───────────┘  └───────────────┘        │ │
+│ │                                │                                       │ │
+│ │                    ┌───────────▼────────────┐  IAM Instance Profile    │ │
+│ │                    │ secamo-worker          │  fetches secrets         │ │
+│ │                    │ Python 3.11            ├────────────────┐         │ │
+│ │                    │ ┌─────────┐ ┌────────┐ │                │         │ │
+│ │                    │ │ Activit.│ │Workfl. │ │       ┌────────▼───────┐ │ │
+│ │                    │ │ Graph   │ │IAM     │ │       │ AWS SSM        │ │ │
+│ │                    │ │ SOC     │ │Defender│ │       │ Parameter Store│ │ │
+│ │                    │ │ Audit   │ │Travel  │ │       └────────────────┘ │ │
+│ │                    │ └─────────┘ └────────┘ │                          │ │
+│ │                    └────────────────────────┘                          │ │
+│ └────────────────────────────────────────────────────────────────────────┘ │
+└────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Design Principles
 
-- **Temporal Server** = orchestration brain (state, retries, task queues) — never touches your code
-- **Workers** = your Python code running activities and workflows — poll Temporal for tasks
-- **Secrets** stay on the worker side (Graph API credentials never reach Temporal Server)
+- **Temporal Server** = orchestration brain (state, retries, task queues) — never touches your code.
+- **Workers** = your Python code running activities and workflows — poll Temporal for tasks.
+- **Secrets Management** = Local `.env` files are deprecated. Secrets (like Microsoft Graph credentials) never reach the Temporal Server. Workers proactively fetch them contextually per-tenant from **AWS SSM Parameter Store** via their EC2 IAM instance profile.
+- **Strict Data Contracts** = All workflow Inputs and Outputs are strongly typed via Pydantic v2.
 
 ## Front Door Ingress (API Gateway & Lambdas)
 
-To securely receive external webhooks (e.g., from Microsoft Defender or Teams) and translate them into Temporal workflows, Secamo uses a serverless Front Door architecture:
+To securely receive external webhooks (e.g., from Microsoft Defender, Teams, or our own internal services) and translate them into Temporal workflows, Secamo uses a serverless Front Door Architecture defined in the `ingress` Terraform module:
 
-1. **API Gateway (REST API)**: The entry point for all external traffic. It uses a **Resource Policy** to enforce infrastructure-level IP allowlisting (restricting access to Microsoft IP ranges).
-2. **Authorizer Lambda**: A custom Lambda Authorizer that inspects incoming requests, validates tenant identity, and injects a `tenant_id` into the request context to achieve multi-tenancy.
-3. **Proxy Lambda (VPC)**: Placed inside private subnets within the VPC to communicate directly with the Temporal EC2 instance via gRPC (port 7233). It parses the webhook and uses the Temporal SDK to start or signal workflows.
-4. **Lambda Layer (`secamo-ingress-layer`)**: To keep the Proxy Lambda entirely DRY, all Temporal connection logic, API event parsing, response formatting, and async dispatching is extracted into a shared `ingress_sdk` Lambda Layer. The proxy handler contains only pure business logic (~20 lines per route).
+1. **API Gateway (REST API)**: The entry point for all external traffic. It exposes routes like `/api/v1/ingress/defender`, `/api/v1/ingress/teams`, and `/api/v1/ingress/iam`. It uses a **Resource Policy** to enforce infrastructure-level IP allowlisting (restricting access to Microsoft IP ranges).
+2. **Authorizer Lambda**: A custom Lambda Authorizer that inspects incoming requests, validates the authentication tokens, and extracts a `tenant_id` which is injected into the request context to guarantee multi-tenancy.
+3. **Proxy Lambda (VPC)**: Placed inside private subnets within the VPC to communicate directly with the Temporal EC2 instance via gRPC (port 7233). It parses the webhook into Pydantic events and uses the Temporal SDK to start or signal workflows.
+4. **Lambda Layer (`secamo-ingress-layer`)**: To keep the Proxy Lambda entirely DRY, all Temporal connection logic, API event parsing, response formatting, and async dispatching is extracted into a shared `ingress_sdk` Lambda Layer. 
 
-### Webhook Flow
-When a webhook arrives at `POST /api/v1/ingress/defender`:
-1. API Gateway validates the source IP against the Resource Policy.
-2. The Authorizer Lambda validates the payload/token and returns an IAM Allow policy + `tenant_id`.
-3. The Proxy Lambda receives the event, parses it using `ingress_sdk`, and connects to the Temporal Server.
-4. The Proxy Lambda starts the `DefenderAlertEnrichmentWorkflow` on the `soc-defender` task queue.
-5. API Gateway immediately returns an HTTP 202 Accepted with the `workflow_id`, while the EC2 workers pick up and execute the workflow asynchronously.
+### End-to-End Functional Flow (Webhook to Execution)
 
-## Project Structure
+1. **Client Request**: An external service (e.g., Defender) sends a webhook POST to API Gateway `POST /api/v1/ingress/defender`.
+2. **Gateway Validation**: API Gateway checks if the source IP matches the Resource Policy allowlist.
+3. **Authorization**: The Authorizer Lambda validates the payload signature/token and returns an IAM Allow policy + injected `tenant_id`.
+4. **Proxy Hand-off**: The Proxy Lambda receives the authorized event, formats it using the shared Pydantic `RawIngressEnvelope` model from the Lambda Layer, and connects to the Temporal Server via gRPC.
+5. **Workflow Kickoff**: The Proxy Lambda starts the `DefenderAlertEnrichmentWorkflow` on the `soc-defender` task queue.
+6. **Asynchronous Response**: API Gateway immediately returns an HTTP 202 Accepted with the mapped `workflow_id`.
+7. **Worker Execution**: The EC2 `secamo-worker` polls the `soc-defender` queue, picks up the task, dynamically fetches the Azure AD credentials for the specified `tenant_id` from AWS SSM Parameter store, and executes the business logic (Microsoft Graph lookups, ticketing, etc.).
 
-```
-secamo-poc/
-├── Dockerfile                  # Multi-stage Python 3.11-slim worker image
-├── requirements.txt            # Python dependencies
-├── .env.example                # Template for worker environment variables
-│
-├── shared/                     # Shared modules
-│   ├── config.py               # Environment-based configuration loader
-│   └── models.py               # Dataclasses for all workflow I/O
-│
-├── activities/                 # Temporal activities (business logic)
-│   ├── graph_users.py          # Microsoft Graph user CRUD via msgraph-sdk
-│   ├── graph_alerts.py         # Defender alert enrichment & threat intel
-│   ├── tenant.py               # Tenant validation & secret retrieval
-│   ├── ticketing.py            # Ticket create/update/close
-│   ├── notifications.py        # Teams & email notifications
-│   └── audit.py                # Audit logging & evidence collection
-│
-├── workflows/                  # Temporal workflow definitions
-│   ├── iam_onboarding.py       # WF-01: User lifecycle (create/update/delete/reset)
-│   ├── defender_alert_enrichment.py  # WF-02: SOC alert triage & ticketing
-│   └── impossible_travel.py    # WF-05: HITL impossible travel detection
-│
-├── workers/
-│   └── run_worker.py           # Worker entrypoint — starts 3 task queue workers
-│
-└── terraform/
-    ├── environments/
-    │   └── temporal-test/      # Standalone Temporal EC2 environment
-    │       ├── main.tf         # VPC, SG, IAM, EC2 (all inline)
-    │       ├── variables.tf    # Inputs: my_ip, Graph creds, GitHub URL
-    │       ├── outputs.tf      # Public IP, UI URL, gRPC endpoint
-    │       ├── providers.tf    # AWS eu-west-1
-    │       └── backend.tf      # S3 remote state
-    ├── scripts/
-    │   └── temporal-startup.sh # EC2 user-data: Docker install, git clone, compose up
-    └── temporal-compose/       # Reference docker-compose files (used by startup.sh)
-        ├── docker-compose.yml
-        ├── .env                # Container image version pins
-        ├── dynamicconfig/
-        └── scripts/            # DB schema init + namespace creation
-```
+## Unified Data Models (Pydantic)
+
+The codebase has migrated from standard Python dataclasses to **Pydantic v2** to ensure rigorous, end-to-end data integrity. You can find all domain models inside the `shared/models/` directory:
+
+- `domain.py`: The canonical workflow definitions, tracking all data associated with core business boundaries (e.g., `UserData`, `LifecycleRequest`, `AlertData`).
+- `commands.py`: Activity inputs mapping exact instructions passed from Temporal workflows to the Python workers.
+- `ingress.py`: Ingress transport models dealing with raw data envelopes (`RawIngressEnvelope`) entering the Proxy Lambda prior to workflow conversion.
+- `provider_events.py`: Parsing schemas to standardise raw webhook payloads from external integrations (Microsoft Graph, Defender, Teams).
 
 ## Workflows
 
@@ -121,13 +88,6 @@ secamo-poc/
 | **Input** | `LifecycleRequest` (tenant, action, user_data, requester, ticket_id) |
 | **Actions** | `create` · `update` · `delete` · `password_reset` |
 | **Activities** | validate_tenant → get_secrets → graph_get_user → action-specific Graph API call → audit_log |
-
-```
-create:  validate → get_secrets → check_exists → graph_create_user → [assign_license] → audit
-update:  validate → get_secrets → check_exists → graph_update_user → audit
-delete:  validate → get_secrets → check_exists → revoke_sessions → graph_delete_user → audit
-reset:   validate → get_secrets → check_exists → graph_reset_password → audit
-```
 
 ### WF-02 — Defender Alert Enrichment & Ticketing
 
@@ -144,85 +104,18 @@ reset:   validate → get_secrets → check_exists → graph_reset_password → 
 | **Task Queue** | `soc-defender` |
 | **Input** | `ImpossibleTravelRequest` (tenant, alert, user, IPs, requester) |
 | **Signal** | `approve` — receives analyst decision (dismiss / isolate / disable) |
-| **Timeout** | 4 hours for human approval, then auto-escalates |
 
-## Docker Configuration
-
-### Dockerfile
-
-Multi-stage build for a minimal worker image (~180 MB):
-
-```dockerfile
-# Stage 1: Install Python dependencies
-FROM python:3.11-slim AS builder
-COPY requirements.txt .
-RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
-
-# Stage 2: Copy app code, run as non-root
-FROM python:3.11-slim
-COPY --from=builder /install /usr/local
-COPY shared/ activities/ workflows/ workers/ ./
-USER worker
-ENTRYPOINT ["python", "-m", "workers.run_worker"]
-```
-
-### Docker Compose Services
-
-| Service | Image | Port | Purpose |
-|---------|-------|------|---------|
-| `postgresql` | `postgres:16` | 5432 | Temporal persistence + visibility store |
-| `temporal` | `temporalio/server:1.29.1` | 7233 | Workflow orchestration (gRPC) |
-| `temporal-ui` | `temporalio/ui:2.34.0` | 8080 | Web dashboard |
-| `temporal-admin-tools` | `temporalio/admin-tools` | — | Schema setup (runs once) |
-| `temporal-create-namespace` | `temporalio/admin-tools` | — | Creates `default` namespace (runs once) |
-| `secamo-worker` | Built from `Dockerfile` | — | Python worker (activities + workflows) |
-
-The worker connects to Temporal via Docker's internal DNS: `TEMPORAL_ADDRESS=temporal:7233`.
-
-## Terraform Infrastructure
-
-### Resources (defined inline in `main.tf`)
-
-| Resource | Configuration |
-|----------|---------------|
-| **VPC** | `10.99.0.0/16`, 1 public subnet, Internet Gateway |
-| **Security Group** | Inbound 22/7233/8080 restricted to `var.my_ip` only |
-| **IAM** | Instance profile with SSM access (`AmazonSSMManagedInstanceCore`) |
-| **EC2** | t3.medium, Amazon Linux 2023, 30 GB gp3 encrypted EBS |
-
-### Variables
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `my_ip` | ✅ | Your public IP in CIDR notation (e.g. `1.2.3.4/32`) |
-| `github_repo_url` | — | Repo URL for git clone (default: `guerr3/secamo-poc`) |
-| `graph_tenant1_id` | — | Microsoft Graph tenant ID |
-| `graph_client1_id` | — | Microsoft Graph client (app) ID |
-| `graph_secret1_value` | — | Microsoft Graph client secret |
-| `graph_secret1_id` | — | Microsoft Graph secret ID |
-| `instance_type` | — | EC2 type (default: `t3.medium`) |
-| `volume_size` | — | EBS size in GB (default: `30`) |
-
-### EC2 Bootstrap Flow (`temporal-startup.sh`)
-
-```
-[1/6] Install Docker, Docker Compose, Git
-[2/6] Write docker-compose.yml, scripts, dynamicconfig inline
-[3/6] Git clone secamo-poc repo + write worker .env
-[4/6] Start Temporal infrastructure containers
-[5/6] Wait for Temporal server health check
-[6/6] Build worker Docker image + start secamo-worker container
-```
-
-## Deployment
+## Deployment (Terraform)
 
 ### Prerequisites
 
 - AWS CLI configured with credentials
 - Terraform ≥ 1.6
-- Temporal CLI (optional, for starting workflows)
+- Temporal CLI (optional, for manual interaction)
 
-### Deploy
+### Deploy Infrastructure
+
+Because tenant secrets are now managed through AWS SSM Parameter Store, the initial deployment requires significantly fewer variables:
 
 ```bash
 cd terraform/environments/temporal-test
@@ -230,11 +123,7 @@ cd terraform/environments/temporal-test
 terraform init
 
 terraform apply \
-  -var="my_ip=$(curl -s ifconfig.me)/32" \
-  -var="graph_tenant1_id=YOUR_TENANT_ID" \
-  -var="graph_client1_id=YOUR_CLIENT_ID" \
-  -var="graph_secret1_value=YOUR_SECRET" \
-  -var="graph_secret1_id=YOUR_SECRET_ID"
+  -var="my_ip=$(curl -s ifconfig.me)/32"
 ```
 
 After ~5 minutes, Terraform outputs:
@@ -242,114 +131,71 @@ After ~5 minutes, Terraform outputs:
 ```
 temporal_ui_url          = "http://<ip>:8080"
 temporal_grpc_endpoint   = "<ip>:7233"
+api_gateway_endpoint     = "https://<api_id>.execute-api.eu-west-1.amazonaws.com/v1"
 ssh_command              = "Use SSM: aws ssm start-session --target <id>"
 ```
 
-### Verify
+### Provisioning Secrets
+
+After deployment, you must populate the AWS SSM Parameter Store with your tenant secrets. Run:
 
 ```bash
-# SSM into the EC2
-aws ssm start-session --target <instance_id> --region eu-west-1
-
-# Check all containers are running
-sudo docker ps
-# Expected: temporal-postgresql, temporal, temporal-ui, secamo-worker
-
-# Check worker logs
-sudo docker logs -f secamo-worker
+aws ssm put-parameter --name "/secamo/tenants/t1/graph/client_id" --value "YOUR_CLIENT_ID" --type SecureString
+aws ssm put-parameter --name "/secamo/tenants/t1/graph/client_secret" --value "YOUR_SECRET" --type SecureString
+aws ssm put-parameter --name "/secamo/tenants/t1/graph/tenant_azure_id" --value "YOUR_AZURE_TENANT_ID" --type SecureString
 ```
 
-### Destroy
+The worker EC2 instance profile automatically has decryption rights for the pattern `/secamo/tenants/*`.
+
+### Destroy Infrastructure
 
 ```bash
 terraform destroy -var="my_ip=$(curl -s ifconfig.me)/32"
 ```
 
-## Starting Workflows
+## Demo & Manual Testing
 
-### Via Temporal CLI
+You can use standard `curl` commands to hit the public API Gateway endpoints mimicking webhooks to test the entire stack. Don't forget to replace the `API_GATEWAY_URL` with your deployment URL.
 
+### Testing IAM Workflow (WF-01)
 ```bash
-temporal workflow start \
-  --address <EC2_IP>:7233 \
-  --namespace default \
-  --task-queue iam-graph \
-  --type IamOnboardingWorkflow \
-  --workflow-id my-workflow-001 \
-  --input '{
-    "tenant_id": "tenant-demo-001",
+curl -X POST "https://<API_GATEWAY_URL>/api/v1/ingress/iam" \
+  -H "Authorization: Bearer <MOCK_VALID_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
     "action": "create",
     "user_data": {
-      "email": "john.doe@contoso.com",
-      "first_name": "John",
-      "last_name": "Doe",
-      "department": "IT Security",
-      "role": "SOC Analyst",
-      "manager_email": null,
-      "license_sku": null
+      "email": "test.user@contoso.com",
+      "first_name": "Test",
+      "last_name": "User",
+      "department": "Engineering",
+      "role": "Developer"
     },
     "requester": "admin@contoso.com",
-    "ticket_id": "TKT-001"
+    "ticket_id": "TKT-102"
   }'
 ```
 
-### Via Python SDK
-
-```python
-from temporalio.client import Client
-
-client = await Client.connect("<EC2_IP>:7233", namespace="default")
-
-handle = await client.start_workflow(
-    "IamOnboardingWorkflow",
-    {"tenant_id": "t1", "action": "create", "user_data": {...}, ...},
-    id="my-workflow-001",
-    task_queue="iam-graph",
-)
-
-result = await handle.result()
-```
-
-### Monitoring
-
-Open the **Temporal UI** at `http://<EC2_IP>:8080` to:
-- View running and completed workflows
-- Inspect event history and activity results
-- Search workflows by ID, type, or status
-- View worker task queue pollers
-
-## Environment Variables
-
-The worker requires these environment variables (injected via `.env` on the EC2):
-
-| Variable | Purpose |
-|----------|---------|
-| `TEMPORAL_ADDRESS` | Temporal gRPC endpoint (`temporal:7233` on EC2, `<ip>:7233` locally) |
-| `TEMPORAL_NAMESPACE` | Temporal namespace (default: `default`) |
-| `TEMPORAL_API_KEY` | Only for Temporal Cloud (leave empty for self-hosted) |
-| `GRAPH_TENANT1_ID` | Azure AD tenant ID |
-| `GRAPH_CLIENT1_ID` | App registration client ID |
-| `GRAPH_SECRET1_VALUE` | App registration client secret |
-| `GRAPH_SECRET1_ID` | Secret ID |
-
-## Local Development
-
-Run the worker locally against the EC2 Temporal server:
-
+### Testing Defender Webhook (WF-02)
 ```bash
-# Create .env from template
-cp .env.example .env
-# Edit .env: set TEMPORAL_ADDRESS=<EC2_IP>:7233 + Graph credentials
-
-# Install dependencies
-python -m venv .venv
-source .venv/bin/activate  # Linux/Mac
-.venv\Scripts\activate     # Windows
-pip install -r requirements.txt
-
-# Start worker
-python -m workers.run_worker
+curl -X POST "https://<API_GATEWAY_URL>/api/v1/ingress/defender" \
+  -H "Authorization: Bearer <MOCK_VALID_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "alertId": "da39a3ee5e6b4b0d3255bfef95601890afd80709",
+    "severity": "High",
+    "title": "Suspicious PowerShell Execution",
+    "description": "Observed unusual process spawning from powershell.exe",
+    "device": {"id": "device-1234"},
+    "user": {"email": "test.user@contoso.com"}
+  }'
 ```
+
+_Note: If testing remotely, make sure your public IP is added to the `microsoft_allowed_cidrs` variable in Terraform, as API Gateway utilizes a restrictive Resource Policy by default._
+
+## Monitoring
+
+Open the **Temporal UI** at `http://<EC2_IP>:8080` to view workflows kicking off automatically in response to the webhooks.
 
 ## Task Queues
 
@@ -366,8 +212,9 @@ python -m workers.run_worker
 | Orchestration | Temporal Server 1.29.1 |
 | Database | PostgreSQL 16 |
 | Worker Runtime | Python 3.11 |
+| Data Validation | Pydantic v2 |
 | SDK | temporalio (Python SDK) |
+| Secrets Management | AWS SSM Parameter Store |
 | Identity Provider | Microsoft Graph API (msgraph-sdk) |
-| Infrastructure | Terraform + AWS (EC2, VPC, IAM) |
+| Infrastructure | Terraform + AWS (API GW, EC2, VPC, IAM) |
 | Containers | Docker Compose |
-| UI | Temporal Web UI 2.34.0 |

@@ -18,6 +18,10 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
 # Latest Amazon Linux 2023 AMI
 data "aws_ami" "al2023" {
   most_recent = true
