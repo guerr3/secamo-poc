@@ -18,6 +18,10 @@ data "aws_availability_zones" "available" {
   state = "available"
 }
 
+data "aws_caller_identity" "current" {}
+
+data "aws_region" "current" {}
+
 # Latest Amazon Linux 2023 AMI
 data "aws_ami" "al2023" {
   most_recent = true
@@ -166,6 +170,37 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# SSM Parameter Store read access (tenant secrets)
+resource "aws_iam_role_policy" "temporal_ssm_params" {
+  name = "${local.name_prefix}-ssm-params"
+  role = aws_iam_role.temporal.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:GetParametersByPath"
+        ]
+        Resource = [
+          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${local.name_prefix}/*",
+          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/secamo/tenants/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "temporal" {
   name = "${local.name_prefix}-profile"
   role = aws_iam_role.temporal.name
@@ -184,12 +219,8 @@ resource "aws_instance" "temporal" {
   key_name               = var.key_pair_name != "" ? var.key_pair_name : null
 
   user_data = base64encode(templatefile("${path.module}/../../scripts/temporal-startup.sh", {
-    temporal_namespace  = var.temporal_namespace
-    github_repo_url     = var.github_repo_url
-    graph_tenant1_id    = var.graph_tenant1_id
-    graph_client1_id    = var.graph_client1_id
-    graph_secret1_value = var.graph_secret1_value
-    graph_secret1_id    = var.graph_secret1_id
+    temporal_namespace = var.temporal_namespace
+    github_repo_url    = var.github_repo_url
   }))
 
   root_block_device {

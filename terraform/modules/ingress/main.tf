@@ -4,6 +4,7 @@
 #
 # Routes:  POST /api/v1/ingress/defender  → Proxy Lambda (start workflow)
 #          POST /api/v1/ingress/teams     → Proxy Lambda (signal workflow)
+#          POST /api/v1/ingress/iam       → Proxy Lambda (start IAM workflow)
 # Auth:    Lambda Authorizer (REQUEST type)
 # Policy:  Resource Policy — deny all except allowed CIDRs
 
@@ -148,6 +149,7 @@ resource "aws_api_gateway_rest_api" "ingress" {
 # ── Resource Path Hierarchy ─────────────────────────────────
 # /api → /api/v1 → /api/v1/ingress → /api/v1/ingress/defender
 #                                    → /api/v1/ingress/teams
+#                                    → /api/v1/ingress/iam
 
 resource "aws_api_gateway_resource" "api" {
   rest_api_id = aws_api_gateway_rest_api.ingress.id
@@ -177,6 +179,12 @@ resource "aws_api_gateway_resource" "teams" {
   rest_api_id = aws_api_gateway_rest_api.ingress.id
   parent_id   = aws_api_gateway_resource.ingress.id
   path_part   = "teams"
+}
+
+resource "aws_api_gateway_resource" "iam" {
+  rest_api_id = aws_api_gateway_rest_api.ingress.id
+  parent_id   = aws_api_gateway_resource.ingress.id
+  path_part   = "iam"
 }
 
 # ── Lambda Authorizer ───────────────────────────────────────
