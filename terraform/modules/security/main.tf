@@ -368,3 +368,27 @@ resource "aws_iam_role_policy" "authorizer_invoke_lambda" {
     ]
   })
 }
+
+resource "aws_iam_role_policy" "authorizer_ssm_policy" {
+  name = "${var.name_prefix}-authorizer-ssm-policy"
+  role = aws_iam_role.authorizer_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ]
+        Resource = "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/secamo/tenants/*/api/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = "kms:Decrypt"
+        Resource = "*"
+      }
+    ]
+  })
+}

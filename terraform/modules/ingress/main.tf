@@ -132,17 +132,6 @@ resource "aws_api_gateway_rest_api" "ingress" {
         Principal = "*"
         Action    = "execute-api:Invoke"
         Resource  = "execute-api:/*"
-      },
-      {
-        Effect    = "Deny"
-        Principal = "*"
-        Action    = "execute-api:Invoke"
-        Resource  = "execute-api:/*"
-        Condition = {
-          NotIpAddress = {
-            "aws:SourceIp" = var.allowed_cidr_blocks
-          }
-        }
       }
     ]
   })
@@ -198,7 +187,7 @@ resource "aws_api_gateway_authorizer" "lambda" {
   authorizer_uri                   = aws_lambda_function.authorizer.invoke_arn
   authorizer_credentials           = var.authorizer_role_arn
   type                             = "REQUEST"
-  identity_source                  = "method.request.header.Authorization"
+  identity_source                  = "method.request.header.Authorization, method.request.header.x-tenant-id"
   authorizer_result_ttl_in_seconds = 0
 }
 
@@ -240,6 +229,31 @@ resource "aws_api_gateway_integration" "teams_post" {
   uri                     = aws_lambda_function.proxy.invoke_arn
 }
 
+# ── POST /api/v1/ingress/iam ──────────────────────────────
+
+resource "aws_api_gateway_resource" "iam" {
+  rest_api_id = aws_api_gateway_rest_api.ingress.id
+  parent_id   = aws_api_gateway_resource.ingress.id
+  path_part   = "iam"
+}
+
+resource "aws_api_gateway_method" "iam_post" {
+  rest_api_id   = aws_api_gateway_rest_api.ingress.id
+  resource_id   = aws_api_gateway_resource.iam.id
+  http_method   = "POST"
+  authorization = "CUSTOM"
+  authorizer_id = aws_api_gateway_authorizer.lambda.id
+}
+
+resource "aws_api_gateway_integration" "iam_post" {
+  rest_api_id             = aws_api_gateway_rest_api.ingress.id
+  resource_id             = aws_api_gateway_resource.iam.id
+  http_method             = aws_api_gateway_method.iam_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.proxy.invoke_arn
+}
+
 # ── Deployment & Stage ──────────────────────────────────────
 
 resource "aws_api_gateway_deployment" "ingress" {
@@ -248,13 +262,18 @@ resource "aws_api_gateway_deployment" "ingress" {
   # Force redeployment when API configuration changes
   triggers = {
     redeployment = sha1(jsonencode([
+      "force-deploy-1",
       aws_api_gateway_resource.defender.id,
       aws_api_gateway_resource.teams.id,
+      aws_api_gateway_resource.iam.id,
       aws_api_gateway_method.defender_post.id,
       aws_api_gateway_method.teams_post.id,
+      aws_api_gateway_method.iam_post.id,
       aws_api_gateway_integration.defender_post.id,
       aws_api_gateway_integration.teams_post.id,
+      aws_api_gateway_integration.iam_post.id,
       aws_api_gateway_authorizer.lambda.id,
+      aws_api_gateway_authorizer.lambda.identity_source,
     ]))
   }
 

@@ -454,6 +454,33 @@ resource "aws_iam_role_policy" "authorizer_invoke_lambda" {
   })
 }
 
+resource "aws_iam_role_policy" "authorizer_ssm" {
+  name = "${local.name_prefix}-authorizer-ssm"
+  role = aws_iam_role.authorizer_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:GetParametersByPath"
+        ]
+        Resource = "arn:aws:ssm:*:*:parameter/secamo/tenants/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = [
+          "kms:Decrypt"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # ══════════════════════════════════════════════════════════════
 # INGRESS MODULE — REST API + Proxy Lambda + Authorizer
 # ══════════════════════════════════════════════════════════════
