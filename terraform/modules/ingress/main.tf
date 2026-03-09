@@ -239,12 +239,6 @@ resource "aws_api_gateway_integration" "teams_post" {
 
 # ── POST /api/v1/ingress/iam ──────────────────────────────
 
-resource "aws_api_gateway_resource" "iam" {
-  rest_api_id = aws_api_gateway_rest_api.ingress.id
-  parent_id   = aws_api_gateway_resource.ingress.id
-  path_part   = "iam"
-}
-
 resource "aws_api_gateway_method" "iam_post" {
   rest_api_id   = aws_api_gateway_rest_api.ingress.id
   resource_id   = aws_api_gateway_resource.iam.id

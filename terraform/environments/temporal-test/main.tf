@@ -125,6 +125,15 @@ resource "aws_security_group" "temporal" {
     cidr_blocks = [var.my_ip]
   }
 
+  # Internal communication (SSM Agent, Docker)
+  ingress {
+    description = "Internal communication (SSM Agent, Docker)"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    self        = true
+  }
+
   # All outbound (Docker pulls, updates)
   egress {
     description = "All outbound"
@@ -218,10 +227,12 @@ resource "aws_instance" "temporal" {
   iam_instance_profile   = aws_iam_instance_profile.temporal.name
   key_name               = var.key_pair_name != "" ? var.key_pair_name : null
 
-  user_data = base64encode(templatefile("${path.module}/../../scripts/temporal-startup.sh", {
+  user_data = templatefile("${path.module}/../../scripts/temporal-startup.sh", {
     temporal_namespace = var.temporal_namespace
     github_repo_url    = var.github_repo_url
-  }))
+  })
+
+  user_data_replace_on_change = true
 
   root_block_device {
     volume_type           = "gp3"
@@ -242,8 +253,13 @@ resource "aws_instance" "temporal" {
   }
 
   lifecycle {
-    ignore_changes = [ami, user_data]
+    ignore_changes = [ami]
   }
+
+  depends_on = [
+    aws_route_table_association.public,
+    aws_iam_role_policy_attachment.ssm
+  ]
 }
 
 # ══════════════════════════════════════════════════════════════

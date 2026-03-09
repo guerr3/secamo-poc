@@ -30,8 +30,9 @@ systemctl start docker
 
 # ── Authenticate to ECR ──────────────────────────────────────
 echo "[3/5] Authenticating to ECR..."
-ACCOUNT_ID=$(curl -s http://169.254.169.254/latest/meta-data/identity-credentials/ec2/info | jq -r '.AccountId // empty')
-REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region)
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+ACCOUNT_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/identity-credentials/ec2/info | jq -r '.AccountId // empty')
+REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region)
 
 if [ -n "$ACCOUNT_ID" ]; then
   aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$ACCOUNT_ID.dkr.ecr.$REGION.amazonaws.com"
