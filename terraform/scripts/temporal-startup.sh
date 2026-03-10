@@ -10,6 +10,11 @@
 # Template variables (injected by Terraform):
 #   ${temporal_namespace}   — Namespace to create
 #   ${github_repo_url}      — GitHub repo URL to clone
+#   ${db_endpoint}          — PostgreSQL database endpoint (docker network alias)
+#   ${db_name}              — Database name
+#   ${db_username}          — Database username
+#   ${environment}          — Environment identifier (e.g. test)
+#   ${region}               — AWS region
 # ──────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -253,6 +258,15 @@ cat > "$REPO_DIR/.env" <<WORKERENVEOF
 # Temporal (internal Docker network)
 TEMPORAL_ADDRESS=temporal:7233
 TEMPORAL_NAMESPACE=${temporal_namespace}
+
+# Workspace & Environment
+ENVIRONMENT=${environment}
+AWS_REGION=${region}
+
+# Database (PostgreSQL container in the same network)
+DB_ENDPOINT=${db_endpoint}
+DB_NAME=${db_name}
+DB_USERNAME=${db_username}
 WORKERENVEOF
 
 # ── Start Temporal Stack ─────────────────────────────────────

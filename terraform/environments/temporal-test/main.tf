@@ -230,6 +230,11 @@ resource "aws_instance" "temporal" {
   user_data = templatefile("${path.module}/../../scripts/temporal-startup.sh", {
     temporal_namespace = var.temporal_namespace
     github_repo_url    = var.github_repo_url
+    db_endpoint        = "postgresql"
+    db_name            = "temporal"
+    db_username        = "temporal"
+    environment        = "temporal-test"
+    region             = data.aws_region.current.name
   })
 
   user_data_replace_on_change = true
