@@ -98,51 +98,6 @@ resource "aws_security_group" "temporal" {
   description = "Temporal test server - SSH, gRPC, UI"
   vpc_id      = aws_vpc.temporal.id
 
-  # SSH
-  ingress {
-    description = "SSH from my IP"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = [var.my_ip]
-  }
-
-  # Temporal gRPC
-  ingress {
-    description = "Temporal gRPC from my IP"
-    from_port   = 7233
-    to_port     = 7233
-    protocol    = "tcp"
-    cidr_blocks = [var.my_ip]
-  }
-
-  # Temporal UI
-  ingress {
-    description = "Temporal UI from my IP"
-    from_port   = 8080
-    to_port     = 8080
-    protocol    = "tcp"
-    cidr_blocks = [var.my_ip]
-  }
-
-  # Internal communication (SSM Agent, Docker)
-  ingress {
-    description = "Internal communication (SSM Agent, Docker)"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    self        = true
-  }
-
-  # All outbound (Docker pulls, updates)
-  egress {
-    description = "All outbound"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = {
     Name = "${local.name_prefix}-sg"
   }
@@ -151,6 +106,63 @@ resource "aws_security_group" "temporal" {
     create_before_destroy = true
   }
 }
+
+/*
+# SSH
+resource "aws_security_group_rule" "temporal_ssh" {
+  type              = "ingress"
+  description       = "SSH from my IP"
+  from_port         = 22
+  to_port           = 22
+  protocol          = "tcp"
+  cidr_blocks       = [var.my_ip]
+  security_group_id = aws_security_group.temporal.id
+}
+
+# Temporal gRPC
+resource "aws_security_group_rule" "temporal_grpc" {
+  type              = "ingress"
+  description       = "Temporal gRPC from my IP"
+  from_port         = 7233
+  to_port           = 7233
+  protocol          = "tcp"
+  cidr_blocks       = [var.my_ip]
+  security_group_id = aws_security_group.temporal.id
+}
+
+# Temporal UI
+resource "aws_security_group_rule" "temporal_ui" {
+  type              = "ingress"
+  description       = "Temporal UI from my IP"
+  from_port         = 8080
+  to_port           = 8080
+  protocol          = "tcp"
+  cidr_blocks       = [var.my_ip]
+  security_group_id = aws_security_group.temporal.id
+}
+
+# Internal communication (SSM Agent, Docker)
+resource "aws_security_group_rule" "temporal_internal" {
+  type              = "ingress"
+  description       = "Internal communication (SSM Agent, Docker)"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  self              = true
+  security_group_id = aws_security_group.temporal.id
+}
+
+# All outbound (Docker pulls, updates)
+resource "aws_security_group_rule" "temporal_egress" {
+  type              = "egress"
+  description       = "All outbound"
+  from_port         = 0
+  to_port           = 0
+  protocol          = "-1"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.temporal.id
+}
+*/
 
 # ══════════════════════════════════════════════════════════════
 # IAM — Minimal Instance Profile (SSM access)
@@ -263,7 +275,8 @@ resource "aws_instance" "temporal" {
 
   depends_on = [
     aws_route_table_association.public,
-    aws_iam_role_policy_attachment.ssm
+    aws_iam_role_policy_attachment.ssm,
+    aws_iam_role_policy.temporal_ssm_params
   ]
 }
 
