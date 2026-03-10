@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Temporal Cloud verbindingsparameters ──────────────────────
-TEMPORAL_ADDRESS   = os.environ["TEMPORAL_ADDRESS"]
+TEMPORAL_ADDRESS = os.environ.get("TEMPORAL_ADDRESS", "temporal:7233")
 TEMPORAL_NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
 TEMPORAL_API_KEY   = os.environ.get("TEMPORAL_API_KEY", "")
 

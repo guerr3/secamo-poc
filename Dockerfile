@@ -28,7 +28,8 @@ COPY workflows/ ./workflows/
 COPY workers/ ./workers/
 
 # Non-root user for security
-RUN useradd --create-home --shell /bin/bash worker
+RUN useradd --create-home --shell /bin/bash worker && \
+    chown -R worker:worker /app
 USER worker
 
 # Health check: verify Python can import the worker module

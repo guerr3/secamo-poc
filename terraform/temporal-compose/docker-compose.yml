@@ -111,7 +111,7 @@ services:
       - /opt/secamo-poc/.env
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
-      - TEMPORAL_NAMESPACE=default
+      - TEMPORAL_NAMESPACE=${temporal_namespace}
     networks:
       - temporal-network
     restart: unless-stopped
