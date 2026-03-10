@@ -168,11 +168,11 @@ services:
         condition: service_healthy
       temporal-create-namespace:
         condition: service_completed_successfully
-    env_file:
-      - /opt/secamo-poc/.env
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
       - TEMPORAL_NAMESPACE=${temporal_namespace}
+      - ENVIRONMENT=${environment}
+      - AWS_REGION=${region}
     networks:
       - temporal-network
     restart: unless-stopped
@@ -228,7 +228,7 @@ nc -z -w 10 $(echo $TEMPORAL_ADDRESS | cut -d: -f1) $(echo $TEMPORAL_ADDRESS | c
 echo 'Temporal server port is available'
 
 echo 'Waiting for Temporal server to be healthy...'
-max_attempts=3
+max_attempts=12
 attempt=0
 
 until temporal operator cluster health --address $TEMPORAL_ADDRESS; do
@@ -254,20 +254,6 @@ REPO_DIR="/opt/secamo-poc"
 git clone ${github_repo_url} "$REPO_DIR"
 
 # Write worker .env with credentials injected by Terraform
-cat > "$REPO_DIR/.env" <<WORKERENVEOF
-# Temporal (internal Docker network)
-TEMPORAL_ADDRESS=temporal:7233
-TEMPORAL_NAMESPACE=${temporal_namespace}
-
-# Workspace & Environment
-ENVIRONMENT=${environment}
-AWS_REGION=${region}
-
-# Database (PostgreSQL container in the same network)
-DB_ENDPOINT=${db_endpoint}
-DB_NAME=${db_name}
-DB_USERNAME=${db_username}
-WORKERENVEOF
 
 # ── Start Temporal Stack ─────────────────────────────────────
 echo "[4/6] Starting Temporal via docker-compose..."
@@ -288,7 +274,16 @@ until docker inspect --format='{{.State.Status}}' temporal-create-namespace 2>/d
   echo "  Namespace nog niet aangemaakt, wacht 5s..."
   sleep 5
 done
+
+# Extra check: was de exit succesvol?
+EXIT_CODE=$(docker inspect --format='{{.State.ExitCode}}' temporal-create-namespace 2>/dev/null)
+if [ "$EXIT_CODE" != "0" ]; then
+  echo "  FOUT: temporal-create-namespace gefaald met exit code $EXIT_CODE"
+  docker logs temporal-create-namespace
+  exit 1
+fi
 echo "  Namespace aangemaakt."
+
 
 
 # ── Start Worker Container ───────────────────────────────────
