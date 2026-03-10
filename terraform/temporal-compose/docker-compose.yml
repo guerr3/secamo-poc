@@ -105,6 +105,8 @@ services:
     depends_on:
       temporal:
         condition: service_healthy
+      temporal-create-namespace:
+        condition: service_completed_successfully
     env_file:
       - /opt/secamo-poc/.env
     environment:

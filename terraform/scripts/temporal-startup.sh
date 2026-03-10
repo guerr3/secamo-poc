@@ -161,6 +161,8 @@ services:
     depends_on:
       temporal:
         condition: service_healthy
+      temporal-create-namespace:
+        condition: service_completed_successfully
     env_file:
       - /opt/secamo-poc/.env
     environment:
@@ -259,6 +261,21 @@ cd "$TEMPORAL_DIR"
 
 # Start Temporal infra first (worker builds from the cloned repo)
 docker compose up -d postgresql temporal-admin-tools temporal temporal-create-namespace temporal-ui
+
+# ── Wait for initialization ──────────────────────────────────
+echo "[5/6] Wachten tot Temporal healthy is en namespace aangemaakt is..."
+until docker inspect --format='{{.State.Health.Status}}' temporal 2>/dev/null | grep -q "^healthy$"; do
+  echo "  Temporal nog niet healthy, wacht 10s..."
+  sleep 10
+done
+echo "  Temporal is healthy."
+
+until docker inspect --format='{{.State.Status}}' temporal-create-namespace 2>/dev/null | grep -q "^exited$"; do
+  echo "  Namespace nog niet aangemaakt, wacht 5s..."
+  sleep 5
+done
+echo "  Namespace aangemaakt."
+
 
 # ── Start Worker Container ───────────────────────────────────
 echo "[6/6] Building and starting secamo-worker container..."
