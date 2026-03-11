@@ -24,6 +24,7 @@ COPY --from=builder /install /usr/local
 # Copy application code
 COPY shared/ ./shared/
 COPY activities/ ./activities/
+COPY connectors/ ./connectors/
 COPY workflows/ ./workflows/
 COPY workers/ ./workers/
 

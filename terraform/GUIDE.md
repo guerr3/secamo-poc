@@ -584,9 +584,9 @@ terraform import module.vpc.aws_vpc.main vpc-0abc123def
 ```powershell
 # Fix: Stel het profiel in
 $env:AWS_PROFILE = "760659115776_PowerUser-IAMFullAccess"
-
+AWS_PROFILE=PowerUser-IAMFullAccess-760659115776
 # Als session token verlopen is, vernieuw via SSO:
-aws sso login --profile 760659115776_PowerUser-IAMFullAccess
+aws sso login --profile PowerUser-IAMFullAccess-760659115776
 ```
 
 PowerUser-IAMFullAccess-760659115776
