@@ -1,69 +1,113 @@
+from __future__ import annotations
+
+import httpx
 from temporalio import activity
-from shared.models import NotificationResult
+
+from shared.config import SECAMO_SENDER_EMAIL
+from shared.graph_client import get_graph_token
+from shared.models import NotificationResult, TenantSecrets
+from shared.ssm_client import get_secret_bundle
+
+
+def _load_graph_secrets(tenant_id: str) -> TenantSecrets:
+    raw = get_secret_bundle(tenant_id, "graph")
+    return TenantSecrets(
+        client_id=raw.get("client_id", ""),
+        client_secret=raw.get("client_secret", ""),
+        tenant_azure_id=raw.get("tenant_azure_id", ""),
+    )
+
+
+def _result(success: bool, channel: str, message_id: str | None = None) -> NotificationResult:
+    return NotificationResult(success=success, channel=channel, message_id=message_id)
 
 
 @activity.defn
-async def teams_send_notification(
-    tenant_id: str,
-    channel_webhook_url: str,
-    message: str,
-) -> NotificationResult:
-    """
-    Stuurt een tekstbericht naar een Microsoft Teams-kanaal via webhook.
-    Later: POST naar Teams Incoming Webhook URL.
-    """
-    activity.logger.info(
-        f"[{tenant_id}] Teams notificatie versturen naar webhook"
-    )
+async def teams_send_notification(tenant_id: str, channel_webhook_url: str, message: str) -> NotificationResult:
+    activity.logger.info(f"[{tenant_id}] teams_send_notification")
+    if not channel_webhook_url:
+        activity.logger.error(f"[{tenant_id}] teams_send_notification missing webhook url")
+        return _result(False, "teams")
 
-    # TODO: replace with real Teams webhook POST
-    return NotificationResult(
-        success=True,
-        channel="teams",
-        message_id="msg-stub-001",
-    )
-
-
-@activity.defn
-async def teams_send_adaptive_card(
-    tenant_id: str,
-    channel_webhook_url: str,
-    card_payload: dict,
-) -> NotificationResult:
-    """
-    Stuurt een Adaptive Card naar Microsoft Teams (voor HITL-goedkeuringen).
-    Later: POST Adaptive Card JSON naar Teams webhook.
-    """
-    activity.logger.info(
-        f"[{tenant_id}] Teams Adaptive Card versturen voor goedkeuring"
-    )
-
-    # TODO: replace with real Teams Adaptive Card POST
-    return NotificationResult(
-        success=True,
-        channel="teams",
-        message_id="card-stub-001",
-    )
+    payload = {"@type": "MessageCard", "text": message}
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                channel_webhook_url,
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            )
+        if response.status_code >= 400:
+            activity.logger.error(
+                f"[{tenant_id}] teams_send_notification failed status={response.status_code}"
+            )
+            return _result(False, "teams")
+        return _result(True, "teams", message_id=response.headers.get("x-ms-request-id"))
+    except Exception as exc:
+        activity.logger.error(
+            f"[{tenant_id}] teams_send_notification error={type(exc).__name__}"
+        )
+        return _result(False, "teams")
 
 
 @activity.defn
-async def email_send(
-    tenant_id: str,
-    to: str,
-    subject: str,
-    body: str,
-) -> NotificationResult:
-    """
-    Verstuurt een e-mail via Microsoft Graph API (Send Mail).
-    Later: POST /me/sendMail of /users/{id}/sendMail via msgraph-sdk.
-    """
-    activity.logger.info(
-        f"[{tenant_id}] E-mail versturen naar '{to}' — onderwerp: {subject}"
-    )
+async def teams_send_adaptive_card(tenant_id: str, channel_webhook_url: str, card_payload: dict) -> NotificationResult:
+    activity.logger.info(f"[{tenant_id}] teams_send_adaptive_card")
+    if not channel_webhook_url:
+        activity.logger.error(f"[{tenant_id}] teams_send_adaptive_card missing webhook url")
+        return _result(False, "teams")
 
-    # TODO: replace with real Graph Send Mail API call
-    return NotificationResult(
-        success=True,
-        channel="email",
-        message_id="email-stub-001",
-    )
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                channel_webhook_url,
+                headers={"Content-Type": "application/json"},
+                json=card_payload,
+            )
+        if response.status_code >= 400:
+            activity.logger.error(
+                f"[{tenant_id}] teams_send_adaptive_card failed status={response.status_code}"
+            )
+            return _result(False, "teams")
+        return _result(True, "teams", message_id=response.headers.get("x-ms-request-id"))
+    except Exception as exc:
+        activity.logger.error(
+            f"[{tenant_id}] teams_send_adaptive_card error={type(exc).__name__}"
+        )
+        return _result(False, "teams")
+
+
+@activity.defn
+async def email_send(tenant_id: str, to: str, subject: str, body: str) -> NotificationResult:
+    activity.logger.info(f"[{tenant_id}] email_send to={to}")
+
+    try:
+        secrets = _load_graph_secrets(tenant_id)
+        token = await get_graph_token(secrets)
+        sender = SECAMO_SENDER_EMAIL
+
+        payload = {
+            "message": {
+                "subject": subject,
+                "body": {"contentType": "Text", "content": body},
+                "toRecipients": [{"emailAddress": {"address": to}}],
+            },
+            "saveToSentItems": "false",
+        }
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail",
+                headers={
+                    "Authorization": f"Bearer {token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+
+        if response.status_code >= 400:
+            activity.logger.error(f"[{tenant_id}] email_send failed status={response.status_code}")
+            return _result(False, "email")
+        return _result(True, "email", message_id=response.headers.get("x-ms-request-id"))
+    except Exception as exc:
+        activity.logger.error(f"[{tenant_id}] email_send error={type(exc).__name__}")
+        return _result(False, "email")

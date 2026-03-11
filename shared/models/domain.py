@@ -8,10 +8,11 @@ backwards compatibility.
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from shared.models.canonical import CanonicalEvent
 from shared.models.common import LifecycleAction
 
 
@@ -40,6 +41,7 @@ class LifecycleRequest(BaseModel):
     user_data: UserData
     requester: str
     ticket_id: str = ""
+    source_provider: Optional[str] = "microsoft_graph"
 
     @field_validator("action", mode="before")
     @classmethod
@@ -56,6 +58,36 @@ class TenantSecrets(BaseModel):
     client_id: str
     client_secret: str = Field(repr=False)
     tenant_azure_id: str
+    teams_webhook_url: Optional[str] = Field(default=None, repr=False)
+    jira_base_url: Optional[str] = None
+    jira_email: Optional[str] = None
+    jira_api_token: Optional[str] = Field(default=None, repr=False)
+    project_key: Optional[str] = None
+    virustotal_api_key: Optional[str] = Field(default=None, repr=False)
+    abuseipdb_api_key: Optional[str] = Field(default=None, repr=False)
+
+
+class TenantConfig(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    display_name: str = "Unknown Tenant"
+
+    edr_provider: Literal["microsoft_defender", "crowdstrike", "sentinelone"] = "microsoft_defender"
+    ticketing_provider: Literal["jira", "halo_itsm", "servicenow"] = "jira"
+    threat_intel_providers: list[Literal["virustotal", "abuseipdb", "misp"]] = Field(default_factory=lambda: ["virustotal"])
+    notification_provider: Literal["teams", "slack", "email"] = "teams"
+
+    sla_tier: Literal["platinum", "standard", "basic"] = "standard"
+    hitl_timeout_hours: int = 4
+    escalation_enabled: bool = True
+    auto_isolate_on_timeout: bool = False
+    max_activity_attempts: int = 3
+
+    threat_intel_enabled: bool = True
+    evidence_bundle_enabled: bool = True
+    auto_ticket_creation: bool = True
+    misp_sharing_enabled: bool = False
 
 
 class GraphUser(BaseModel):
@@ -92,6 +124,10 @@ class DefenderAlertRequest(BaseModel):
     tenant_id: str
     alert: AlertData
     requester: str
+    source_provider: Optional[str] = "microsoft_defender"
+    edr_provider: str = "microsoft_defender"
+    ticketing_provider: str = "jira"
+    threat_intel_providers: list[str] = Field(default_factory=lambda: ["virustotal", "abuseipdb"])
 
 
 class EnrichedAlert(BaseModel):
@@ -175,6 +211,36 @@ class ImpossibleTravelRequest(BaseModel):
     source_ip: str
     destination_ip: str
     requester: str
+    source_provider: Optional[str] = "microsoft_defender"
+    edr_provider: str = "microsoft_defender"
+    ticketing_provider: str = "jira"
+    threat_intel_providers: list[str] = Field(default_factory=lambda: ["virustotal", "abuseipdb"])
+
+
+class ConnectorFetchResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    provider: str
+    events: list[CanonicalEvent] = Field(default_factory=list)
+    raw_count: int = 0
+
+
+class ConnectorActionResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    provider: str
+    action: str
+    success: bool
+    details: str = ""
+    data: dict = Field(default_factory=dict)
+
+
+class ConnectorHealthResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    provider: str
+    healthy: bool
+    details: str = ""
 
 
 class ApprovalDecision(BaseModel):

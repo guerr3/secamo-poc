@@ -18,13 +18,17 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def load_activities() -> list:
-    """Lazy load all activities met expliciete foutafhandeling."""
-    activities = []
+def load_activities_by_queue() -> dict[str, list]:
+    """Load activities and scope them to task queues."""
+    iam_activities: list = []
+    soc_activities: list = []
+    audit_activities: list = []
 
     try:
-        from activities.tenant import validate_tenant_context, get_tenant_secrets
-        activities.extend([validate_tenant_context, get_tenant_secrets])
+        from activities.tenant import validate_tenant_context, get_tenant_config, get_tenant_secrets
+        iam_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets])
+        soc_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets])
+        audit_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets])
         logger.info("✓ Tenant activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Tenant activities: {e}")
@@ -36,10 +40,15 @@ def load_activities() -> list:
             graph_delete_user, graph_revoke_sessions,
             graph_assign_license, graph_reset_password,
         )
-        activities.extend([
+        iam_activities.extend([
             graph_get_user, graph_create_user, graph_update_user,
             graph_delete_user, graph_revoke_sessions,
             graph_assign_license, graph_reset_password,
+        ])
+        soc_activities.extend([
+            graph_get_user,
+            graph_delete_user,
+            graph_revoke_sessions,
         ])
         logger.info("✓ Graph Users activities geladen")
     except ImportError as e:
@@ -51,7 +60,7 @@ def load_activities() -> list:
             graph_enrich_alert, graph_get_alerts, graph_isolate_device,
             threat_intel_lookup, calculate_risk_score,
         )
-        activities.extend([
+        soc_activities.extend([
             graph_enrich_alert, graph_get_alerts, graph_isolate_device,
             threat_intel_lookup, calculate_risk_score,
         ])
@@ -64,7 +73,7 @@ def load_activities() -> list:
         from activities.ticketing import (
             ticket_create, ticket_update, ticket_close, ticket_get_details,
         )
-        activities.extend([ticket_create, ticket_update, ticket_close, ticket_get_details])
+        soc_activities.extend([ticket_create, ticket_update, ticket_close, ticket_get_details])
         logger.info("✓ Ticketing activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Ticketing activities: {e}")
@@ -74,7 +83,7 @@ def load_activities() -> list:
         from activities.notifications import (
             teams_send_notification, teams_send_adaptive_card, email_send,
         )
-        activities.extend([teams_send_notification, teams_send_adaptive_card, email_send])
+        soc_activities.extend([teams_send_notification, teams_send_adaptive_card, email_send])
         logger.info("✓ Notifications activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Notifications activities: {e}")
@@ -82,13 +91,37 @@ def load_activities() -> list:
 
     try:
         from activities.audit import create_audit_log, collect_evidence_bundle
-        activities.extend([create_audit_log, collect_evidence_bundle])
+        iam_activities.append(create_audit_log)
+        soc_activities.extend([create_audit_log, collect_evidence_bundle])
+        audit_activities.extend([create_audit_log, collect_evidence_bundle])
         logger.info("✓ Audit activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Audit activities: {e}")
         sys.exit(1)
 
-    return activities
+    try:
+        from activities.connector_dispatch import (
+            connector_fetch_events,
+            connector_execute_action,
+            connector_health_check,
+            connector_threat_intel_fanout,
+        )
+        soc_activities.extend([
+            connector_fetch_events,
+            connector_execute_action,
+            connector_health_check,
+            connector_threat_intel_fanout,
+        ])
+        logger.info("✓ Connector dispatch activities geladen")
+    except ImportError as e:
+        logger.error(f"✗ Fout bij het laden van Connector dispatch activities: {e}")
+        sys.exit(1)
+
+    return {
+        "iam": iam_activities,
+        "soc": soc_activities,
+        "audit": audit_activities,
+    }
 
 
 def load_workflows() -> dict:
@@ -130,10 +163,10 @@ async def main() -> None:
     """Start workers voor alle task queues en verbind met Temporal."""
 
     # 1. Valideer alle imports vóór netwerk connectie
-    all_activities = load_activities()
+    activities_map = load_activities_by_queue()
     workflows_map  = load_workflows()
 
-    if not all_activities:
+    if not activities_map["iam"] and not activities_map["soc"] and not activities_map["audit"]:
         logger.error("✗ Geen activiteiten ingeladen — worker wordt niet gestart.")
         sys.exit(1)
 
@@ -150,9 +183,9 @@ async def main() -> None:
 
     # 3. Workers starten
     workers = [
-        Worker(client, task_queue=QUEUE_IAM,   workflows=workflows_map["iam"],   activities=all_activities),
-        Worker(client, task_queue=QUEUE_SOC,   workflows=workflows_map["soc"],   activities=all_activities),
-        Worker(client, task_queue=QUEUE_AUDIT, workflows=workflows_map["audit"], activities=all_activities),
+        Worker(client, task_queue=QUEUE_IAM,   workflows=workflows_map["iam"],   activities=activities_map["iam"]),
+        Worker(client, task_queue=QUEUE_SOC,   workflows=workflows_map["soc"],   activities=activities_map["soc"]),
+        Worker(client, task_queue=QUEUE_AUDIT, workflows=workflows_map["audit"], activities=activities_map["audit"]),
     ]
 
     logger.info(f"Workers starten op queues: {QUEUE_IAM}, {QUEUE_SOC}, {QUEUE_AUDIT}")

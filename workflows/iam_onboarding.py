@@ -6,12 +6,13 @@ from temporalio.common import RetryPolicy
 from shared.models import (
     LifecycleAction,
     LifecycleRequest,
+    TenantConfig,
     TenantSecrets,
     GraphUser,
 )
 
 with workflow.unsafe.imports_passed_through():
-    from activities.tenant import validate_tenant_context, get_tenant_secrets
+    from shared.workflow_helpers import bootstrap_tenant
     from activities.graph_users import (
         graph_get_user,
         graph_create_user,
@@ -43,28 +44,22 @@ class IamOnboardingWorkflow:
             f"action={request.action.value}, user={request.user_data.email}"
         )
 
-        # 1. Validate tenant
-        await workflow.execute_activity(
-            validate_tenant_context,
-            args=[request.tenant_id],
-            start_to_close_timeout=TIMEOUT,
+        config: TenantConfig
+        secrets: TenantSecrets
+        config, secrets = await bootstrap_tenant(
+            tenant_id=request.tenant_id,
             retry_policy=RETRY_POLICY,
+            timeout=TIMEOUT,
+            secret_type="graph",
         )
-
-        # 2. Get tenant secrets
-        secrets: TenantSecrets = await workflow.execute_activity(
-            get_tenant_secrets,
-            args=[request.tenant_id, "graph"],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
-        )
+        runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
 
         # 3. Idempotency check — kijk of gebruiker al bestaat
         existing_user: GraphUser | None = await workflow.execute_activity(
             graph_get_user,
             args=[request.tenant_id, request.user_data.email, secrets],
             start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
+            retry_policy=runtime_retry,
         )
 
         # 4. Actie-specifieke branch
@@ -81,7 +76,7 @@ class IamOnboardingWorkflow:
                     graph_create_user,
                     args=[request.tenant_id, request.user_data, secrets],
                     start_to_close_timeout=TIMEOUT,
-                    retry_policy=RETRY_POLICY,
+                    retry_policy=runtime_retry,
                 )
 
                 # Optioneel: licentie toekennen
@@ -95,7 +90,7 @@ class IamOnboardingWorkflow:
                             secrets,
                         ],
                         start_to_close_timeout=TIMEOUT,
-                        retry_policy=RETRY_POLICY,
+                        retry_policy=runtime_retry,
                     )
 
                 result_msg = (
@@ -119,7 +114,7 @@ class IamOnboardingWorkflow:
                     secrets,
                 ],
                 start_to_close_timeout=TIMEOUT,
-                retry_policy=RETRY_POLICY,
+                retry_policy=runtime_retry,
             )
             result_msg = f"Gebruiker '{existing_user.email}' bijgewerkt."
 
@@ -133,13 +128,13 @@ class IamOnboardingWorkflow:
                 graph_revoke_sessions,
                 args=[request.tenant_id, existing_user.user_id, secrets],
                 start_to_close_timeout=TIMEOUT,
-                retry_policy=RETRY_POLICY,
+                retry_policy=runtime_retry,
             )
             await workflow.execute_activity(
                 graph_delete_user,
                 args=[request.tenant_id, existing_user.user_id, secrets],
                 start_to_close_timeout=TIMEOUT,
-                retry_policy=RETRY_POLICY,
+                retry_policy=runtime_retry,
             )
             result_msg = f"Gebruiker '{existing_user.email}' uitgeschakeld."
 
@@ -157,7 +152,7 @@ class IamOnboardingWorkflow:
                     secrets,
                 ],
                 start_to_close_timeout=TIMEOUT,
-                retry_policy=RETRY_POLICY,
+                retry_policy=runtime_retry,
             )
             result_msg = f"Wachtwoord gereset voor '{existing_user.email}'."
 
@@ -165,14 +160,14 @@ class IamOnboardingWorkflow:
         await workflow.execute_activity(
             create_audit_log,
             args=[
-                workflow.info().workflow_id,
                 request.tenant_id,
+                workflow.info().workflow_id,
                 request.action.value,
                 result_msg,
                 {"requester": request.requester, "ticket_id": request.ticket_id},
             ],
             start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
+            retry_policy=runtime_retry,
         )
 
         workflow.logger.info(f"WF-01 afgerond — {result_msg}")

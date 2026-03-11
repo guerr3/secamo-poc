@@ -10,25 +10,39 @@ All infrastructure (Temporal client, event parsing, response formatting,
 async dispatch) is provided by the ingress_sdk Lambda Layer.
 """
 
-from pydantic import ValidationError
 from ingress_sdk import temporal, response
 from ingress_sdk.dispatch import async_handler
 from ingress_sdk.event import IngressEvent
 
 from shared.models import IamIngressRequest, LifecycleRequest, LifecycleAction, UserData
+from ingress.mappers import normalize_event_body
+
+
+PROVIDER_EVENT_ROUTING = {
+    ("microsoft_defender", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
+    ("microsoft_defender", "impossible_travel"): ("ImpossibleTravelWorkflow", "soc-defender"),
+    ("crowdstrike", "detection_summary"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
+    ("crowdstrike", "impossible_travel"): ("ImpossibleTravelWorkflow", "soc-defender"),
+    ("sentinelone", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
+    ("jira", "jira:issue_created"): ("IamOnboardingWorkflow", "iam-graph"),
+    ("jira", "jira:issue_updated"): ("IamOnboardingWorkflow", "iam-graph"),
+}
 
 
 # ── Route: /api/v1/ingress/defender ──────────────────────────
 
 async def handle_defender(event: IngressEvent) -> dict:
     """Start a DefenderAlertEnrichmentWorkflow on the soc-defender queue."""
+    normalized = normalize_event_body(
+        provider="microsoft_defender",
+        event_type="alert",
+        tenant_id=event.tenant_id,
+        raw_body=event.body,
+    )
+
     result = await temporal.start_workflow(
         workflow="DefenderAlertEnrichmentWorkflow",
-        input={
-            "tenant_id": event.tenant_id,
-            "alert": event.body.get("alert", {}),
-            "requester": event.body.get("requester", "ingress-api"),
-        },
+        input=normalized,
         tenant_id=event.tenant_id,
         task_queue="soc-defender",
     )
@@ -67,14 +81,22 @@ async def handle_iam(event: IngressEvent) -> dict:
     except Exception as exc:
         return response.error(400, f"Invalid IAM request body: {exc}")
 
+    normalized = normalize_event_body(
+        provider="microsoft_graph",
+        event_type="iam_request",
+        tenant_id=event.tenant_id,
+        raw_body=iam_request.model_dump(mode="json"),
+    )
+
     # 2. Build domain LifecycleRequest (tenant_id from authorizer, rest from body)
     try:
         lifecycle = LifecycleRequest(
             tenant_id=event.tenant_id,
-            action=LifecycleAction(iam_request.action),
-            user_data=UserData.model_validate(iam_request.user_data),
-            requester=iam_request.requester,
-            ticket_id=iam_request.ticket_id or "",
+            action=LifecycleAction(normalized["action"]),
+            user_data=UserData.model_validate(normalized["user_data"]),
+            requester=normalized["requester"],
+            ticket_id=normalized.get("ticket_id", ""),
+            source_provider=normalized.get("source_provider", "microsoft_graph"),
         )
     except Exception as exc:
         return response.error(400, f"Invalid lifecycle payload: {exc}")
@@ -89,10 +111,42 @@ async def handle_iam(event: IngressEvent) -> dict:
     return response.accepted(result)
 
 
+async def handle_generic_event(event: IngressEvent) -> dict:
+    """Generic provider-event ingress route for workflow starts."""
+    provider = str(event.body.get("provider", "")).strip().lower()
+    if not provider:
+        return response.error(400, "provider is required in request body")
+
+    event_type = str(event.body.get("event_type", "alert")).strip().lower() or "alert"
+    routing = PROVIDER_EVENT_ROUTING.get((provider, event_type))
+    if routing is None:
+        return response.error(
+            400,
+            f"No workflow mapping found for provider='{provider}' event_type='{event_type}'",
+        )
+
+    workflow_name, task_queue = routing
+    normalized = normalize_event_body(
+        provider=provider,
+        event_type=event_type,
+        tenant_id=event.tenant_id,
+        raw_body=event.body,
+    )
+
+    result = await temporal.start_workflow(
+        workflow=workflow_name,
+        input=normalized,
+        tenant_id=event.tenant_id,
+        task_queue=task_queue,
+    )
+    return response.accepted(result)
+
+
 # ── Lambda Entrypoint ────────────────────────────────────────
 
 handler = async_handler({
     "/api/v1/ingress/defender": handle_defender,
     "/api/v1/ingress/teams": handle_teams,
     "/api/v1/ingress/iam": handle_iam,
+    "/api/v1/ingress/event": handle_generic_event,
 })

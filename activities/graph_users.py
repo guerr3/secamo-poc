@@ -1,237 +1,185 @@
+from __future__ import annotations
+
 import secrets as py_secrets
-from uuid import UUID
-
-from temporalio import activity
-from kiota_abstractions.api_error import APIError
-from azure.identity.aio import ClientSecretCredential
-from msgraph import GraphServiceClient
-from msgraph.generated.models.user import User
-from msgraph.generated.models.password_profile import PasswordProfile
-from msgraph.generated.models.assigned_license import AssignedLicense
-from msgraph.generated.users.item.assign_license.assign_license_post_request_body import (
-    AssignLicensePostRequestBody,
-)
-
-from shared.models import UserData, GraphUser, TenantSecrets
+import string
 from typing import Optional
+from urllib.parse import quote
+
+import httpx
+from temporalio import activity
+
+from shared.graph_client import get_graph_token
+from shared.models import GraphUser, TenantSecrets, UserData
+
+GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
 
-# ── Helper ────────────────────────────────────────────────────
-def _build_graph_client(secrets: TenantSecrets) -> tuple[GraphServiceClient, ClientSecretCredential]:
-    """
-    Bouwt een GraphServiceClient op basis van tenant-specifieke credentials.
-    Geeft ook de credential terug zodat deze na gebruik gesloten kan worden.
-    """
-    credential = ClientSecretCredential(
-        tenant_id=secrets.tenant_azure_id,
-        client_id=secrets.client_id,
-        client_secret=secrets.client_secret,
-    )
-    client = GraphServiceClient(
-        credentials=credential,
-        scopes=["https://graph.microsoft.com/.default"],
-    )
-    return client, credential
+def _auth_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-# ── Activities ────────────────────────────────────────────────
+def _handle_http_error(tenant_id: str, provider: str, status: int, action: str) -> None:
+    if status in (401, 403):
+        raise RuntimeError(f"[{tenant_id}] Auth failed for {provider}: {status}")
+    if status == 429:
+        raise RuntimeError(f"[{tenant_id}] {provider} rate limited during {action}: {status}")
+    if status >= 500:
+        raise RuntimeError(f"[{tenant_id}] {provider} server error during {action}: {status}")
+
+
+def _generate_password(length: int = 16) -> str:
+    alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+    return "".join(py_secrets.choice(alphabet) for _ in range(length))
+
 
 @activity.defn
 async def graph_get_user(tenant_id: str, email: str, secrets: TenantSecrets) -> Optional[GraphUser]:
-    """
-    Zoekt een gebruiker op in Entra ID via Graph API (GET /users/{email}).
-    Geeft None terug als de gebruiker niet bestaat (idempotency check).
-    """
-    activity.logger.info(f"[{tenant_id}] Graph: opzoeken gebruiker '{email}'")
+    activity.logger.info(f"[{tenant_id}] graph_get_user: {email}")
+    token = await get_graph_token(secrets)
+    url = f"{GRAPH_BASE}/users/{quote(email)}?$select=id,displayName,mail,userPrincipalName,accountEnabled"
 
-    client, credential = _build_graph_client(secrets)
-    try:
-        user = await client.users.by_user_id(email).get()
-        if user:
-            return GraphUser(
-                user_id=user.id or "",
-                email=user.user_principal_name or email,
-                display_name=user.display_name or "",
-                account_enabled=user.account_enabled or False,
-            )
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.get(url, headers=_auth_headers(token))
+
+    if response.status_code == 404:
         return None
-    except APIError as e:
-        if e.response_status_code == 404:
-            activity.logger.info(f"[{tenant_id}] Gebruiker '{email}' niet gevonden (404)")
-            return None
-        activity.logger.error(f"[{tenant_id}] Graph API fout bij opzoeken '{email}': {e.message}")
-        raise
-    finally:
-        await credential.close()
+    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_get_user")
+    if response.status_code != 200:
+        raise RuntimeError(f"[{tenant_id}] graph_get_user failed: {response.status_code}")
+
+    body = response.json()
+    return GraphUser(
+        user_id=body.get("id", ""),
+        email=body.get("mail") or body.get("userPrincipalName") or email,
+        display_name=body.get("displayName", ""),
+        account_enabled=bool(body.get("accountEnabled", False)),
+    )
 
 
 @activity.defn
 async def graph_create_user(tenant_id: str, user_data: UserData, secrets: TenantSecrets) -> GraphUser:
-    """
-    Maakt een nieuwe gebruiker aan in Entra ID (POST /users).
-    Genereert een tijdelijk wachtwoord; gebruiker moet dit wijzigen bij eerste login.
-    """
-    activity.logger.info(f"[{tenant_id}] Graph: aanmaken gebruiker '{user_data.email}'")
+    activity.logger.info(f"[{tenant_id}] graph_create_user: {user_data.email}")
+    token = await get_graph_token(secrets)
+    temp_password = _generate_password(16)
+    url = f"{GRAPH_BASE}/users"
 
-    temp_password = py_secrets.token_urlsafe(16)
-    mail_nickname = user_data.email.split("@")[0]
+    payload = {
+        "accountEnabled": True,
+        "displayName": f"{user_data.first_name} {user_data.last_name}",
+        "mailNickname": user_data.email.split("@")[0],
+        "userPrincipalName": user_data.email,
+        "department": user_data.department,
+        "jobTitle": user_data.role,
+        "passwordProfile": {
+            "forceChangePasswordNextSignIn": True,
+            "password": temp_password,
+        },
+    }
 
-    request_body = User(
-        account_enabled=True,
-        display_name=f"{user_data.first_name} {user_data.last_name}",
-        mail_nickname=mail_nickname,
-        user_principal_name=user_data.email,
-        password_profile=PasswordProfile(
-            force_change_password_next_sign_in=True,
-            password=temp_password,
-        ),
-        department=user_data.department,
-        job_title=user_data.role,
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, headers=_auth_headers(token), json=payload)
+
+    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_create_user")
+    if response.status_code not in (200, 201):
+        raise RuntimeError(f"[{tenant_id}] graph_create_user failed: {response.status_code}")
+
+    body = response.json()
+    return GraphUser(
+        user_id=body.get("id", ""),
+        email=body.get("mail") or body.get("userPrincipalName") or user_data.email,
+        display_name=body.get("displayName", f"{user_data.first_name} {user_data.last_name}"),
+        account_enabled=bool(body.get("accountEnabled", True)),
     )
-
-    client, credential = _build_graph_client(secrets)
-    try:
-        result = await client.users.post(request_body)
-        if not result or not result.id:
-            raise RuntimeError(f"Graph API gaf geen user ID terug voor '{user_data.email}'")
-
-        return GraphUser(
-            user_id=result.id,
-            email=result.user_principal_name or user_data.email,
-            display_name=result.display_name or f"{user_data.first_name} {user_data.last_name}",
-            account_enabled=result.account_enabled or True,
-        )
-    except APIError as e:
-        activity.logger.error(f"[{tenant_id}] Graph API fout bij aanmaken '{user_data.email}': {e.message}")
-        raise
-    finally:
-        await credential.close()
 
 
 @activity.defn
 async def graph_update_user(tenant_id: str, user_id: str, updates: dict, secrets: TenantSecrets) -> bool:
-    """
-    Update gebruikerseigenschappen in Entra ID (PATCH /users/{user_id}).
-    Ondersteunde keys: department, jobTitle, displayName, officeLocation.
-    """
-    activity.logger.info(f"[{tenant_id}] Graph: updaten gebruiker '{user_id}' met {list(updates.keys())}")
+    activity.logger.info(f"[{tenant_id}] graph_update_user: {user_id}")
+    token = await get_graph_token(secrets)
+    patch_url = f"{GRAPH_BASE}/users/{quote(user_id)}"
 
-    # Map workflow dict-keys naar User model attributen
-    FIELD_MAP = {
-        "department": "department",
-        "jobTitle": "job_title",
-        "displayName": "display_name",
-        "officeLocation": "office_location",
-        "mobilePhone": "mobile_phone",
-    }
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        patch_response = await client.patch(patch_url, headers=_auth_headers(token), json=updates)
+    if patch_response.status_code == 404:
+        return False
+    _handle_http_error(tenant_id, "microsoft_graph", patch_response.status_code, "graph_update_user")
+    if patch_response.status_code not in (200, 204):
+        raise RuntimeError(f"[{tenant_id}] graph_update_user failed: {patch_response.status_code}")
 
-    kwargs = {}
-    for key, value in updates.items():
-        attr_name = FIELD_MAP.get(key, key)
-        kwargs[attr_name] = value
-
-    request_body = User(**kwargs)
-
-    client, credential = _build_graph_client(secrets)
-    try:
-        await client.users.by_user_id(user_id).patch(request_body)
-        return True
-    except APIError as e:
-        activity.logger.error(f"[{tenant_id}] Graph API fout bij updaten '{user_id}': {e.message}")
-        raise
-    finally:
-        await credential.close()
+    return True
 
 
 @activity.defn
 async def graph_delete_user(tenant_id: str, user_id: str, secrets: TenantSecrets) -> bool:
-    """
-    Soft delete: schakelt het account uit in Entra ID (PATCH /users/{user_id}).
-    Het account wordt NIET permanent verwijderd.
-    """
-    activity.logger.info(f"[{tenant_id}] Graph: uitschakelen gebruiker '{user_id}'")
+    activity.logger.info(f"[{tenant_id}] graph_delete_user: {user_id}")
+    token = await get_graph_token(secrets)
+    url = f"{GRAPH_BASE}/users/{quote(user_id)}"
 
-    request_body = User(account_enabled=False)
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.delete(url, headers=_auth_headers(token))
 
-    client, credential = _build_graph_client(secrets)
-    try:
-        await client.users.by_user_id(user_id).patch(request_body)
-        return True
-    except APIError as e:
-        activity.logger.error(f"[{tenant_id}] Graph API fout bij uitschakelen '{user_id}': {e.message}")
-        raise
-    finally:
-        await credential.close()
+    if response.status_code == 404:
+        return False
+    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_delete_user")
+    if response.status_code != 204:
+        raise RuntimeError(f"[{tenant_id}] graph_delete_user failed: {response.status_code}")
+    return True
 
 
 @activity.defn
 async def graph_revoke_sessions(tenant_id: str, user_id: str, secrets: TenantSecrets) -> bool:
-    """
-    Herroept alle actieve sessies van een gebruiker (POST /users/{user_id}/revokeSignInSessions).
-    Security best practice bij offboarding.
-    """
-    activity.logger.info(f"[{tenant_id}] Graph: sessies herroepen voor gebruiker '{user_id}'")
+    activity.logger.info(f"[{tenant_id}] graph_revoke_sessions: {user_id}")
+    token = await get_graph_token(secrets)
+    url = f"{GRAPH_BASE}/users/{quote(user_id)}/revokeSignInSessions"
 
-    client, credential = _build_graph_client(secrets)
-    try:
-        result = await client.users.by_user_id(user_id).revoke_sign_in_sessions.post()
-        return bool(result and result.value)
-    except APIError as e:
-        activity.logger.error(f"[{tenant_id}] Graph API fout bij sessies herroepen '{user_id}': {e.message}")
-        raise
-    finally:
-        await credential.close()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, headers=_auth_headers(token))
+
+    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_revoke_sessions")
+    if response.status_code not in (200, 204):
+        raise RuntimeError(f"[{tenant_id}] graph_revoke_sessions failed: {response.status_code}")
+    return True
 
 
 @activity.defn
 async def graph_assign_license(tenant_id: str, user_id: str, sku_id: str, secrets: TenantSecrets) -> bool:
-    """
-    Kent een M365-licentie toe aan de gebruiker (POST /users/{user_id}/assignLicense).
-    """
-    activity.logger.info(f"[{tenant_id}] Graph: licentie '{sku_id}' toekennen aan '{user_id}'")
+    activity.logger.info(f"[{tenant_id}] graph_assign_license: {user_id}")
+    token = await get_graph_token(secrets)
+    url = f"{GRAPH_BASE}/users/{quote(user_id)}/assignLicense"
+    payload = {
+        "addLicenses": [{"skuId": sku_id}],
+        "removeLicenses": [],
+    }
 
-    request_body = AssignLicensePostRequestBody(
-        add_licenses=[
-            AssignedLicense(
-                disabled_plans=[],
-                sku_id=UUID(sku_id),
-            ),
-        ],
-        remove_licenses=[],
-    )
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.post(url, headers=_auth_headers(token), json=payload)
 
-    client, credential = _build_graph_client(secrets)
-    try:
-        await client.users.by_user_id(user_id).assign_license.post(request_body)
-        return True
-    except APIError as e:
-        activity.logger.error(f"[{tenant_id}] Graph API fout bij licentie toekennen '{user_id}': {e.message}")
-        raise
-    finally:
-        await credential.close()
+    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_assign_license")
+    if response.status_code not in (200, 201):
+        raise RuntimeError(f"[{tenant_id}] graph_assign_license failed: {response.status_code}")
+    return True
 
 
 @activity.defn
 async def graph_reset_password(tenant_id: str, user_id: str, temp_password: str, secrets: TenantSecrets) -> bool:
-    """
-    Dwingt een wachtwoordreset af (PATCH /users/{user_id} met passwordProfile).
-    Gebruiker moet het wachtwoord wijzigen bij volgende aanmelding.
-    """
-    activity.logger.info(f"[{tenant_id}] Graph: wachtwoord resetten voor '{user_id}'")
+    activity.logger.info(f"[{tenant_id}] graph_reset_password: {user_id}")
+    token = await get_graph_token(secrets)
+    url = f"{GRAPH_BASE}/users/{quote(user_id)}"
+    password_value = temp_password or _generate_password(16)
 
-    request_body = User(
-        password_profile=PasswordProfile(
-            force_change_password_next_sign_in=True,
-            password=temp_password,
-        ),
-    )
+    payload = {
+        "passwordProfile": {
+            "forceChangePasswordNextSignIn": True,
+            "password": password_value,
+        }
+    }
 
-    client, credential = _build_graph_client(secrets)
-    try:
-        await client.users.by_user_id(user_id).patch(request_body)
-        return True
-    except APIError as e:
-        activity.logger.error(f"[{tenant_id}] Graph API fout bij wachtwoord reset '{user_id}': {e.message}")
-        raise
-    finally:
-        await credential.close()
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        response = await client.patch(url, headers=_auth_headers(token), json=payload)
+
+    if response.status_code == 404:
+        return False
+    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_reset_password")
+    if response.status_code not in (200, 204):
+        raise RuntimeError(f"[{tenant_id}] graph_reset_password failed: {response.status_code}")
+    return True

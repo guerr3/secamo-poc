@@ -6,31 +6,24 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from shared.models import (
         DefenderAlertRequest,
+        TenantConfig,
         TenantSecrets,
         EnrichedAlert,
         ThreatIntelResult,
         RiskScore,
-        TicketData,
+        ConnectorActionResult,
         TicketResult,
-        NotificationResult,
     )
-    from activities.tenant import validate_tenant_context, get_tenant_secrets
-    from activities.graph_alerts import (
-        graph_enrich_alert,
-        threat_intel_lookup,
-        calculate_risk_score,
-    )
-    from activities.ticketing import ticket_create
+    from shared.workflow_helpers import bootstrap_tenant
+    from activities.tenant import get_tenant_secrets
+    from activities.graph_alerts import calculate_risk_score
+    from activities.connector_dispatch import connector_execute_action, connector_threat_intel_fanout
     from activities.notifications import teams_send_notification
     from activities.audit import create_audit_log
 
 # ── Module-level constants ────────────────────────────────────
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
-
-# Teams webhook URL — TODO: verplaats naar config/tenant secrets
-TEAMS_WEBHOOK_URL = "https://outlook.office.com/webhook/stub-webhook-url"
-
 
 @workflow.defn
 class DefenderAlertEnrichmentWorkflow:
@@ -46,72 +39,119 @@ class DefenderAlertEnrichmentWorkflow:
             f"alert={request.alert.alert_id}, severity={request.alert.severity}"
         )
 
-        # 1. Validate tenant
-        await workflow.execute_activity(
-            validate_tenant_context,
-            args=[request.tenant_id],
-            start_to_close_timeout=TIMEOUT,
+        config: TenantConfig
+        graph_secrets: TenantSecrets
+        config, graph_secrets = await bootstrap_tenant(
+            tenant_id=request.tenant_id,
             retry_policy=RETRY_POLICY,
+            timeout=TIMEOUT,
+            secret_type="graph",
+        )
+        runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
+
+        ticketing_secrets: TenantSecrets | None = None
+        if config.auto_ticket_creation:
+            ticketing_secrets = await workflow.execute_activity(
+                get_tenant_secrets,
+                args=[request.tenant_id, "ticketing"],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=runtime_retry,
+            )
+
+        ti_secrets: TenantSecrets | None = None
+        if config.threat_intel_enabled:
+            ti_secrets = await workflow.execute_activity(
+                get_tenant_secrets,
+                args=[request.tenant_id, "threatintel"],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=runtime_retry,
+            )
+
+        # 3. Enrich alert via provider connector
+        enrich_result: ConnectorActionResult = await workflow.execute_activity(
+            connector_execute_action,
+            args=[
+                request.tenant_id,
+                config.edr_provider,
+                "enrich_alert",
+                {"alert_id": request.alert.alert_id},
+                graph_secrets,
+            ],
+            start_to_close_timeout=TIMEOUT,
+            retry_policy=runtime_retry,
         )
 
-        # 2. Get tenant secrets
-        secrets: TenantSecrets = await workflow.execute_activity(
-            get_tenant_secrets,
-            args=[request.tenant_id, "graph"],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
-        )
-
-        # 3. Enrich alert met Graph API context
-        enriched: EnrichedAlert = await workflow.execute_activity(
-            graph_enrich_alert,
-            args=[request.tenant_id, request.alert, secrets],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
+        enriched_payload = enrich_result.data
+        enriched = EnrichedAlert(
+            alert_id=enriched_payload.get("id", request.alert.alert_id),
+            severity=(enriched_payload.get("severity") or request.alert.severity).lower(),
+            title=enriched_payload.get("title", request.alert.title),
+            description=enriched_payload.get("description", request.alert.description),
+            user_display_name=((enriched_payload.get("userStates") or [{}])[0].get("userPrincipalName") if enriched_payload.get("userStates") else request.alert.user_email),
+            device_display_name=((enriched_payload.get("deviceEvidence") or [{}])[0].get("deviceDnsName") if enriched_payload.get("deviceEvidence") else request.alert.device_id),
         )
 
         # 4. Threat intelligence lookup
         indicator = request.alert.source_ip or request.alert.destination_ip or ""
-        threat_intel: ThreatIntelResult = await workflow.execute_activity(
-            threat_intel_lookup,
-            args=[request.tenant_id, indicator],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
-        )
+        if config.threat_intel_enabled and ti_secrets:
+            threat_intel: ThreatIntelResult = await workflow.execute_activity(
+                connector_threat_intel_fanout,
+                args=[request.tenant_id, config.threat_intel_providers, indicator, ti_secrets],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=runtime_retry,
+            )
+        else:
+            threat_intel = ThreatIntelResult(
+                indicator=indicator,
+                is_malicious=False,
+                provider="disabled",
+                reputation_score=0.0,
+                details="Threat intel disabled by tenant config.",
+            )
 
         # 5. Risicoscore berekenen
         risk: RiskScore = await workflow.execute_activity(
             calculate_risk_score,
             args=[request.tenant_id, enriched, threat_intel],
             start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
+            retry_policy=runtime_retry,
         )
 
-        # 6. Ticket aanmaken
-        ticket_data = TicketData(
-            tenant_id=request.tenant_id,
-            title=f"[{risk.level.upper()}] {enriched.title}",
-            description=(
-                f"Alert: {enriched.alert_id}\n"
-                f"Severity: {enriched.severity}\n"
-                f"Risk score: {risk.score} ({risk.level})\n"
-                f"Factors: {', '.join(risk.factors)}\n\n"
-                f"Beschrijving: {enriched.description}\n"
-                f"Gebruiker: {enriched.user_display_name} ({enriched.user_department})\n"
-                f"Device: {enriched.device_display_name} ({enriched.device_os})\n"
-                f"Threat intel: {threat_intel.details}"
-            ),
-            severity=risk.level,
-            source_workflow="WF-02",
-            related_alert_id=enriched.alert_id,
-        )
+        ticket = TicketResult(ticket_id="NOT-CREATED", status="skipped", url="")
+        if config.auto_ticket_creation and ticketing_secrets:
+            ticket_result: ConnectorActionResult = await workflow.execute_activity(
+                connector_execute_action,
+                args=[
+                    request.tenant_id,
+                    config.ticketing_provider,
+                    "create_ticket",
+                    {
+                        "project_key": ticketing_secrets.project_key or "SOC",
+                        "title": f"[{risk.level.upper()}] {enriched.title}",
+                        "description": (
+                            f"Alert: {enriched.alert_id}\n"
+                            f"Severity: {enriched.severity}\n"
+                            f"Risk score: {risk.score} ({risk.level})\n"
+                            f"Factors: {', '.join(risk.factors)}\n\n"
+                            f"Beschrijving: {enriched.description}\n"
+                            f"Gebruiker: {enriched.user_display_name} ({enriched.user_department})\n"
+                            f"Device: {enriched.device_display_name} ({enriched.device_os})\n"
+                            f"Threat intel: {threat_intel.details}"
+                        ),
+                        "issue_type": "Incident",
+                    },
+                    ticketing_secrets,
+                ],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=runtime_retry,
+            )
 
-        ticket: TicketResult = await workflow.execute_activity(
-            ticket_create,
-            args=[request.tenant_id, ticket_data],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
-        )
+            ticket_key = ticket_result.data.get("key", "UNKNOWN")
+            ticket = TicketResult(
+                ticket_id=ticket_key,
+                status="open",
+                url=f"{ticketing_secrets.jira_base_url}/browse/{ticket_key}" if ticketing_secrets.jira_base_url else "",
+            )
 
         # 7. Teams notificatie
         notification_msg = (
@@ -123,17 +163,17 @@ class DefenderAlertEnrichmentWorkflow:
 
         await workflow.execute_activity(
             teams_send_notification,
-            args=[request.tenant_id, TEAMS_WEBHOOK_URL, notification_msg],
+            args=[request.tenant_id, graph_secrets.teams_webhook_url or "", notification_msg],
             start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
+            retry_policy=runtime_retry,
         )
 
         # 8. Audit log
         await workflow.execute_activity(
             create_audit_log,
             args=[
-                workflow.info().workflow_id,
                 request.tenant_id,
+                workflow.info().workflow_id,
                 "defender_alert_enrichment",
                 f"Ticket {ticket.ticket_id} aangemaakt met risicoscore {risk.score}",
                 {
@@ -145,13 +185,13 @@ class DefenderAlertEnrichmentWorkflow:
                 },
             ],
             start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
+            retry_policy=runtime_retry,
         )
 
         result_msg = (
             f"WF-02 afgerond — alert '{enriched.alert_id}' verrijkt, "
             f"risicoscore {risk.score} ({risk.level}), "
-            f"ticket {ticket.ticket_id} aangemaakt."
+            f"ticketstatus: {ticket.status} ({ticket.ticket_id})."
         )
         workflow.logger.info(result_msg)
         return result_msg

@@ -1,61 +1,97 @@
+from __future__ import annotations
+
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+import boto3
 from temporalio import activity
+
+from shared.config import AUDIT_TABLE_NAME, EVIDENCE_BUCKET_NAME
 from shared.models import EvidenceBundle
+
+_s3 = boto3.client("s3", region_name="eu-west-1")
+_dynamo = boto3.client("dynamodb", region_name="eu-west-1")
 
 
 @activity.defn
 async def create_audit_log(
-    workflow_id: str,
     tenant_id: str,
+    workflow_id: str,
     action: str,
     result: str,
     evidence: dict,
 ) -> bool:
-    """
-    Schrijft een audit event.
-    Later: opslaan in DynamoDB tabel 'audit_events' (uit design doc).
-    """
-    activity.logger.info(
-        f"[{tenant_id}] Audit log aanmaken voor workflow '{workflow_id}'"
-    )
+    activity.logger.info(f"[{tenant_id}] create_audit_log workflow={workflow_id}")
+    if not AUDIT_TABLE_NAME:
+        activity.logger.error(f"[{tenant_id}] AUDIT_TABLE_NAME not configured")
+        return False
 
-    log_entry = {
-        "workflow_id": workflow_id,
-        "tenant_id": tenant_id,
-        "action": action,
-        "result": result,
-        "evidence": evidence,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-    }
+    now = datetime.now(timezone.utc)
+    ttl = int((now + timedelta(days=90)).timestamp())
 
-    # TODO: replace with real DynamoDB call
-    activity.logger.info(f"AUDIT: {json.dumps(log_entry)}")
-    return True
+    try:
+        _dynamo.put_item(
+            TableName=AUDIT_TABLE_NAME,
+            Item={
+                "workflow_id": {"S": workflow_id},
+                "timestamp": {"S": now.isoformat()},
+                "tenant_id": {"S": tenant_id},
+                "event_type": {"S": action},
+                "message": {"S": result},
+                "metadata": {"S": json.dumps(evidence or {})},
+                "ttl": {"N": str(ttl)},
+            },
+        )
+        return True
+    except Exception as exc:
+        activity.logger.error(f"[{tenant_id}] create_audit_log failed: {type(exc).__name__}")
+        return False
 
 
 @activity.defn
 async def collect_evidence_bundle(
-    workflow_id: str,
     tenant_id: str,
+    workflow_id: str,
     alert_id: str,
     items: list[dict],
 ) -> EvidenceBundle:
-    """
-    Verzamelt bewijs (logs, screenshots, configs) in een bundle voor compliance.
-    Later: upload naar S3 en geef signed URL terug.
-    """
-    activity.logger.info(
-        f"[{tenant_id}] Evidence bundle verzamelen voor alert '{alert_id}'"
-    )
+    activity.logger.info(f"[{tenant_id}] collect_evidence_bundle alert={alert_id}")
+    if not EVIDENCE_BUCKET_NAME:
+        activity.logger.error(f"[{tenant_id}] EVIDENCE_BUCKET_NAME not configured")
+        return EvidenceBundle(
+            workflow_id=workflow_id,
+            tenant_id=tenant_id,
+            alert_id=alert_id,
+            items=items,
+            bundle_url="",
+        )
 
-    # TODO: replace with real S3 upload
-    bundle = EvidenceBundle(
+    key = f"evidence/{tenant_id}/{alert_id}/{workflow_id}.json"
+    payload = {
+        "workflow_id": workflow_id,
+        "tenant_id": tenant_id,
+        "alert_id": alert_id,
+        "items": items,
+        "collected_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+    try:
+        _s3.put_object(
+            Bucket=EVIDENCE_BUCKET_NAME,
+            Key=key,
+            Body=json.dumps(payload).encode("utf-8"),
+            ContentType="application/json",
+            ServerSideEncryption="aws:kms",
+        )
+        bundle_url = f"s3://{EVIDENCE_BUCKET_NAME}/{key}"
+    except Exception as exc:
+        activity.logger.error(f"[{tenant_id}] collect_evidence_bundle failed: {type(exc).__name__}")
+        bundle_url = ""
+
+    return EvidenceBundle(
         workflow_id=workflow_id,
         tenant_id=tenant_id,
         alert_id=alert_id,
         items=items,
-        bundle_url=f"https://s3.eu-west-1.amazonaws.com/secamo-evidence/{workflow_id}/{alert_id}.zip",
+        bundle_url=bundle_url,
     )
-    activity.logger.info(f"Evidence bundle URL: {bundle.bundle_url}")
-    return bundle

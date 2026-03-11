@@ -13,3 +13,8 @@ TEMPORAL_NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
 QUEUE_IAM    = "iam-graph"
 QUEUE_SOC    = "soc-defender"
 QUEUE_AUDIT  = "audit"
+
+# ── Shared runtime settings ──────────────────────────────────
+SECAMO_SENDER_EMAIL = os.environ.get("SECAMO_SENDER_EMAIL", "noreply@secamo.local")
+EVIDENCE_BUCKET_NAME = os.environ.get("EVIDENCE_BUCKET_NAME", "")
+AUDIT_TABLE_NAME = os.environ.get("AUDIT_TABLE_NAME", "")

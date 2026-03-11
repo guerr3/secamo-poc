@@ -26,12 +26,12 @@ Terraform is een **Infrastructure as Code (IaC)** tool van HashiCorp. Je beschri
 
 **Het verschil met handmatig werken:**
 
-| Handmatig (Console) | Terraform |
-|---------------------|-----------|
-| Klik-klik in AWS Console | Schrijf code, run `apply` |
-| Niemand weet wat er veranderd is | Volledige change history in Git |
-| Moeilijk reproduceerbaar | Exact dezelfde infra in 1 commando |
-| Geen rollback | `terraform destroy` of Git revert |
+| Handmatig (Console)              | Terraform                          |
+| -------------------------------- | ---------------------------------- |
+| Klik-klik in AWS Console         | Schrijf code, run `apply`          |
+| Niemand weet wat er veranderd is | Volledige change history in Git    |
+| Moeilijk reproduceerbaar         | Exact dezelfde infra in 1 commando |
+| Geen rollback                    | `terraform destroy` of Git revert  |
 
 ### Hoe werkt het intern?
 
@@ -158,12 +158,12 @@ terraform/
 
 ### Waarom deze structuur?
 
-| Patroon | Voordeel |
-|---------|----------|
-| `environments/<env>/` | Meerdere omgevingen (poc, staging, prod) met eigen variabelen |
-| `modules/<component>/` | Herbruikbaarheid — dezelfde VPC-module voor elke omgeving |
-| Elk module heeft `main.tf`, `variables.tf`, `outputs.tf` | Consistentie — je weet altijd waar je moet kijken |
-| `scripts/` apart | Scheiding van concerns — Terraform config vs. runtime scripts |
+| Patroon                                                  | Voordeel                                                      |
+| -------------------------------------------------------- | ------------------------------------------------------------- |
+| `environments/<env>/`                                    | Meerdere omgevingen (poc, staging, prod) met eigen variabelen |
+| `modules/<component>/`                                   | Herbruikbaarheid — dezelfde VPC-module voor elke omgeving     |
+| Elk module heeft `main.tf`, `variables.tf`, `outputs.tf` | Consistentie — je weet altijd waar je moet kijken             |
+| `scripts/` apart                                         | Scheiding van concerns — Terraform config vs. runtime scripts |
 
 ### Belangrijk: Waar run je Terraform?
 
@@ -220,20 +220,21 @@ Terraform berekent automatisch de **dependency graph**: het weet dat de VPC eers
 
 ### Onze 6 modules
 
-| Module | Wat het aanmaakt | Waarom apart? |
-|--------|-----------------|---------------|
-| **vpc** | VPC, subnets, IGW, fck-nat, route tables | Networking is de basis van alles |
-| **security** | IAM roles, security groups, SSM parameters | Centraal security-beheer |
-| **database** | RDS PostgreSQL instance, subnet group | Database-specifieke lifecycle |
-| **compute** | EC2 instance voor Temporal workers | Compute apart schaalbaar |
-| **ingress** | API Gateway HTTP API, Lambda function | Ingress-layer onafhankelijk |
-| **storage** | S3 evidence bucket, DynamoDB audit table | Storage-layer onafhankelijk |
+| Module       | Wat het aanmaakt                           | Waarom apart?                    |
+| ------------ | ------------------------------------------ | -------------------------------- |
+| **vpc**      | VPC, subnets, IGW, fck-nat, route tables   | Networking is de basis van alles |
+| **security** | IAM roles, security groups, SSM parameters | Centraal security-beheer         |
+| **database** | RDS PostgreSQL instance, subnet group      | Database-specifieke lifecycle    |
+| **compute**  | EC2 instance voor Temporal workers         | Compute apart schaalbaar         |
+| **ingress**  | API Gateway HTTP API, Lambda function      | Ingress-layer onafhankelijk      |
+| **storage**  | S3 evidence bucket, DynamoDB audit table   | Storage-layer onafhankelijk      |
 
 ---
 
 ## 5. Environments (omgevingen)
 
 Elke environment is een **volledig onafhankelijke Terraform deployment** met:
+
 - Eigen `backend.tf` → eigen state file
 - Eigen `variables.tf` → eigen configuratie (instance sizes, CIDRs, etc.)
 - Dezelfde modules, maar met andere parameters
@@ -443,11 +444,13 @@ terraform init
 ```
 
 **Wat er gebeurt:**
+
 - Downloadt de `aws` en `random` providers naar `.terraform/`
 - Verbindt met de S3 backend
 - Valideert alle module references
 
 **Verwachte output:**
+
 ```
 Initializing the backend...
 Initializing provider plugins...
@@ -465,6 +468,7 @@ terraform plan
 ```
 
 **Output interpretatie:**
+
 ```
   + aws_vpc.main                    # + = wordt aangemaakt (groen)
   ~ aws_instance.worker             # ~ = wordt gewijzigd (geel)
@@ -474,6 +478,7 @@ Plan: 23 to add, 0 to change, 0 to destroy.
 ```
 
 > 💡 **Tip:** Sla het plan op voor audit trail:
+>
 > ```powershell
 > terraform plan -out=tfplan
 > ```
@@ -523,18 +528,19 @@ terraform destroy
 ### Wat is het state file?
 
 Een JSON-bestand dat Terraform's "geheugen" is. Het bevat:
+
 - Welke resources Terraform beheert
 - Hun huidige configuratie
 - Metadata (resource IDs, ARNs, etc.)
 
 ### Waarom remote state (S3)?
 
-| Local state | Remote state (S3) |
-|-------------|-------------------|
-| Alleen op jouw machine | Gedeeld met het team |
-| Geen locking | DynamoDB locking voorkomt conflicten |
-| Risico op verlies | Versioned met rollback mogelijkheid |
-| Secrets in plaintext op disk | Encrypted at rest in S3 |
+| Local state                  | Remote state (S3)                    |
+| ---------------------------- | ------------------------------------ |
+| Alleen op jouw machine       | Gedeeld met het team                 |
+| Geen locking                 | DynamoDB locking voorkomt conflicten |
+| Risico op verlies            | Versioned met rollback mogelijkheid  |
+| Secrets in plaintext op disk | Encrypted at rest in S3              |
 
 ### Hoe locking werkt
 
@@ -582,6 +588,8 @@ $env:AWS_PROFILE = "760659115776_PowerUser-IAMFullAccess"
 # Als session token verlopen is, vernieuw via SSO:
 aws sso login --profile 760659115776_PowerUser-IAMFullAccess
 ```
+
+PowerUser-IAMFullAccess-760659115776
 
 ### `Error: Failed to get existing workspaces: S3 bucket does not exist`
 
