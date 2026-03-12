@@ -5,6 +5,8 @@
 # Routes:  POST /api/v1/ingress/defender  → Proxy Lambda (start workflow)
 #          POST /api/v1/ingress/teams     → Proxy Lambda (signal workflow)
 #          POST /api/v1/ingress/iam       → Proxy Lambda (start IAM workflow)
+#          GET  /api/v1/hitl/respond      → Proxy Lambda (signed HiTL callback)
+#          POST /api/v1/hitl/jira         → Proxy Lambda (Jira webhook callback)
 # Auth:    Lambda Authorizer (REQUEST type)
 # Policy:  Resource Policy — deny all except allowed CIDRs
 
@@ -61,6 +63,7 @@ resource "aws_lambda_function" "proxy" {
     variables = {
       TEMPORAL_HOST      = var.temporal_host
       TEMPORAL_NAMESPACE = var.temporal_namespace
+      HITL_TOKEN_TABLE   = var.hitl_token_table
       LOG_LEVEL          = "INFO"
     }
   }
@@ -150,6 +153,8 @@ resource "aws_api_gateway_rest_api" "ingress" {
 # /api → /api/v1 → /api/v1/ingress → /api/v1/ingress/defender
 #                                    → /api/v1/ingress/teams
 #                                    → /api/v1/ingress/iam
+#                → /api/v1/hitl    → /api/v1/hitl/respond
+#                                    → /api/v1/hitl/jira
 
 resource "aws_api_gateway_resource" "api" {
   rest_api_id = aws_api_gateway_rest_api.ingress.id
@@ -185,6 +190,24 @@ resource "aws_api_gateway_resource" "iam" {
   rest_api_id = aws_api_gateway_rest_api.ingress.id
   parent_id   = aws_api_gateway_resource.ingress.id
   path_part   = "iam"
+}
+
+resource "aws_api_gateway_resource" "hitl" {
+  rest_api_id = aws_api_gateway_rest_api.ingress.id
+  parent_id   = aws_api_gateway_resource.v1.id
+  path_part   = "hitl"
+}
+
+resource "aws_api_gateway_resource" "hitl_respond" {
+  rest_api_id = aws_api_gateway_rest_api.ingress.id
+  parent_id   = aws_api_gateway_resource.hitl.id
+  path_part   = "respond"
+}
+
+resource "aws_api_gateway_resource" "hitl_jira" {
+  rest_api_id = aws_api_gateway_rest_api.ingress.id
+  parent_id   = aws_api_gateway_resource.hitl.id
+  path_part   = "jira"
 }
 
 # ── Lambda Authorizer ───────────────────────────────────────
@@ -256,6 +279,42 @@ resource "aws_api_gateway_integration" "iam_post" {
   uri                     = aws_lambda_function.proxy.invoke_arn
 }
 
+# ── GET /api/v1/hitl/respond ───────────────────────────────
+
+resource "aws_api_gateway_method" "hitl_respond_get" {
+  rest_api_id   = aws_api_gateway_rest_api.ingress.id
+  resource_id   = aws_api_gateway_resource.hitl_respond.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "hitl_respond_get" {
+  rest_api_id             = aws_api_gateway_rest_api.ingress.id
+  resource_id             = aws_api_gateway_resource.hitl_respond.id
+  http_method             = aws_api_gateway_method.hitl_respond_get.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.proxy.invoke_arn
+}
+
+# ── POST /api/v1/hitl/jira ─────────────────────────────────
+
+resource "aws_api_gateway_method" "hitl_jira_post" {
+  rest_api_id   = aws_api_gateway_rest_api.ingress.id
+  resource_id   = aws_api_gateway_resource.hitl_jira.id
+  http_method   = "POST"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "hitl_jira_post" {
+  rest_api_id             = aws_api_gateway_rest_api.ingress.id
+  resource_id             = aws_api_gateway_resource.hitl_jira.id
+  http_method             = aws_api_gateway_method.hitl_jira_post.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.proxy.invoke_arn
+}
+
 # ── Deployment & Stage ──────────────────────────────────────
 
 resource "aws_api_gateway_deployment" "ingress" {
@@ -268,12 +327,19 @@ resource "aws_api_gateway_deployment" "ingress" {
       aws_api_gateway_resource.defender.id,
       aws_api_gateway_resource.teams.id,
       aws_api_gateway_resource.iam.id,
+      aws_api_gateway_resource.hitl.id,
+      aws_api_gateway_resource.hitl_respond.id,
+      aws_api_gateway_resource.hitl_jira.id,
       aws_api_gateway_method.defender_post.id,
       aws_api_gateway_method.teams_post.id,
       aws_api_gateway_method.iam_post.id,
+      aws_api_gateway_method.hitl_respond_get.id,
+      aws_api_gateway_method.hitl_jira_post.id,
       aws_api_gateway_integration.defender_post.id,
       aws_api_gateway_integration.teams_post.id,
       aws_api_gateway_integration.iam_post.id,
+      aws_api_gateway_integration.hitl_respond_get.id,
+      aws_api_gateway_integration.hitl_jira_post.id,
       aws_api_gateway_authorizer.lambda.id,
       aws_api_gateway_authorizer.lambda.identity_source,
     ]))

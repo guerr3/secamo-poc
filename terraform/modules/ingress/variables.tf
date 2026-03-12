@@ -54,6 +54,12 @@ variable "temporal_namespace" {
   default     = "default"
 }
 
+variable "hitl_token_table" {
+  description = "DynamoDB table name for HiTL approval tokens"
+  type        = string
+  default     = ""
+}
+
 # ── Resource Policy ─────────────────────────────────────────
 
 variable "allowed_cidr_blocks" {

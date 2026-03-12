@@ -14,12 +14,14 @@ with workflow.unsafe.imports_passed_through():
         ApprovalDecision,
         EvidenceBundle,
         GraphUser,
+        HiTLRequest,
     )
     from shared.workflow_helpers import bootstrap_tenant
     from activities.tenant import get_tenant_secrets
     from activities.graph_users import graph_get_user, graph_delete_user, graph_revoke_sessions
     from activities.connector_dispatch import connector_execute_action, connector_threat_intel_fanout
-    from activities.notifications import teams_send_adaptive_card
+    from activities.notifications import teams_send_notification
+    from activities.hitl import request_hitl_approval
     from activities.audit import collect_evidence_bundle
 
 # ── Module-level constants ────────────────────────────────────
@@ -155,37 +157,54 @@ class ImpossibleTravelWorkflow:
             url=f"{ticketing_secrets.jira_base_url}/browse/{ticket_key}" if ticketing_secrets.jira_base_url else "",
         )
 
-        # 6. Adaptive Card sturen naar Teams voor HITL-goedkeuring
-        card_payload = {
-            "type": "AdaptiveCard",
-            "version": "1.4",
-            "body": [
-                {"type": "TextBlock", "size": "Large", "weight": "Bolder",
-                 "text": f"🚨 Impossible Travel — {user_display}"},
-                {"type": "FactSet", "facts": [
-                    {"title": "Source IP", "value": request.source_ip},
-                    {"title": "Destination IP", "value": request.destination_ip},
-                    {"title": "Threat Intel", "value":
-                        f"{'MALICIOUS' if threat_intel.is_malicious else 'CLEAN'} "
-                        f"(score: {threat_intel.reputation_score})"},
-                    {"title": "Recente alerts", "value": str(len(recent_alerts))},
-                    {"title": "Ticket", "value": ticket.ticket_id},
-                ]},
-                {"type": "TextBlock", "text": "Kies een actie:", "wrap": True},
-            ],
-            "actions": [
-                {"type": "Action.Submit", "title": "✅ Dismiss (false positive)",
-                 "data": {"action": "dismiss"}},
-                {"type": "Action.Submit", "title": "🔒 Isolate device",
-                 "data": {"action": "isolate"}},
-                {"type": "Action.Submit", "title": "🚫 Disable user",
-                 "data": {"action": "disable_user"}},
-            ],
-        }
+        hitl_request = HiTLRequest(
+            workflow_id=workflow.info().workflow_id,
+            tenant_id=request.tenant_id,
+            title=f"Impossible Travel approval required for {user_display}",
+            description=(
+                f"Impossible travel was detected for {user_display}. "
+                f"Review the context and select one response action."
+            ),
+            allowed_actions=["dismiss", "isolate", "disable_user"],
+            reviewer_email=config.soc_analyst_email or request.user_email,
+            ticket_key=ticket_key,
+            channels=["email", "jira"],
+            timeout_hours=config.hitl_timeout_hours,
+            metadata={
+                "alert_id": request.alert.alert_id,
+                "severity": request.alert.severity,
+                "source_ip": request.source_ip,
+                "destination_ip": request.destination_ip,
+                "risk_indicator": "malicious" if threat_intel.is_malicious else "clean",
+                "risk_score": threat_intel.reputation_score,
+                "recent_alert_count": len(recent_alerts),
+                "ticket_id": ticket.ticket_id,
+            },
+        )
+
+        # ── HiTL: request approval via configured channels ──────────
+        # Any workflow can replicate this pattern:
+        #   1. Build HiTLRequest with context + allowed_actions
+        #   2. Execute request_hitl_approval activity
+        #   3. Wait on workflow signal "approve" (ApprovalDecision payload)
+        await workflow.execute_activity(
+            request_hitl_approval,
+            args=[request.tenant_id, hitl_request, graph_secrets, ticketing_secrets],
+            start_to_close_timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
 
         await workflow.execute_activity(
-            teams_send_adaptive_card,
-            args=[request.tenant_id, graph_secrets.teams_webhook_url or "", card_payload],
+            teams_send_notification,
+            args=[
+                request.tenant_id,
+                graph_secrets.teams_webhook_url or "",
+                (
+                    f"HITL decision requested for {user_display}. "
+                    f"Ticket: {ticket.ticket_id}. "
+                    f"Review in email/Jira and signal action is awaited by workflow {workflow.info().workflow_id}."
+                ),
+            ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )

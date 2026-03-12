@@ -12,6 +12,11 @@ output "api_id" {
   value       = aws_api_gateway_rest_api.ingress.id
 }
 
+output "hitl_respond_url" {
+  description = "Full invoke URL for the HiTL signed-link callback endpoint"
+  value       = "${aws_api_gateway_stage.v1.invoke_url}/api/v1/hitl/respond"
+}
+
 output "proxy_lambda_function_name" {
   description = "Name of the Proxy Lambda function"
   value       = aws_lambda_function.proxy.function_name

@@ -31,3 +31,13 @@ output "ingress_api_url" {
   description = "REST API Gateway invoke URL for the ingress service"
   value       = module.ingress.api_invoke_url
 }
+
+output "hitl_respond_url" {
+  description = "Full invoke URL for the HiTL signed-link callback endpoint"
+  value       = module.ingress.hitl_respond_url
+}
+
+output "hitl_token_table" {
+  description = "DynamoDB table name for HiTL approval tokens"
+  value       = aws_dynamodb_table.hitl_tokens.name
+}

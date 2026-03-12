@@ -77,6 +77,7 @@ class TenantConfig(BaseModel):
     ticketing_provider: Literal["jira", "halo_itsm", "servicenow"] = "jira"
     threat_intel_providers: list[Literal["virustotal", "abuseipdb", "misp"]] = Field(default_factory=lambda: ["virustotal"])
     notification_provider: Literal["teams", "slack", "email"] = "teams"
+    soc_analyst_email: Optional[str] = None
 
     sla_tier: Literal["platinum", "standard", "basic"] = "standard"
     hitl_timeout_hours: int = 4
@@ -251,6 +252,22 @@ class ApprovalDecision(BaseModel):
     reviewer: str
     action: str              # "dismiss" | "isolate" | "disable_user"
     comments: str = ""
+
+
+class HiTLRequest(BaseModel):
+    """Generic workflow request contract for Human-in-the-Loop approvals."""
+    model_config = ConfigDict(from_attributes=True)
+
+    workflow_id: str
+    tenant_id: str
+    title: str
+    description: str
+    allowed_actions: list[str]
+    reviewer_email: str
+    ticket_key: Optional[str] = None
+    channels: list[str] = Field(default_factory=lambda: ["email", "jira"])
+    timeout_hours: int = 8
+    metadata: dict = Field(default_factory=dict)
 
 
 class EvidenceBundle(BaseModel):

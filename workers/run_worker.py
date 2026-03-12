@@ -90,6 +90,14 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
+        from activities.hitl import request_hitl_approval
+        soc_activities.append(request_hitl_approval)
+        logger.info("✓ HiTL activities geladen")
+    except ImportError as e:
+        logger.error(f"✗ Fout bij het laden van HiTL activities: {e}")
+        sys.exit(1)
+
+    try:
         from activities.audit import create_audit_log, collect_evidence_bundle
         iam_activities.append(create_audit_log)
         soc_activities.extend([create_audit_log, collect_evidence_bundle])

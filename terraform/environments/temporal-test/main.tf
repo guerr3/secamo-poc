@@ -471,6 +471,43 @@ resource "aws_iam_role_policy_attachment" "lambda_vpc" {
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole"
 }
 
+resource "aws_iam_role_policy" "ingress_lambda_hitl" {
+  name = "${local.name_prefix}-ingress-lambda-hitl"
+  role = aws_iam_role.ingress_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem"
+        ]
+        Resource = aws_dynamodb_table.hitl_tokens.arn
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter"
+        ]
+        Resource = [
+          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/secamo/tenants/*/hitl/*",
+          "arn:aws:ssm:${data.aws_region.current.name}:${data.aws_caller_identity.current.account_id}:parameter/${local.name_prefix}/hitl/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "kms:Decrypt"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 # Authorizer Lambda execution role
 resource "aws_iam_role" "authorizer_lambda" {
   name = "${local.name_prefix}-authorizer-lambda-role"
@@ -545,6 +582,60 @@ resource "aws_iam_role_policy" "authorizer_ssm" {
 }
 
 # ══════════════════════════════════════════════════════════════
+# HITL STORAGE + PARAMETERS
+# ══════════════════════════════════════════════════════════════
+
+resource "aws_dynamodb_table" "hitl_tokens" {
+  name         = "${local.name_prefix}-hitl-tokens"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "token"
+
+  attribute {
+    name = "token"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-hitl-tokens"
+  }
+}
+
+resource "aws_ssm_parameter" "hitl_endpoint_base_url" {
+  name        = "/${local.name_prefix}/hitl/endpoint_base_url"
+  description = "HiTL callback base URL for signed approval links"
+  type        = "String"
+  value       = "PLACEHOLDER"
+
+  tags = {
+    Name = "${local.name_prefix}-hitl-endpoint-base-url"
+  }
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+resource "aws_ssm_parameter" "hitl_jira_webhook_secret" {
+  name        = "/secamo/tenants/test-tenant/hitl/jira_webhook_secret"
+  description = "Shared secret for Jira HiTL webhook signature validation"
+  type        = "SecureString"
+  value       = "PLACEHOLDER"
+
+  tags = {
+    Name = "${local.name_prefix}-hitl-jira-webhook-secret"
+  }
+
+  lifecycle {
+    ignore_changes = [value]
+  }
+}
+
+# ══════════════════════════════════════════════════════════════
 # INGRESS MODULE — REST API + Proxy Lambda + Authorizer
 # ══════════════════════════════════════════════════════════════
 
@@ -560,6 +651,7 @@ module "ingress" {
 
   temporal_host      = "${aws_instance.temporal.private_ip}:7233"
   temporal_namespace = var.temporal_namespace
+  hitl_token_table   = aws_dynamodb_table.hitl_tokens.name
 
   allowed_cidr_blocks = var.microsoft_allowed_cidrs
 }

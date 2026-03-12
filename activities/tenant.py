@@ -75,6 +75,7 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
         ]
         or ["virustotal"],
         notification_provider=parameters.get("notification_provider", "teams"),
+        soc_analyst_email=parameters.get("soc_analyst_email"),
         sla_tier=parameters.get("sla_tier", "standard"),
         hitl_timeout_hours=_parse_int(parameters.get("hitl_timeout_hours"), 4),
         escalation_enabled=_parse_bool(parameters.get("escalation_enabled"), True),

@@ -23,6 +23,9 @@ class IngressEvent:
     source_ip: str
     request_id: str
     headers: dict = field(default_factory=dict)
+    query_params: dict = field(default_factory=dict)
+    path_params: dict = field(default_factory=dict)
+    raw_body: str = ""
 
 
 def parse(event: dict) -> IngressEvent:
@@ -65,4 +68,7 @@ def parse(event: dict) -> IngressEvent:
         source_ip=identity.get("sourceIp", "unknown"),
         request_id=request_context.get("requestId", ""),
         headers=event.get("headers", {}),
+        query_params=event.get("queryStringParameters") or {},
+        path_params=event.get("pathParameters") or {},
+        raw_body=raw_body or "",
     )
