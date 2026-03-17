@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from activities.audit import collect_evidence_bundle, create_audit_log
+from activities.audit import create_audit_log
+from activities.evidence import collect_evidence_bundle
 
 
 @pytest.mark.asyncio
@@ -16,8 +17,8 @@ async def test_create_audit_log_happy(mocker):
 
 @pytest.mark.asyncio
 async def test_collect_evidence_bundle_happy(mocker):
-    mocker.patch("activities.audit.EVIDENCE_BUCKET_NAME", "evidence-bucket")
-    put_obj = mocker.patch("activities.audit._s3.put_object", return_value={})
+    mocker.patch("activities.evidence.EVIDENCE_BUCKET_NAME", "evidence-bucket")
+    put_obj = mocker.patch("activities.evidence._s3.put_object", return_value={})
     bundle = await collect_evidence_bundle("t1", "wf-1", "a1", [{"x": 1}])
     assert bundle.bundle_url.startswith("s3://evidence-bucket/")
     assert put_obj.called

@@ -57,9 +57,11 @@ def load_activities_by_queue() -> dict[str, list]:
 
     try:
         from activities.graph_alerts import (
-            graph_enrich_alert, graph_get_alerts, graph_isolate_device,
-            threat_intel_lookup, calculate_risk_score,
+            graph_enrich_alert, graph_get_alerts,
         )
+        from activities.graph_devices import graph_isolate_device
+        from activities.threat_intel import threat_intel_lookup
+        from activities.risk import calculate_risk_score
         soc_activities.extend([
             graph_enrich_alert, graph_get_alerts, graph_isolate_device,
             threat_intel_lookup, calculate_risk_score,
@@ -80,9 +82,8 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
-        from activities.notifications import (
-            teams_send_notification, teams_send_adaptive_card, email_send,
-        )
+        from activities.notify_teams import teams_send_notification, teams_send_adaptive_card
+        from activities.notify_email import email_send
         soc_activities.extend([teams_send_notification, teams_send_adaptive_card, email_send])
         logger.info("✓ Notifications activities geladen")
     except ImportError as e:
@@ -98,7 +99,8 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
-        from activities.audit import create_audit_log, collect_evidence_bundle
+        from activities.audit import create_audit_log
+        from activities.evidence import collect_evidence_bundle
         iam_activities.append(create_audit_log)
         soc_activities.extend([create_audit_log, collect_evidence_bundle])
         audit_activities.extend([create_audit_log, collect_evidence_bundle])

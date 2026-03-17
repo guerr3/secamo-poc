@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from temporalio import activity
 
-from connectors.jira import JiraConnector
+from connectors.registry import get_connector
 from shared.models import TenantSecrets, TicketData, TicketResult
 from shared.ssm_client import get_secret_bundle
 
@@ -39,10 +39,10 @@ def _build_ticket_result(response: dict, secrets: TenantSecrets, fallback_id: st
 
 
 @activity.defn
-async def ticket_create(tenant_id: str, ticket_data: TicketData) -> TicketResult:
+async def ticket_create(tenant_id: str, ticketing_provider: str, ticket_data: TicketData) -> TicketResult:
     activity.logger.info(f"[{tenant_id}] ticket_create: {ticket_data.title}")
     secrets = _build_ticketing_secrets(tenant_id)
-    connector = JiraConnector(tenant_id=tenant_id, secrets=secrets)
+    connector = get_connector(provider=ticketing_provider, tenant_id=tenant_id, secrets=secrets)
 
     payload = {
         "project_key": secrets.project_key or "SOC",
@@ -57,10 +57,10 @@ async def ticket_create(tenant_id: str, ticket_data: TicketData) -> TicketResult
 
 
 @activity.defn
-async def ticket_update(tenant_id: str, ticket_id: str, update_fields: dict) -> TicketResult:
+async def ticket_update(tenant_id: str, ticketing_provider: str, ticket_id: str, update_fields: dict) -> TicketResult:
     activity.logger.info(f"[{tenant_id}] ticket_update: {ticket_id}")
     secrets = _build_ticketing_secrets(tenant_id)
-    connector = JiraConnector(tenant_id=tenant_id, secrets=secrets)
+    connector = get_connector(provider=ticketing_provider, tenant_id=tenant_id, secrets=secrets)
 
     status_map = {
         "closed": "Done",
@@ -82,10 +82,10 @@ async def ticket_update(tenant_id: str, ticket_id: str, update_fields: dict) -> 
 
 
 @activity.defn
-async def ticket_close(tenant_id: str, ticket_id: str, resolution: str) -> TicketResult:
+async def ticket_close(tenant_id: str, ticketing_provider: str, ticket_id: str, resolution: str) -> TicketResult:
     activity.logger.info(f"[{tenant_id}] ticket_close: {ticket_id}")
     secrets = _build_ticketing_secrets(tenant_id)
-    connector = JiraConnector(tenant_id=tenant_id, secrets=secrets)
+    connector = get_connector(provider=ticketing_provider, tenant_id=tenant_id, secrets=secrets)
 
     await connector.execute_action(
         "update_issue",
@@ -98,10 +98,10 @@ async def ticket_close(tenant_id: str, ticket_id: str, resolution: str) -> Ticke
 
 
 @activity.defn
-async def ticket_get_details(tenant_id: str, ticket_id: str) -> dict:
+async def ticket_get_details(tenant_id: str, ticketing_provider: str, ticket_id: str) -> dict:
     activity.logger.info(f"[{tenant_id}] ticket_get_details: {ticket_id}")
     secrets = _build_ticketing_secrets(tenant_id)
-    connector = JiraConnector(tenant_id=tenant_id, secrets=secrets)
+    connector = get_connector(provider=ticketing_provider, tenant_id=tenant_id, secrets=secrets)
     details = await connector.execute_action("get_issue", {"ticket_id": ticket_id})
 
     fields = details.get("fields", {})

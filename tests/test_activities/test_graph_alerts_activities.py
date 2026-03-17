@@ -2,13 +2,10 @@ from __future__ import annotations
 
 import pytest
 
-from activities.graph_alerts import (
-    calculate_risk_score,
-    graph_enrich_alert,
-    graph_get_alerts,
-    graph_isolate_device,
-    threat_intel_lookup,
-)
+from activities.graph_alerts import graph_enrich_alert, graph_get_alerts
+from activities.graph_devices import graph_isolate_device
+from activities.risk import calculate_risk_score
+from activities.threat_intel import threat_intel_lookup
 from shared.models import AlertData, EnrichedAlert, TenantSecrets, ThreatIntelResult
 
 
@@ -84,8 +81,8 @@ async def test_graph_get_alerts_happy_and_error(mocker, secrets):
 
 @pytest.mark.asyncio
 async def test_graph_isolate_device_happy(mocker, secrets):
-    mocker.patch("activities.graph_alerts.get_defender_token", return_value="tok")
-    mocker.patch("activities.graph_alerts.httpx.AsyncClient", return_value=_Client([_Resp(201)]))
+    mocker.patch("activities.graph_devices.get_defender_token", return_value="tok")
+    mocker.patch("activities.graph_devices.httpx.AsyncClient", return_value=_Client([_Resp(201)]))
     assert await graph_isolate_device("t1", "d1", secrets) is True
 
 
@@ -93,13 +90,13 @@ async def test_graph_isolate_device_happy(mocker, secrets):
 async def test_threat_intel_lookup_paths(mocker):
     assert (await threat_intel_lookup("t1", "")).is_malicious is False
 
-    mocker.patch("activities.graph_alerts.get_secret", return_value=None)
+    mocker.patch("activities.threat_intel.get_secret", return_value=None)
     neutral = await threat_intel_lookup("t1", "8.8.8.8")
     assert neutral.provider == "none"
 
-    mocker.patch("activities.graph_alerts.get_secret", return_value="vt-key")
+    mocker.patch("activities.threat_intel.get_secret", return_value="vt-key")
     vt_body = {"data": {"attributes": {"last_analysis_stats": {"malicious": 2, "suspicious": 1, "harmless": 2, "undetected": 5}}}}
-    mocker.patch("activities.graph_alerts.httpx.AsyncClient", return_value=_Client([_Resp(200, vt_body)]))
+    mocker.patch("activities.threat_intel.httpx.AsyncClient", return_value=_Client([_Resp(200, vt_body)]))
     vt = await threat_intel_lookup("t1", "8.8.8.8")
     assert vt.provider == "virustotal"
 

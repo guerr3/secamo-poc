@@ -14,6 +14,7 @@ from temporalio import activity
 from shared.config import SECAMO_SENDER_EMAIL
 from shared.graph_client import get_graph_token
 from shared.models import HiTLRequest, TenantSecrets
+from activities.hitl_renderers import _render_approval_email
 
 _ssm = boto3.client("ssm", region_name="eu-west-1")
 _dynamo = boto3.client("dynamodb", region_name="eu-west-1")
@@ -33,42 +34,6 @@ def _name_prefix() -> str:
 def _join_query_url(base_url: str, token: str, action: str) -> str:
     separator = "&" if "?" in base_url else "?"
     return f"{base_url}{separator}{urlencode({'token': token, 'action': action})}"
-
-
-def _render_approval_email(request: HiTLRequest, action_urls: dict[str, str]) -> str:
-    metadata_rows = "".join(
-        f"<tr><td style='padding:6px 8px;border:1px solid #e5e7eb;'><b>{key}</b></td>"
-        f"<td style='padding:6px 8px;border:1px solid #e5e7eb;'>{value}</td></tr>"
-        for key, value in request.metadata.items()
-    )
-
-    action_buttons = "".join(
-        f"<a href='{url}' style='display:inline-block;margin:8px 8px 0 0;padding:10px 16px;"
-        f"background:#0b5ed7;color:#ffffff;text-decoration:none;border-radius:6px;'>"
-        f"{action.replace('_', ' ').title()}</a>"
-        for action, url in action_urls.items()
-    )
-
-    metadata_section = ""
-    if metadata_rows:
-        metadata_section = (
-            "<h3 style='margin:16px 0 8px 0;font-family:Segoe UI,Arial,sans-serif;'>Context</h3>"
-            "<table style='border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif;font-size:14px;'>"
-            f"{metadata_rows}</table>"
-        )
-
-    return (
-        "<html><body style='font-family:Segoe UI,Arial,sans-serif;color:#111827;'>"
-        f"<h2 style='margin:0 0 12px 0;'>{request.title}</h2>"
-        f"<p style='line-height:1.5;'>{request.description}</p>"
-        f"{metadata_section}"
-        "<h3 style='margin:18px 0 8px 0;'>Choose an action</h3>"
-        f"<div>{action_buttons}</div>"
-        "<p style='margin-top:14px;font-size:12px;color:#6b7280;'>"
-        f"This link expires in {request.timeout_hours} hour(s) and can only be used once."
-        "</p>"
-        "</body></html>"
-    )
 
 
 def _put_token_record(request: HiTLRequest, token: str) -> None:

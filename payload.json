@@ -1,1 +1,14 @@
-{"ticket_id":"IAM-LOCAL-001","requester":"local-curl-test","action":"create","user_data":{"department":"Security","first_name":"temporal_worker_1","manager_email":"warre.gehre@42xzkn.onmicrosoft.com","license_sku":"","email":"poc_user_2@42xzkn.onmicrosoft.com","role":"Analyst","last_name":"Secamo"}}
+{
+  "ticket_id": "IAM-LOCAL-001",
+  "requester": "local-curl-test",
+  "action": "delete",
+  "user_data": {
+    "department": "Security",
+    "first_name": "temporal_worker_1",
+    "manager_email": "warre.gehre@42xzkn.onmicrosoft.com",
+    "license_sku": "",
+    "email": "poc_user_2@42xzkn.onmicrosoft.com",
+    "role": "Analyst",
+    "last_name": "Secamo"
+  }
+}

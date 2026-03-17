@@ -16,9 +16,9 @@ with workflow.unsafe.imports_passed_through():
     )
     from shared.workflow_helpers import bootstrap_tenant
     from activities.tenant import get_tenant_secrets
-    from activities.graph_alerts import calculate_risk_score
+    from activities.risk import calculate_risk_score
     from activities.connector_dispatch import connector_execute_action, connector_threat_intel_fanout
-    from activities.notifications import teams_send_notification
+    from activities.notify_teams import teams_send_notification
     from activities.audit import create_audit_log
 
 # ── Module-level constants ────────────────────────────────────
