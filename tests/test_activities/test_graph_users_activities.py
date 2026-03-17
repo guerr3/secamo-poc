@@ -11,7 +11,7 @@ from activities.graph_users import (
     graph_revoke_sessions,
     graph_update_user,
 )
-from shared.models import TenantSecrets, UserData
+from shared.models import TenantSecrets
 
 
 class _Resp:
@@ -52,14 +52,14 @@ def secrets() -> TenantSecrets:
 
 
 @pytest.fixture
-def user_data() -> UserData:
-    return UserData(
-        email="john@example.com",
-        first_name="John",
-        last_name="Doe",
-        department="Engineering",
-        role="Developer",
-    )
+def user_data() -> dict:
+    return {
+        "email": "john@example.com",
+        "first_name": "John",
+        "last_name": "Doe",
+        "department": "Engineering",
+        "role": "Developer",
+    }
 
 
 @pytest.mark.asyncio
@@ -86,7 +86,7 @@ async def test_graph_create_user_happy(mocker, secrets, user_data):
     mocker.patch("activities.graph_users.get_graph_token", return_value="tok")
     mocker.patch(
         "activities.graph_users.httpx.AsyncClient",
-        return_value=_Client({"post": _Resp(201, {"id": "u2", "displayName": "John Doe", "userPrincipalName": user_data.email, "accountEnabled": True})}),
+        return_value=_Client({"post": _Resp(201, {"id": "u2", "displayName": "John Doe", "userPrincipalName": user_data["email"], "accountEnabled": True})}),
     )
     created = await graph_create_user("t1", user_data, secrets)
     assert created.user_id == "u2"

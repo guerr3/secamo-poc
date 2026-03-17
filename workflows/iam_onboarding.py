@@ -5,7 +5,7 @@ from temporalio.common import RetryPolicy
 
 from shared.models import (
     LifecycleAction,
-    LifecycleRequest,
+    SecurityEvent,
     TenantConfig,
     TenantSecrets,
     GraphUser,
@@ -38,16 +38,25 @@ class IamOnboardingWorkflow:
     """
 
     @workflow.run
-    async def run(self, request: LifecycleRequest) -> str:
+    async def run(self, event: SecurityEvent) -> str:
+        if event.user is None or event.user.action is None:
+            raise ValueError("WF-01 requires event.user.action in SecurityEvent input")
+        if not event.user.user_data or not event.user.user_data.get("email"):
+            raise ValueError("WF-01 requires event.user.user_data.email")
+
+        action = event.user.action
+        user_data = event.user.user_data
+        user_email = str(user_data["email"])
+
         workflow.logger.info(
-            f"WF-01 gestart — tenant={request.tenant_id}, "
-            f"action={request.action.value}, user={request.user_data.email}"
+            f"WF-01 gestart — tenant={event.tenant_id}, "
+            f"action={action.value}, user={user_email}"
         )
 
         config: TenantConfig
         secrets: TenantSecrets
         config, secrets = await bootstrap_tenant(
-            tenant_id=request.tenant_id,
+            tenant_id=event.tenant_id,
             retry_policy=RETRY_POLICY,
             timeout=TIMEOUT,
             secret_type="graph",
@@ -57,7 +66,7 @@ class IamOnboardingWorkflow:
         # 3. Idempotency check — kijk of gebruiker al bestaat
         existing_user: GraphUser | None = await workflow.execute_activity(
             graph_get_user,
-            args=[request.tenant_id, request.user_data.email, secrets],
+            args=[event.tenant_id, user_email, secrets],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
@@ -65,28 +74,28 @@ class IamOnboardingWorkflow:
         # 4. Actie-specifieke branch
         result_msg = ""
 
-        if request.action == LifecycleAction.CREATE:
+        if action == LifecycleAction.CREATE:
             if existing_user:
                 result_msg = (
-                    f"Gebruiker '{request.user_data.email}' bestaat al "
+                    f"Gebruiker '{user_email}' bestaat al "
                     f"(id={existing_user.user_id}). Overgeslagen."
                 )
             else:
                 new_user: GraphUser = await workflow.execute_activity(
                     graph_create_user,
-                    args=[request.tenant_id, request.user_data, secrets],
+                    args=[event.tenant_id, user_data, secrets],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=runtime_retry,
                 )
 
                 # Optioneel: licentie toekennen
-                if request.user_data.license_sku:
+                if user_data.get("license_sku"):
                     await workflow.execute_activity(
                         graph_assign_license,
                         args=[
-                            request.tenant_id,
+                            event.tenant_id,
                             new_user.user_id,
-                            request.user_data.license_sku,
+                            user_data["license_sku"],
                             secrets,
                         ],
                         start_to_close_timeout=TIMEOUT,
@@ -97,19 +106,19 @@ class IamOnboardingWorkflow:
                     f"Gebruiker '{new_user.email}' aangemaakt (id={new_user.user_id})."
                 )
 
-        elif request.action == LifecycleAction.UPDATE:
+        elif action == LifecycleAction.UPDATE:
             if not existing_user:
                 raise ValueError(
-                    f"Gebruiker '{request.user_data.email}' niet gevonden voor update."
+                    f"Gebruiker '{user_email}' niet gevonden voor update."
                 )
             await workflow.execute_activity(
                 graph_update_user,
                 args=[
-                    request.tenant_id,
+                    event.tenant_id,
                     existing_user.user_id,
                     {
-                        "department": request.user_data.department,
-                        "jobTitle": request.user_data.role,
+                        "department": user_data.get("department", ""),
+                        "jobTitle": user_data.get("role", ""),
                     },
                     secrets,
                 ],
@@ -118,15 +127,15 @@ class IamOnboardingWorkflow:
             )
             result_msg = f"Gebruiker '{existing_user.email}' bijgewerkt."
 
-        elif request.action == LifecycleAction.DELETE:
+        elif action == LifecycleAction.DELETE:
             if not existing_user:
                 raise ValueError(
-                    f"Gebruiker '{request.user_data.email}' niet gevonden voor delete."
+                    f"Gebruiker '{user_email}' niet gevonden voor delete."
                 )
             await workflow.execute_child_workflow(
                 UserDeprovisioningWorkflow.run,
                 UserDeprovisioningRequest(
-                    tenant_id=request.tenant_id,
+                    tenant_id=event.tenant_id,
                     user_id=existing_user.user_id,
                     user_email=existing_user.email,
                     secrets=secrets,
@@ -136,15 +145,15 @@ class IamOnboardingWorkflow:
             )
             result_msg = f"Gebruiker '{existing_user.email}' uitgeschakeld."
 
-        elif request.action == LifecycleAction.PASSWORD_RESET:
+        elif action == LifecycleAction.PASSWORD_RESET:
             if not existing_user:
                 raise ValueError(
-                    f"Gebruiker '{request.user_data.email}' niet gevonden voor password reset."
+                    f"Gebruiker '{user_email}' niet gevonden voor password reset."
                 )
             await workflow.execute_activity(
                 graph_reset_password,
                 args=[
-                    request.tenant_id,
+                    event.tenant_id,
                     existing_user.user_id,
                     "TempP@ss2025!",  # TODO: genereer veilig wachtwoord
                     secrets,
@@ -158,11 +167,11 @@ class IamOnboardingWorkflow:
         await workflow.execute_activity(
             create_audit_log,
             args=[
-                request.tenant_id,
+                event.tenant_id,
                 workflow.info().workflow_id,
-                request.action.value,
+                action.value,
                 result_msg,
-                {"requester": request.requester, "ticket_id": request.ticket_id},
+                {"requester": event.requester, "ticket_id": event.ticket_id or ""},
             ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,

@@ -25,7 +25,7 @@ from ingress_sdk import temporal, response
 from ingress_sdk.dispatch import async_handler
 from ingress_sdk.event import IngressEvent
 
-from shared.models import IamIngressRequest, LifecycleRequest, LifecycleAction, UserData
+from shared.models import IamIngressRequest
 from mappers import normalize_event_body
 
 
@@ -300,23 +300,10 @@ async def handle_iam(event: IngressEvent) -> dict:
         raw_body=iam_request.model_dump(mode="json"),
     )
 
-    # 2. Build domain LifecycleRequest (tenant_id from authorizer, rest from body)
-    try:
-        lifecycle = LifecycleRequest(
-            tenant_id=event.tenant_id,
-            action=LifecycleAction(normalized["action"]),
-            user_data=UserData.model_validate(normalized["user_data"]),
-            requester=normalized["requester"],
-            ticket_id=normalized.get("ticket_id", ""),
-            source_provider=normalized.get("source_provider", "microsoft_graph"),
-        )
-    except Exception as exc:
-        return response.error(400, f"Invalid lifecycle payload: {exc}")
-
-    # 3. Start workflow via ingress_sdk (model_dump(mode="json") for JSON-safe serialization)
+    # 2. Start workflow via ingress_sdk with universal SecurityEvent payload shape.
     result = await temporal.start_workflow(
         workflow="IamOnboardingWorkflow",
-        input=lifecycle.model_dump(mode="json"),
+        input=normalized,
         tenant_id=event.tenant_id,
         task_queue="iam-graph",
     )

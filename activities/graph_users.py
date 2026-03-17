@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import secrets as py_secrets
 import string
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import quote
 
 import httpx
 from temporalio import activity
 
 from shared.graph_client import get_graph_token
-from shared.models import GraphUser, TenantSecrets, UserData
+from shared.models import GraphUser, TenantSecrets
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -57,19 +57,25 @@ async def graph_get_user(tenant_id: str, email: str, secrets: TenantSecrets) -> 
 
 
 @activity.defn
-async def graph_create_user(tenant_id: str, user_data: UserData, secrets: TenantSecrets) -> GraphUser:
-    activity.logger.info(f"[{tenant_id}] graph_create_user: {user_data.email}")
+async def graph_create_user(tenant_id: str, user_data: dict[str, Any], secrets: TenantSecrets) -> GraphUser:
+    user_email = str(user_data.get("email", ""))
+    first_name = str(user_data.get("first_name", ""))
+    last_name = str(user_data.get("last_name", ""))
+    department = str(user_data.get("department", ""))
+    role = str(user_data.get("role", ""))
+
+    activity.logger.info(f"[{tenant_id}] graph_create_user: {user_email}")
     token = await get_graph_token(secrets)
     temp_password = _generate_password(16)
     url = f"{GRAPH_BASE}/users"
 
     payload = {
         "accountEnabled": True,
-        "displayName": f"{user_data.first_name} {user_data.last_name}",
-        "mailNickname": user_data.email.split("@")[0],
-        "userPrincipalName": user_data.email,
-        "department": user_data.department,
-        "jobTitle": user_data.role,
+        "displayName": f"{first_name} {last_name}".strip(),
+        "mailNickname": user_email.split("@")[0] if "@" in user_email else user_email,
+        "userPrincipalName": user_email,
+        "department": department,
+        "jobTitle": role,
         "passwordProfile": {
             "forceChangePasswordNextSignIn": True,
             "password": temp_password,
@@ -86,8 +92,8 @@ async def graph_create_user(tenant_id: str, user_data: UserData, secrets: Tenant
     body = response.json()
     return GraphUser(
         user_id=body.get("id", ""),
-        email=body.get("mail") or body.get("userPrincipalName") or user_data.email,
-        display_name=body.get("displayName", f"{user_data.first_name} {user_data.last_name}"),
+        email=body.get("mail") or body.get("userPrincipalName") or user_email,
+        display_name=body.get("displayName", f"{first_name} {last_name}".strip()),
         account_enabled=bool(body.get("accountEnabled", True)),
     )
 

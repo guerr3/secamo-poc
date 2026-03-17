@@ -32,6 +32,7 @@ def test_normalize_microsoft_defender_alert() -> None:
 
     assert payload["tenant_id"] == "tenant-demo-001"
     assert payload["source_provider"] == "microsoft_defender"
+    assert payload["event_type"] == "defender.alert"
     assert payload["alert"]["alert_id"] == "md-001"
     assert payload["alert"]["severity"] == "high"
 
@@ -85,8 +86,9 @@ def test_normalize_jira_issue_created() -> None:
     assert payload["tenant_id"] == "tenant-demo-001"
     assert payload["source_provider"] == "jira"
     assert payload["ticket_id"] == "IAM-42"
-    assert payload["user_data"]["email"] == "jane@example.com"
-    assert payload["action"] == "create"
+    assert payload["event_type"] == "iam.onboarding"
+    assert payload["user"]["user_data"]["email"] == "jane@example.com"
+    assert payload["user"]["action"] == "create"
 
 
 def test_normalize_sentinelone_alert() -> None:

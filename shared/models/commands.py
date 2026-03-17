@@ -27,7 +27,7 @@ class StartWorkflowCommand(WorkflowCommand):
     workflow_name: str
     workflow_id: Optional[str] = None
     task_queue: str
-    workflow_input: dict[str, Any]
+    workflow_input: Any
 
 
 class SignalWorkflowCommand(WorkflowCommand):

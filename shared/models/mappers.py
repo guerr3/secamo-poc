@@ -10,20 +10,21 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
-from shared.models.canonical import CanonicalEvent
+from shared.models.canonical import (
+    AlertData,
+    CanonicalEvent,
+    DeviceContext,
+    NetworkContext,
+    SecurityEvent,
+    UserContext,
+)
 from shared.models.commands import (
     SignalWorkflowCommand,
     StartWorkflowCommand,
     WorkflowCommand,
 )
 from shared.models.common import LifecycleAction
-from shared.models.domain import (
-    AlertData,
-    ApprovalDecision,
-    DefenderAlertRequest,
-    LifecycleRequest,
-    UserData,
-)
+from shared.models.domain import ApprovalDecision
 from shared.models.ingress import IamIngressRequest, RawIngressEnvelope
 from shared.models.provider_events import (
     DefenderWebhook,
@@ -188,29 +189,99 @@ def to_workflow_command(event: CanonicalEvent) -> WorkflowCommand:
         tenant_id=event.tenant_id,
         workflow_name=mapping["workflow_name"],
         task_queue=mapping["task_queue"],
-        workflow_input=event.payload,
+        workflow_input=to_security_event(event),
     )
 
 
-# ── CanonicalEvent → Domain Contracts ─────────────────────────
+# ── CanonicalEvent → Universal Workflow Contract ──────────────
 
-def to_lifecycle_request(event: CanonicalEvent) -> LifecycleRequest:
-    """Convert a canonical IAM event into a LifecycleRequest."""
-    return LifecycleRequest(
-        tenant_id=event.tenant_id,
-        action=LifecycleAction(event.payload["action"]),
-        user_data=UserData.model_validate(event.payload["user_data"]),
-        requester=event.payload.get("requester", "ingress-api"),
-        ticket_id=event.payload.get("ticket_id", ""),
+def _event_identity(event: CanonicalEvent) -> str:
+    occurred = event.occurred_at.isoformat() if event.occurred_at else "na"
+    return (
+        event.external_event_id
+        or event.request_id
+        or f"{event.tenant_id}:{event.event_type}:{occurred}"
     )
 
 
-def to_defender_alert_request(event: CanonicalEvent) -> DefenderAlertRequest:
-    """Convert a canonical Defender event into a DefenderAlertRequest."""
-    return DefenderAlertRequest(
+def to_security_event(event: CanonicalEvent) -> SecurityEvent:
+    """Convert CanonicalEvent into universal SecurityEvent workflow input."""
+    payload = event.payload or {}
+
+    alert_payload = payload.get("alert", payload)
+    alert = None
+    if event.event_type in {"defender.alert", "defender.impossible_travel"}:
+        alert = AlertData.model_validate(
+            {
+                "alert_id": alert_payload.get("alert_id") or event.external_event_id or "",
+                "severity": alert_payload.get("severity") or event.severity or "medium",
+                "title": alert_payload.get("title") or event.subject or "Security alert",
+                "description": alert_payload.get("description") or "",
+                "device_id": alert_payload.get("device_id"),
+                "user_email": alert_payload.get("user_email"),
+                "source_ip": alert_payload.get("source_ip"),
+                "destination_ip": alert_payload.get("destination_ip"),
+            }
+        )
+
+    user = None
+    if event.event_type == "iam.onboarding":
+        user_data = payload.get("user_data", {})
+        action = payload.get("action")
+        user = UserContext(
+            user_principal_name=user_data.get("email"),
+            action=LifecycleAction(action) if action else None,
+            user_data=user_data,
+        )
+    elif alert and alert.user_email:
+        user = UserContext(user_principal_name=alert.user_email)
+
+    device = None
+    if alert and alert.device_id:
+        device = DeviceContext(device_id=alert.device_id)
+
+    network = None
+    source_ip = alert.source_ip if alert else payload.get("source_ip")
+    destination_ip = alert.destination_ip if alert else payload.get("destination_ip")
+    if source_ip or destination_ip or payload.get("location"):
+        network = NetworkContext(
+            source_ip=source_ip,
+            destination_ip=destination_ip,
+            location=payload.get("location"),
+        )
+
+    known_keys = {
+        "alert",
+        "alert_id",
+        "severity",
+        "title",
+        "description",
+        "device_id",
+        "user_email",
+        "source_ip",
+        "destination_ip",
+        "action",
+        "user_data",
+        "requester",
+        "ticket_id",
+        "location",
+    }
+    metadata = {k: v for k, v in payload.items() if k not in known_keys}
+
+    return SecurityEvent(
+        event_id=_event_identity(event),
         tenant_id=event.tenant_id,
-        alert=AlertData.model_validate(event.payload),
-        requester=event.payload.get("requester", "ingress-api"),
+        event_type=event.event_type,
+        source_provider=event.provider,
+        requester=payload.get("requester", "ingress-api"),
+        severity=(alert.severity if alert else event.severity),
+        correlation_id=event.correlation_id,
+        ticket_id=payload.get("ticket_id"),
+        alert=alert,
+        user=user,
+        device=device,
+        network=network,
+        metadata=metadata,
     )
 
 

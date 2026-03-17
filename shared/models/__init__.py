@@ -2,7 +2,7 @@
 shared.models — Secamo model package.
 
 Re-exports every public symbol so existing imports like
-``from shared.models import LifecycleRequest`` keep working.
+``from shared.models import SecurityEvent`` keep working.
 """
 
 # ── Common enums ──────────────────────────────────────────────
@@ -10,14 +10,12 @@ from shared.models.common import LifecycleAction
 
 # ── Domain contracts (Temporal workflows) ─────────────────────
 from shared.models.domain import (
-    AlertData,
     AlertEnrichmentRequest,
     AlertEnrichmentResult,
     ApprovalDecision,
     ConnectorActionResult,
     ConnectorFetchResult,
     ConnectorHealthResult,
-    DefenderAlertRequest,
     EnrichedAlert,
     EvidenceBundle,
     DeviceDetail,
@@ -25,8 +23,6 @@ from shared.models.domain import (
     HiTLApprovalRequest,
     HiTLRequest,
     IncidentResponseRequest,
-    ImpossibleTravelRequest,
-    LifecycleRequest,
     NotificationResult,
     RiskyUserResult,
     RiskScore,
@@ -38,7 +34,6 @@ from shared.models.domain import (
     ThreatIntelEnrichmentRequest,
     ThreatIntelResult,
     UserDeprovisioningRequest,
-    UserData,
 )
 
 # ── Ingress transport models ─────────────────────────────────
@@ -53,7 +48,14 @@ from shared.models.provider_events import (
 )
 
 # ── Canonical event ──────────────────────────────────────────
-from shared.models.canonical import CanonicalEvent
+from shared.models.canonical import (
+    AlertData,
+    CanonicalEvent,
+    DeviceContext,
+    NetworkContext,
+    SecurityEvent,
+    UserContext,
+)
 
 # ── Workflow commands ────────────────────────────────────────
 from shared.models.commands import (
@@ -68,8 +70,7 @@ from shared.models.mappers import (
     iam_request_to_canonical,
     to_approval_decision,
     to_canonical_event,
-    to_defender_alert_request,
-    to_lifecycle_request,
+    to_security_event,
     to_workflow_command,
 )
 
@@ -84,7 +85,6 @@ __all__ = [
     "ConnectorActionResult",
     "ConnectorFetchResult",
     "ConnectorHealthResult",
-    "DefenderAlertRequest",
     "DeviceDetail",
     "EnrichedAlert",
     "EvidenceBundle",
@@ -92,8 +92,6 @@ __all__ = [
     "HiTLApprovalRequest",
     "HiTLRequest",
     "IncidentResponseRequest",
-    "ImpossibleTravelRequest",
-    "LifecycleRequest",
     "NotificationResult",
     "RiskyUserResult",
     "RiskScore",
@@ -105,7 +103,6 @@ __all__ = [
     "ThreatIntelEnrichmentRequest",
     "ThreatIntelResult",
     "UserDeprovisioningRequest",
-    "UserData",
     # ingress
     "IamIngressRequest",
     "RawIngressEnvelope",
@@ -115,7 +112,12 @@ __all__ = [
     "ProviderEvent",
     "TeamsApprovalCallback",
     # canonical
+    "AlertData",
     "CanonicalEvent",
+    "DeviceContext",
+    "NetworkContext",
+    "SecurityEvent",
+    "UserContext",
     # commands
     "SignalWorkflowCommand",
     "StartWorkflowCommand",
@@ -125,7 +127,6 @@ __all__ = [
     "iam_request_to_canonical",
     "to_approval_decision",
     "to_canonical_event",
-    "to_defender_alert_request",
-    "to_lifecycle_request",
+    "to_security_event",
     "to_workflow_command",
 ]

@@ -7,7 +7,7 @@ with workflow.unsafe.imports_passed_through():
     from shared.models import (
         AlertEnrichmentRequest,
         AlertEnrichmentResult,
-        DefenderAlertRequest,
+        SecurityEvent,
         TicketResult,
         TenantConfig,
         TenantSecrets,
@@ -35,16 +35,19 @@ class DefenderAlertEnrichmentWorkflow:
     """
 
     @workflow.run
-    async def run(self, request: DefenderAlertRequest) -> str:
+    async def run(self, event: SecurityEvent) -> str:
+        if event.alert is None:
+            raise ValueError("WF-02 requires event.alert in SecurityEvent input")
+
         workflow.logger.info(
-            f"WF-02 gestart — tenant={request.tenant_id}, "
-            f"alert={request.alert.alert_id}, severity={request.alert.severity}"
+            f"WF-02 gestart — tenant={event.tenant_id}, "
+            f"alert={event.alert.alert_id}, severity={event.alert.severity}"
         )
 
         config: TenantConfig
         graph_secrets: TenantSecrets
         config, graph_secrets = await bootstrap_tenant(
-            tenant_id=request.tenant_id,
+            tenant_id=event.tenant_id,
             retry_policy=RETRY_POLICY,
             timeout=TIMEOUT,
             secret_type="graph",
@@ -55,7 +58,7 @@ class DefenderAlertEnrichmentWorkflow:
         if config.auto_ticket_creation:
             ticketing_secrets = await workflow.execute_activity(
                 get_tenant_secrets,
-                args=[request.tenant_id, "ticketing"],
+                args=[event.tenant_id, "ticketing"],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,
             )
@@ -64,18 +67,18 @@ class DefenderAlertEnrichmentWorkflow:
         if config.threat_intel_enabled:
             ti_secrets = await workflow.execute_activity(
                 get_tenant_secrets,
-                args=[request.tenant_id, "threatintel"],
+                args=[event.tenant_id, "threatintel"],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,
             )
 
         # 4. Threat intelligence lookup
-        indicator = request.alert.source_ip or request.alert.destination_ip or ""
+        indicator = event.alert.source_ip or event.alert.destination_ip or ""
         if config.threat_intel_enabled and ti_secrets:
             threat_intel = await workflow.execute_child_workflow(
                 ThreatIntelEnrichmentWorkflow.run,
                 ThreatIntelEnrichmentRequest(
-                    tenant_id=request.tenant_id,
+                    tenant_id=event.tenant_id,
                     indicator=indicator,
                     providers=config.threat_intel_providers,
                     ti_secrets=ti_secrets,
@@ -96,8 +99,8 @@ class DefenderAlertEnrichmentWorkflow:
         enrich_and_risk: AlertEnrichmentResult = await workflow.execute_child_workflow(
             AlertEnrichmentWorkflow.run,
             AlertEnrichmentRequest(
-                tenant_id=request.tenant_id,
-                alert=request.alert,
+                tenant_id=event.tenant_id,
+                alert=event.alert,
                 edr_provider=config.edr_provider,
                 graph_secrets=graph_secrets,
                 threat_intel=threat_intel,
@@ -113,7 +116,7 @@ class DefenderAlertEnrichmentWorkflow:
             ticket = await workflow.execute_child_workflow(
                 TicketCreationWorkflow.run,
                 TicketCreationRequest(
-                    tenant_id=request.tenant_id,
+                    tenant_id=event.tenant_id,
                     title=f"[{risk.level.upper()}] {enriched.title}",
                     description=(
                         f"Alert: {enriched.alert_id}\n"
@@ -144,7 +147,7 @@ class DefenderAlertEnrichmentWorkflow:
 
         await workflow.execute_activity(
             teams_send_notification,
-            args=[request.tenant_id, graph_secrets.teams_webhook_url or "", notification_msg],
+            args=[event.tenant_id, graph_secrets.teams_webhook_url or "", notification_msg],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
@@ -153,7 +156,7 @@ class DefenderAlertEnrichmentWorkflow:
         await workflow.execute_activity(
             create_audit_log,
             args=[
-                request.tenant_id,
+                event.tenant_id,
                 workflow.info().workflow_id,
                 "defender_alert_enrichment",
                 f"Ticket {ticket.ticket_id} aangemaakt met risicoscore {risk.score}",
@@ -162,7 +165,7 @@ class DefenderAlertEnrichmentWorkflow:
                     "risk_score": risk.score,
                     "risk_level": risk.level,
                     "ticket_id": ticket.ticket_id,
-                    "requester": request.requester,
+                    "requester": event.requester,
                 },
             ],
             start_to_close_timeout=TIMEOUT,

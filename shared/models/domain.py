@@ -10,46 +10,9 @@ from __future__ import annotations
 
 from typing import Literal, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
-from shared.models.canonical import CanonicalEvent
-from shared.models.common import LifecycleAction
-
-
-# ──────────────────────────────────────────────
-# WF-01  User Lifecycle Management
-# ──────────────────────────────────────────────
-
-class UserData(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
-
-    email: str
-    first_name: str
-    last_name: str
-    department: str
-    role: str
-    manager_email: Optional[str] = None
-    license_sku: Optional[str] = None
-
-
-class LifecycleRequest(BaseModel):
-    """Workflow input for WF-01 (IAM Onboarding)."""
-    model_config = ConfigDict(from_attributes=True)
-
-    tenant_id: str
-    action: LifecycleAction
-    user_data: UserData
-    requester: str
-    ticket_id: str = ""
-    source_provider: Optional[str] = "microsoft_graph"
-
-    @field_validator("action", mode="before")
-    @classmethod
-    def _coerce_action(cls, v):
-        """Accept plain str or list-of-chars (legacy edge case)."""
-        if isinstance(v, list):
-            v = "".join(v)
-        return LifecycleAction(v) if isinstance(v, str) else v
+from shared.models.canonical import AlertData, CanonicalEvent
 
 
 class TenantSecrets(BaseModel):
@@ -143,32 +106,6 @@ class RiskyUserResult(BaseModel):
 # WF-02  Defender Alert Enrichment & Ticketing
 # ──────────────────────────────────────────────
 
-class AlertData(BaseModel):
-    """Raw alert payload coming from Microsoft Defender / Sentinel."""
-    model_config = ConfigDict(from_attributes=True)
-
-    alert_id: str
-    severity: str          # low | medium | high | critical
-    title: str
-    description: str
-    device_id: Optional[str] = None
-    user_email: Optional[str] = None
-    source_ip: Optional[str] = None
-    destination_ip: Optional[str] = None
-
-
-class DefenderAlertRequest(BaseModel):
-    """Workflow input for WF-02 (Defender Alert Enrichment)."""
-    model_config = ConfigDict(from_attributes=True)
-
-    tenant_id: str
-    alert: AlertData
-    requester: str
-    source_provider: Optional[str] = "microsoft_defender"
-    edr_provider: str = "microsoft_defender"
-    ticketing_provider: str = "jira"
-    threat_intel_providers: list[str] = Field(default_factory=lambda: ["virustotal", "abuseipdb"])
-
 
 class EnrichedAlert(BaseModel):
     """Output of graph_enrich_alert — alert + extra Graph context."""
@@ -240,21 +177,6 @@ class NotificationResult(BaseModel):
 # ──────────────────────────────────────────────
 # WF-05  Impossible Travel Alert Triage (HITL)
 # ──────────────────────────────────────────────
-
-class ImpossibleTravelRequest(BaseModel):
-    """Workflow input for WF-05 (Impossible Travel Alert Triage)."""
-    model_config = ConfigDict(from_attributes=True)
-
-    tenant_id: str
-    alert: AlertData
-    user_email: str
-    source_ip: str
-    destination_ip: str
-    requester: str
-    source_provider: Optional[str] = "microsoft_defender"
-    edr_provider: str = "microsoft_defender"
-    ticketing_provider: str = "jira"
-    threat_intel_providers: list[str] = Field(default_factory=lambda: ["virustotal", "abuseipdb"])
 
 
 class ConnectorFetchResult(BaseModel):
