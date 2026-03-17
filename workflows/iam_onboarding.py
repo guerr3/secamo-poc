@@ -3,7 +3,10 @@ from datetime import timedelta
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
-from shared.models import (
+
+
+with workflow.unsafe.imports_passed_through():
+    from shared.models import (
     LifecycleAction,
     SecurityEvent,
     TenantConfig,
@@ -11,8 +14,6 @@ from shared.models import (
     GraphUser,
     UserDeprovisioningRequest,
 )
-
-with workflow.unsafe.imports_passed_through():
     from shared.workflow_helpers import bootstrap_tenant
     from activities.graph_users import (
         graph_get_user,
