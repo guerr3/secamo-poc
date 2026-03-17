@@ -11,6 +11,8 @@ from shared.models.common import LifecycleAction
 # ── Domain contracts (Temporal workflows) ─────────────────────
 from shared.models.domain import (
     AlertData,
+    AlertEnrichmentRequest,
+    AlertEnrichmentResult,
     ApprovalDecision,
     ConnectorActionResult,
     ConnectorFetchResult,
@@ -20,7 +22,9 @@ from shared.models.domain import (
     EvidenceBundle,
     DeviceDetail,
     GraphUser,
+    HiTLApprovalRequest,
     HiTLRequest,
+    IncidentResponseRequest,
     ImpossibleTravelRequest,
     LifecycleRequest,
     NotificationResult,
@@ -29,8 +33,11 @@ from shared.models.domain import (
     TenantSecrets,
     TenantConfig,
     TicketData,
+    TicketCreationRequest,
     TicketResult,
+    ThreatIntelEnrichmentRequest,
     ThreatIntelResult,
+    UserDeprovisioningRequest,
     UserData,
 )
 
@@ -71,6 +78,8 @@ __all__ = [
     "LifecycleAction",
     # domain
     "AlertData",
+    "AlertEnrichmentRequest",
+    "AlertEnrichmentResult",
     "ApprovalDecision",
     "ConnectorActionResult",
     "ConnectorFetchResult",
@@ -80,7 +89,9 @@ __all__ = [
     "EnrichedAlert",
     "EvidenceBundle",
     "GraphUser",
+    "HiTLApprovalRequest",
     "HiTLRequest",
+    "IncidentResponseRequest",
     "ImpossibleTravelRequest",
     "LifecycleRequest",
     "NotificationResult",
@@ -89,8 +100,11 @@ __all__ = [
     "TenantSecrets",
     "TenantConfig",
     "TicketData",
+    "TicketCreationRequest",
     "TicketResult",
+    "ThreatIntelEnrichmentRequest",
     "ThreatIntelResult",
+    "UserDeprovisioningRequest",
     "UserData",
     # ingress
     "IamIngressRequest",

@@ -9,6 +9,7 @@ from shared.models import (
     TenantConfig,
     TenantSecrets,
     GraphUser,
+    UserDeprovisioningRequest,
 )
 
 with workflow.unsafe.imports_passed_through():
@@ -17,12 +18,11 @@ with workflow.unsafe.imports_passed_through():
         graph_get_user,
         graph_create_user,
         graph_update_user,
-        graph_delete_user,
-        graph_revoke_sessions,
         graph_assign_license,
         graph_reset_password,
     )
     from activities.audit import create_audit_log
+    from workflows.child.user_deprovisioning import UserDeprovisioningWorkflow
 
 # ── Module-level constants ────────────────────────────────────
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -123,18 +123,16 @@ class IamOnboardingWorkflow:
                 raise ValueError(
                     f"Gebruiker '{request.user_data.email}' niet gevonden voor delete."
                 )
-            # Revoke sessions eerst (security best practice)
-            await workflow.execute_activity(
-                graph_revoke_sessions,
-                args=[request.tenant_id, existing_user.user_id, secrets],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-            await workflow.execute_activity(
-                graph_delete_user,
-                args=[request.tenant_id, existing_user.user_id, secrets],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
+            await workflow.execute_child_workflow(
+                UserDeprovisioningWorkflow.run,
+                UserDeprovisioningRequest(
+                    tenant_id=request.tenant_id,
+                    user_id=existing_user.user_id,
+                    user_email=existing_user.email,
+                    secrets=secrets,
+                ),
+                id=f"{workflow.info().workflow_id}-deprovision",
+                task_queue="iam-graph",
             )
             result_msg = f"Gebruiker '{existing_user.email}' uitgeschakeld."
 

@@ -318,3 +318,87 @@ class EvidenceBundle(BaseModel):
     alert_id: str
     items: list[dict] = Field(default_factory=list)
     bundle_url: str = ""
+
+
+# ──────────────────────────────────────────────
+# Child workflow contracts
+# ──────────────────────────────────────────────
+
+class ThreatIntelEnrichmentRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    indicator: str
+    providers: list[str] = Field(default_factory=list)
+    ti_secrets: TenantSecrets
+
+
+class AlertEnrichmentRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    alert: AlertData
+    edr_provider: str
+    graph_secrets: TenantSecrets
+    threat_intel: ThreatIntelResult | None = None
+
+
+class AlertEnrichmentResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    enriched_alert: EnrichedAlert
+    risk_score: RiskScore
+
+
+class TicketCreationRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    title: str
+    description: str
+    severity: str
+    source_workflow: str
+    ticketing_provider: str
+    ticketing_secrets: TenantSecrets
+
+
+class HiTLApprovalRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    hitl_request: HiTLRequest
+    config: TenantConfig
+    graph_secrets: TenantSecrets
+    ticketing_secrets: TenantSecrets
+    edr_provider: str = "microsoft_defender"
+    ticketing_provider: str = "jira"
+    device_id: str | None = None
+
+
+class IncidentResponseRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    decision: ApprovalDecision
+    user: GraphUser | None = None
+    user_email: str
+    device_id: str | None = None
+    ticket_id: str
+    config: TenantConfig
+    graph_secrets: TenantSecrets
+    ticketing_secrets: TenantSecrets
+    edr_provider: str = "microsoft_defender"
+    ticketing_provider: str = "jira"
+    parent_workflow_id: str
+    alert_id: str
+    threat_intel: ThreatIntelResult
+    recent_alert_count: int = 0
+
+
+class UserDeprovisioningRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    user_id: str
+    user_email: str
+    secrets: TenantSecrets

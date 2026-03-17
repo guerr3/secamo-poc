@@ -163,7 +163,8 @@ def load_workflows() -> dict:
     iam_workflows = []
     try:
         from workflows.iam_onboarding import IamOnboardingWorkflow
-        iam_workflows.append(IamOnboardingWorkflow)
+        from workflows.child.user_deprovisioning import UserDeprovisioningWorkflow
+        iam_workflows.extend([IamOnboardingWorkflow, UserDeprovisioningWorkflow])
         logger.info("✓ IAM Onboarding workflow geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van IAM Onboarding Workflow: {e}")
@@ -172,7 +173,19 @@ def load_workflows() -> dict:
     soc_workflows = []
     try:
         from workflows.defender_alert_enrichment import DefenderAlertEnrichmentWorkflow
-        soc_workflows.append(DefenderAlertEnrichmentWorkflow)
+        from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
+        from workflows.child.hitl_approval import HiTLApprovalWorkflow
+        from workflows.child.incident_response import IncidentResponseWorkflow
+        from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
+        from workflows.child.ticket_creation import TicketCreationWorkflow
+        soc_workflows.extend([
+            DefenderAlertEnrichmentWorkflow,
+            ThreatIntelEnrichmentWorkflow,
+            AlertEnrichmentWorkflow,
+            TicketCreationWorkflow,
+            HiTLApprovalWorkflow,
+            IncidentResponseWorkflow,
+        ])
         logger.info("✓ Defender Alert Enrichment workflow geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Defender Alert Enrichment Workflow: {e}")

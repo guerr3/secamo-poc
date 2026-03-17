@@ -5,24 +5,28 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from shared.models import (
+        ApprovalDecision,
+        ConnectorActionResult,
+        GraphUser,
+        HiTLApprovalRequest,
+        HiTLRequest,
+        IncidentResponseRequest,
         ImpossibleTravelRequest,
         TenantConfig,
         TenantSecrets,
+        ThreatIntelEnrichmentRequest,
         ThreatIntelResult,
-        ConnectorActionResult,
+        TicketCreationRequest,
         TicketResult,
-        ApprovalDecision,
-        EvidenceBundle,
-        GraphUser,
-        HiTLRequest,
     )
     from shared.workflow_helpers import bootstrap_tenant
     from activities.tenant import get_tenant_secrets
-    from activities.graph_users import graph_get_user, graph_delete_user, graph_revoke_sessions
-    from activities.connector_dispatch import connector_execute_action, connector_threat_intel_fanout
-    from activities.notify_teams import teams_send_notification
-    from activities.hitl import request_hitl_approval
-    from activities.evidence import collect_evidence_bundle
+    from activities.graph_users import graph_get_user
+    from activities.connector_dispatch import connector_execute_action
+    from workflows.child.hitl_approval import HiTLApprovalWorkflow
+    from workflows.child.incident_response import IncidentResponseWorkflow
+    from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
+    from workflows.child.ticket_creation import TicketCreationWorkflow
 
 # ── Module-level constants ────────────────────────────────────
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -38,14 +42,6 @@ class ImpossibleTravelWorkflow:
           ticket_create → teams_send_adaptive_card → wait_for_approval →
           [action based on decision] → collect_evidence_bundle
     """
-
-    def __init__(self) -> None:
-        self._approval: ApprovalDecision | None = None
-
-    @workflow.signal
-    async def approve(self, decision: ApprovalDecision) -> None:
-        """Signal handler — ontvangt de HITL-beslissing van de analist."""
-        self._approval = decision
 
     @workflow.run
     async def run(self, request: ImpossibleTravelRequest) -> str:
@@ -63,7 +59,6 @@ class ImpossibleTravelWorkflow:
             secret_type="graph",
         )
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
-        approval_timeout = timedelta(hours=config.hitl_timeout_hours)
 
         ticketing_secrets: TenantSecrets = await workflow.execute_activity(
             get_tenant_secrets,
@@ -93,11 +88,16 @@ class ImpossibleTravelWorkflow:
 
         # 3. Threat intel lookup op source IP
         if config.threat_intel_enabled and ti_secrets:
-            threat_intel: ThreatIntelResult = await workflow.execute_activity(
-                connector_threat_intel_fanout,
-                args=[request.tenant_id, config.threat_intel_providers, request.source_ip, ti_secrets],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
+            threat_intel = await workflow.execute_child_workflow(
+                ThreatIntelEnrichmentWorkflow.run,
+                ThreatIntelEnrichmentRequest(
+                    tenant_id=request.tenant_id,
+                    indicator=request.source_ip,
+                    providers=config.threat_intel_providers,
+                    ti_secrets=ti_secrets,
+                ),
+                id=f"{workflow.info().workflow_id}-ti",
+                task_queue="soc-defender",
             )
         else:
             threat_intel = ThreatIntelResult(
@@ -123,39 +123,30 @@ class ImpossibleTravelWorkflow:
         )
         recent_alerts: list[dict] = alerts_result.data.get("alerts", [])
 
-        # 5. Ticket aanmaken via provider connector
-        create_ticket_result: ConnectorActionResult = await workflow.execute_activity(
-            connector_execute_action,
-            args=[
-                request.tenant_id,
-                config.ticketing_provider,
-                "create_ticket",
-                {
-                    "project_key": ticketing_secrets.project_key or "SOC",
-                    "title": f"[IMPOSSIBLE TRAVEL] {user_display}",
-                    "description": (
-                        f"Impossible travel gedetecteerd voor {user_display}\n"
-                        f"Source IP: {request.source_ip}\n"
-                        f"Destination IP: {request.destination_ip}\n"
-                        f"Threat intel: {'MALICIOUS' if threat_intel.is_malicious else 'CLEAN'} "
-                        f"(score: {threat_intel.reputation_score})\n"
-                        f"Recente alerts: {len(recent_alerts)}\n\n"
-                        f"Wacht op analist-beslissing..."
-                    ),
-                    "issue_type": "Incident",
-                },
-                ticketing_secrets,
-            ],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=runtime_retry,
+        # 5. Ticket aanmaken via child workflow
+        ticket: TicketResult = await workflow.execute_child_workflow(
+            TicketCreationWorkflow.run,
+            TicketCreationRequest(
+                tenant_id=request.tenant_id,
+                title=f"[IMPOSSIBLE TRAVEL] {user_display}",
+                description=(
+                    f"Impossible travel gedetecteerd voor {user_display}\n"
+                    f"Source IP: {request.source_ip}\n"
+                    f"Destination IP: {request.destination_ip}\n"
+                    f"Threat intel: {'MALICIOUS' if threat_intel.is_malicious else 'CLEAN'} "
+                    f"(score: {threat_intel.reputation_score})\n"
+                    f"Recente alerts: {len(recent_alerts)}\n\n"
+                    f"Wacht op analist-beslissing..."
+                ),
+                severity=request.alert.severity,
+                source_workflow="WF-05",
+                ticketing_provider=config.ticketing_provider,
+                ticketing_secrets=ticketing_secrets,
+            ),
+            id=f"{workflow.info().workflow_id}-ticket",
+            task_queue="soc-defender",
         )
-
-        ticket_key = create_ticket_result.data.get("key", "UNKNOWN")
-        ticket = TicketResult(
-            ticket_id=ticket_key,
-            status="open",
-            url=f"{ticketing_secrets.jira_base_url}/browse/{ticket_key}" if ticketing_secrets.jira_base_url else "",
-        )
+        ticket_key = ticket.ticket_id
 
         hitl_request = HiTLRequest(
             workflow_id=workflow.info().workflow_id,
@@ -182,212 +173,54 @@ class ImpossibleTravelWorkflow:
             },
         )
 
-        # ── HiTL: request approval via configured channels ──────────
-        # Any workflow can replicate this pattern:
-        #   1. Build HiTLRequest with context + allowed_actions
-        #   2. Execute request_hitl_approval activity
-        #   3. Wait on workflow signal "approve" (ApprovalDecision payload)
-        await workflow.execute_activity(
-            request_hitl_approval,
-            args=[request.tenant_id, hitl_request, graph_secrets, ticketing_secrets],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=runtime_retry,
+        # 6. HITL approval flow (signal + timeout policy) via child workflow
+        decision: ApprovalDecision | None = await workflow.execute_child_workflow(
+            HiTLApprovalWorkflow.run,
+            HiTLApprovalRequest(
+                tenant_id=request.tenant_id,
+                hitl_request=hitl_request,
+                config=config,
+                graph_secrets=graph_secrets,
+                ticketing_secrets=ticketing_secrets,
+                edr_provider=config.edr_provider,
+                ticketing_provider=config.ticketing_provider,
+                device_id=request.alert.device_id,
+            ),
+            id=f"{workflow.info().workflow_id}-hitl",
+            task_queue="soc-defender",
         )
 
-        await workflow.execute_activity(
-            teams_send_notification,
-            args=[
-                request.tenant_id,
-                graph_secrets.teams_webhook_url or "",
-                (
-                    f"HITL decision requested for {user_display}. "
-                    f"Ticket: {ticket.ticket_id}. "
-                    f"Review in email/Jira and signal action is awaited by workflow {workflow.info().workflow_id}."
-                ),
-            ],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=runtime_retry,
-        )
-
-        # 7. Wacht op analist-beslissing (HITL signal)
-        workflow.logger.info(
-            f"Wacht op analist-goedkeuring (max {approval_timeout})..."
-        )
-
-        try:
-            await workflow.wait_condition(
-                lambda: self._approval is not None,
-                timeout=approval_timeout,
-            )
-        except TimeoutError:
-            if config.auto_isolate_on_timeout and request.alert.device_id:
-                await workflow.execute_activity(
-                    connector_execute_action,
-                    args=[
-                        request.tenant_id,
-                        config.edr_provider,
-                        "isolate_device",
-                        {
-                            "device_id": request.alert.device_id,
-                            "comment": "Automatic isolation after HITL timeout",
-                        },
-                        graph_secrets,
-                    ],
-                    start_to_close_timeout=TIMEOUT,
-                    retry_policy=runtime_retry,
-                )
-
-            if config.escalation_enabled:
-                await workflow.execute_activity(
-                    connector_execute_action,
-                    args=[
-                        request.tenant_id,
-                        config.ticketing_provider,
-                        "update_ticket",
-                        {
-                            "ticket_id": ticket.ticket_id,
-                            "fields": {"status": "escalated", "note": "Geen beslissing binnen timeout — geescaleerd."},
-                        },
-                        ticketing_secrets,
-                    ],
-                    start_to_close_timeout=TIMEOUT,
-                    retry_policy=runtime_retry,
-                )
+        if decision is None:
             return (
                 f"WF-05 timeout — geen beslissing ontvangen binnen "
-                f"{approval_timeout}. Ticket {ticket.ticket_id} behandeld volgens tenant policy."
+                f"{timedelta(hours=config.hitl_timeout_hours)}. "
+                f"Ticket {ticket.ticket_id} behandeld volgens tenant policy."
             )
 
-        decision = self._approval
-        assert decision is not None
-
-        workflow.logger.info(
-            f"Beslissing ontvangen: action={decision.action} door {decision.reviewer}"
+        # 7. Post-decision incident response via child workflow
+        action_result = await workflow.execute_child_workflow(
+            IncidentResponseWorkflow.run,
+            IncidentResponseRequest(
+                tenant_id=request.tenant_id,
+                decision=decision,
+                user=user,
+                user_email=request.user_email,
+                device_id=request.alert.device_id,
+                ticket_id=ticket.ticket_id,
+                config=config,
+                graph_secrets=graph_secrets,
+                ticketing_secrets=ticketing_secrets,
+                edr_provider=config.edr_provider,
+                ticketing_provider=config.ticketing_provider,
+                parent_workflow_id=workflow.info().workflow_id,
+                alert_id=request.alert.alert_id,
+                threat_intel=threat_intel,
+                recent_alert_count=len(recent_alerts),
+            ),
+            id=f"{workflow.info().workflow_id}-incident-response",
+            task_queue="soc-defender",
         )
 
-        # 8. Actie uitvoeren op basis van beslissing
-        action_result = ""
-
-        if decision.action == "dismiss":
-            await workflow.execute_activity(
-                connector_execute_action,
-                args=[
-                    request.tenant_id,
-                    config.ticketing_provider,
-                    "update_ticket",
-                    {
-                        "ticket_id": ticket.ticket_id,
-                        "fields": {
-                            "status": "closed",
-                            "resolution": "false_positive",
-                            "note": f"Dismissed door {decision.reviewer}: {decision.comments}",
-                        },
-                    },
-                    ticketing_secrets,
-                ],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-            action_result = "Alert dismissed als false positive."
-
-        elif decision.action == "isolate":
-            device_id = request.alert.device_id or "unknown-device"
-            await workflow.execute_activity(
-                connector_execute_action,
-                args=[
-                    request.tenant_id,
-                    config.edr_provider,
-                    "isolate_device",
-                    {
-                        "device_id": device_id,
-                        "comment": f"Isolated by {decision.reviewer} from WF-05",
-                    },
-                    graph_secrets,
-                ],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-            await workflow.execute_activity(
-                connector_execute_action,
-                args=[
-                    request.tenant_id,
-                    config.ticketing_provider,
-                    "update_ticket",
-                    {
-                        "ticket_id": ticket.ticket_id,
-                        "fields": {"status": "in_progress", "note": f"Device {device_id} geisoleerd door {decision.reviewer}."},
-                    },
-                    ticketing_secrets,
-                ],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-            action_result = f"Device '{device_id}' geïsoleerd."
-
-        elif decision.action == "disable_user":
-            if user:
-                await workflow.execute_activity(
-                    graph_revoke_sessions,
-                    args=[request.tenant_id, user.user_id, graph_secrets],
-                    start_to_close_timeout=TIMEOUT,
-                    retry_policy=runtime_retry,
-                )
-                await workflow.execute_activity(
-                    graph_delete_user,
-                    args=[request.tenant_id, user.user_id, graph_secrets],
-                    start_to_close_timeout=TIMEOUT,
-                    retry_policy=runtime_retry,
-                )
-            await workflow.execute_activity(
-                connector_execute_action,
-                args=[
-                    request.tenant_id,
-                    config.ticketing_provider,
-                    "update_ticket",
-                    {
-                        "ticket_id": ticket.ticket_id,
-                        "fields": {
-                            "status": "in_progress",
-                            "note": f"Gebruiker {request.user_email} uitgeschakeld door {decision.reviewer}.",
-                        },
-                    },
-                    ticketing_secrets,
-                ],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-            action_result = f"Gebruiker '{request.user_email}' uitgeschakeld."
-
-        evidence_url = "disabled-by-config"
-        if config.evidence_bundle_enabled:
-            evidence: EvidenceBundle = await workflow.execute_activity(
-                collect_evidence_bundle,
-                args=[
-                    request.tenant_id,
-                    workflow.info().workflow_id,
-                    request.alert.alert_id,
-                    [
-                        {"type": "threat_intel", "data": {
-                            "indicator": threat_intel.indicator,
-                            "is_malicious": threat_intel.is_malicious,
-                            "reputation_score": threat_intel.reputation_score,
-                        }},
-                        {"type": "recent_alerts", "count": len(recent_alerts)},
-                        {"type": "decision", "data": {
-                            "action": decision.action,
-                            "reviewer": decision.reviewer,
-                            "comments": decision.comments,
-                        }},
-                    ],
-                ],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-            evidence_url = evidence.bundle_url
-
-        result_msg = (
-            f"WF-05 afgerond — {action_result} "
-            f"Ticket: {ticket.ticket_id}, Evidence: {evidence_url}"
-        )
+        result_msg = f"WF-05 afgerond — {action_result}"
         workflow.logger.info(result_msg)
         return result_msg
