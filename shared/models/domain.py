@@ -100,6 +100,45 @@ class GraphUser(BaseModel):
     account_enabled: bool
 
 
+class DeviceDetail(BaseModel):
+    """Defender for Endpoint machine entity fields from get-machine-by-id."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    computerDnsName: str | None = None
+    firstSeen: str | None = None
+    lastSeen: str | None = None
+    osPlatform: str | None = None
+    version: str | None = None
+    osProcessor: str | None = None
+    lastIpAddress: str | None = None
+    lastExternalIpAddress: str | None = None
+    osBuild: int | None = None
+    healthStatus: str | None = None
+    rbacGroupId: int | None = None
+    rbacGroupName: str | None = None
+    riskScore: str | None = None
+    exposureLevel: str | None = None
+    isAadJoined: bool | None = None
+    aadDeviceId: str | None = None
+    machineTags: list[str] = Field(default_factory=list)
+
+
+class RiskyUserResult(BaseModel):
+    """Identity Protection riskyUser resource fields from Graph v1.0."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    isDeleted: bool | None = None
+    isProcessing: bool | None = None
+    riskLastUpdatedDateTime: str | None = None
+    riskLevel: str | None = None
+    riskState: str | None = None
+    riskDetail: str | None = None
+    userDisplayName: str | None = None
+    userPrincipalName: str | None = None
+
+
 # ──────────────────────────────────────────────
 # WF-02  Defender Alert Enrichment & Ticketing
 # ──────────────────────────────────────────────

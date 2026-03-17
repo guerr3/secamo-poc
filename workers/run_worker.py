@@ -59,11 +59,35 @@ def load_activities_by_queue() -> dict[str, list]:
         from activities.graph_alerts import (
             graph_enrich_alert, graph_get_alerts,
         )
-        from activities.graph_devices import graph_isolate_device
+        from activities.graph_devices import (
+            graph_get_device_details,
+            graph_isolate_device,
+            graph_list_noncompliant_devices,
+            graph_run_antivirus_scan,
+            graph_unisolate_device,
+        )
+        from activities.graph_signin import (
+            graph_confirm_user_compromised,
+            graph_dismiss_risky_user,
+            graph_get_risky_user,
+            graph_get_signin_history,
+            graph_list_risky_users,
+        )
         from activities.threat_intel import threat_intel_lookup
         from activities.risk import calculate_risk_score
         soc_activities.extend([
-            graph_enrich_alert, graph_get_alerts, graph_isolate_device,
+            graph_enrich_alert,
+            graph_get_alerts,
+            graph_isolate_device,
+            graph_unisolate_device,
+            graph_get_device_details,
+            graph_run_antivirus_scan,
+            graph_list_noncompliant_devices,
+            graph_get_risky_user,
+            graph_confirm_user_compromised,
+            graph_dismiss_risky_user,
+            graph_get_signin_history,
+            graph_list_risky_users,
             threat_intel_lookup, calculate_risk_score,
         ])
         logger.info("✓ Graph Alerts activities geladen")
