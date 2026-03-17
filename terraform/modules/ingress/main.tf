@@ -2,9 +2,8 @@
 # Ingress Module — REST API Gateway + Proxy Lambda (VPC) + Authorizer
 # ──────────────────────────────────────────────────────────────
 #
-# Routes:  POST /api/v1/ingress/defender  → Proxy Lambda (start workflow)
-#          POST /api/v1/ingress/teams     → Proxy Lambda (signal workflow)
-#          POST /api/v1/ingress/iam       → Proxy Lambda (start IAM workflow)
+# Routes:  POST /api/v1/ingress/event/{tenant_id} → Proxy Lambda (provider webhooks)
+#          POST /api/v1/ingress/internal          → Proxy Lambda (internal triggers)
 #          GET  /api/v1/hitl/respond      → Proxy Lambda (signed HiTL callback)
 #          POST /api/v1/hitl/jira         → Proxy Lambda (Jira webhook callback)
 # Auth:    Lambda Authorizer (REQUEST type)
@@ -150,9 +149,8 @@ resource "aws_api_gateway_rest_api" "ingress" {
 }
 
 # ── Resource Path Hierarchy ─────────────────────────────────
-# /api → /api/v1 → /api/v1/ingress → /api/v1/ingress/defender
-#                                    → /api/v1/ingress/teams
-#                                    → /api/v1/ingress/iam
+# /api → /api/v1 → /api/v1/ingress → /api/v1/ingress/event/{tenant_id}
+#                                    → /api/v1/ingress/internal
 #                → /api/v1/hitl    → /api/v1/hitl/respond
 #                                    → /api/v1/hitl/jira
 
@@ -174,22 +172,22 @@ resource "aws_api_gateway_resource" "ingress" {
   path_part   = "ingress"
 }
 
-resource "aws_api_gateway_resource" "defender" {
+resource "aws_api_gateway_resource" "event" {
   rest_api_id = aws_api_gateway_rest_api.ingress.id
   parent_id   = aws_api_gateway_resource.ingress.id
-  path_part   = "defender"
+  path_part   = "event"
 }
 
-resource "aws_api_gateway_resource" "teams" {
+resource "aws_api_gateway_resource" "event_tenant" {
   rest_api_id = aws_api_gateway_rest_api.ingress.id
-  parent_id   = aws_api_gateway_resource.ingress.id
-  path_part   = "teams"
+  parent_id   = aws_api_gateway_resource.event.id
+  path_part   = "{tenant_id}"
 }
 
-resource "aws_api_gateway_resource" "iam" {
+resource "aws_api_gateway_resource" "internal" {
   rest_api_id = aws_api_gateway_rest_api.ingress.id
   parent_id   = aws_api_gateway_resource.ingress.id
-  path_part   = "iam"
+  path_part   = "internal"
 }
 
 resource "aws_api_gateway_resource" "hitl" {
@@ -222,58 +220,38 @@ resource "aws_api_gateway_authorizer" "lambda" {
   authorizer_result_ttl_in_seconds = 0
 }
 
-# ── POST /api/v1/ingress/defender ───────────────────────────
+# ── POST /api/v1/ingress/event/{tenant_id} ───────────────────────────
 
-resource "aws_api_gateway_method" "defender_post" {
+resource "aws_api_gateway_method" "event_tenant_post" {
   rest_api_id   = aws_api_gateway_rest_api.ingress.id
-  resource_id   = aws_api_gateway_resource.defender.id
+  resource_id   = aws_api_gateway_resource.event_tenant.id
   http_method   = "POST"
-  authorization = "CUSTOM"
-  authorizer_id = aws_api_gateway_authorizer.lambda.id
+  authorization = "NONE"
 }
 
-resource "aws_api_gateway_integration" "defender_post" {
+resource "aws_api_gateway_integration" "event_tenant_post" {
   rest_api_id             = aws_api_gateway_rest_api.ingress.id
-  resource_id             = aws_api_gateway_resource.defender.id
-  http_method             = aws_api_gateway_method.defender_post.http_method
+  resource_id             = aws_api_gateway_resource.event_tenant.id
+  http_method             = aws_api_gateway_method.event_tenant_post.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
   uri                     = aws_lambda_function.proxy.invoke_arn
 }
 
-# ── POST /api/v1/ingress/teams ──────────────────────────────
+# ── POST /api/v1/ingress/internal ──────────────────────────────
 
-resource "aws_api_gateway_method" "teams_post" {
+resource "aws_api_gateway_method" "internal_post" {
   rest_api_id   = aws_api_gateway_rest_api.ingress.id
-  resource_id   = aws_api_gateway_resource.teams.id
+  resource_id   = aws_api_gateway_resource.internal.id
   http_method   = "POST"
   authorization = "CUSTOM"
   authorizer_id = aws_api_gateway_authorizer.lambda.id
 }
 
-resource "aws_api_gateway_integration" "teams_post" {
+resource "aws_api_gateway_integration" "internal_post" {
   rest_api_id             = aws_api_gateway_rest_api.ingress.id
-  resource_id             = aws_api_gateway_resource.teams.id
-  http_method             = aws_api_gateway_method.teams_post.http_method
-  integration_http_method = "POST"
-  type                    = "AWS_PROXY"
-  uri                     = aws_lambda_function.proxy.invoke_arn
-}
-
-# ── POST /api/v1/ingress/iam ──────────────────────────────
-
-resource "aws_api_gateway_method" "iam_post" {
-  rest_api_id   = aws_api_gateway_rest_api.ingress.id
-  resource_id   = aws_api_gateway_resource.iam.id
-  http_method   = "POST"
-  authorization = "CUSTOM"
-  authorizer_id = aws_api_gateway_authorizer.lambda.id
-}
-
-resource "aws_api_gateway_integration" "iam_post" {
-  rest_api_id             = aws_api_gateway_rest_api.ingress.id
-  resource_id             = aws_api_gateway_resource.iam.id
-  http_method             = aws_api_gateway_method.iam_post.http_method
+  resource_id             = aws_api_gateway_resource.internal.id
+  http_method             = aws_api_gateway_method.internal_post.http_method
   integration_http_method = "POST"
   type                    = "AWS_PROXY"
   uri                     = aws_lambda_function.proxy.invoke_arn
@@ -324,20 +302,18 @@ resource "aws_api_gateway_deployment" "ingress" {
   triggers = {
     redeployment = sha1(jsonencode([
       "force-deploy-1",
-      aws_api_gateway_resource.defender.id,
-      aws_api_gateway_resource.teams.id,
-      aws_api_gateway_resource.iam.id,
+      aws_api_gateway_resource.event.id,
+      aws_api_gateway_resource.event_tenant.id,
+      aws_api_gateway_resource.internal.id,
       aws_api_gateway_resource.hitl.id,
       aws_api_gateway_resource.hitl_respond.id,
       aws_api_gateway_resource.hitl_jira.id,
-      aws_api_gateway_method.defender_post.id,
-      aws_api_gateway_method.teams_post.id,
-      aws_api_gateway_method.iam_post.id,
+      aws_api_gateway_method.event_tenant_post.id,
+      aws_api_gateway_method.internal_post.id,
       aws_api_gateway_method.hitl_respond_get.id,
       aws_api_gateway_method.hitl_jira_post.id,
-      aws_api_gateway_integration.defender_post.id,
-      aws_api_gateway_integration.teams_post.id,
-      aws_api_gateway_integration.iam_post.id,
+      aws_api_gateway_integration.event_tenant_post.id,
+      aws_api_gateway_integration.internal_post.id,
       aws_api_gateway_integration.hitl_respond_get.id,
       aws_api_gateway_integration.hitl_jira_post.id,
       aws_api_gateway_authorizer.lambda.id,

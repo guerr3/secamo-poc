@@ -23,6 +23,7 @@ Write-Host "── Installing dependencies into $LayerDir ──" -ForegroundCol
 pip install `
     temporalio `
     pydantic `
+    PyJWT `
     --target "$LayerDir" `
     --platform manylinux2014_aarch64 `
     --implementation cp `

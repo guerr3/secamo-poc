@@ -2,9 +2,8 @@
 Proxy Lambda — Front Door Ingress (Temporal Client)
 
 Routes:
-  POST /api/v1/ingress/defender → Start DefenderAlertEnrichmentWorkflow
-  POST /api/v1/ingress/teams   → Signal active workflow (approve)
-  POST /api/v1/ingress/iam     → Start IamOnboardingWorkflow
+    POST /api/v1/ingress/event/{tenant_id} → Start routed provider workflow
+    POST /api/v1/ingress/internal          → Start internal first-party workflow
     GET  /api/v1/hitl/respond    → Consume signed email approval token
     POST /api/v1/hitl/jira       → Consume Jira webhook approval callback
 
@@ -14,11 +13,14 @@ async dispatch) is provided by the ingress_sdk Lambda Layer.
 
 import hashlib
 import hmac
+import json
 import logging
 import os
 import time
+from urllib.request import urlopen
 
 import boto3
+import jwt
 from botocore.exceptions import ClientError
 
 from ingress_sdk import temporal, response
@@ -83,6 +85,94 @@ def _parse_action_from_text(raw_text: str) -> str:
     return "dismiss"
 
 
+def _ssm_get_parameter_value(name: str) -> str:
+    try:
+        response = _ssm.get_parameter(Name=name, WithDecryption=True)
+        return str(response.get("Parameter", {}).get("Value", ""))
+    except ClientError:
+        return ""
+
+
+def _validate_hmac_sha256(*, signature: str, secret: str, raw_body: str) -> bool:
+    if not signature or not secret:
+        return False
+    expected = hmac.new(
+        secret.encode("utf-8"),
+        (raw_body or "").encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    supplied = str(signature).strip()
+    if supplied.lower().startswith("sha256="):
+        supplied = supplied.split("=", 1)[1]
+    return hmac.compare_digest(supplied, expected)
+
+
+def _validate_microsoft_defender_signature(event: IngressEvent, tenant_id: str) -> bool:
+    auth_header = _find_header(event.headers, "authorization")
+    if not auth_header.lower().startswith("bearer "):
+        return False
+
+    token = auth_header[7:].strip()
+    if not token:
+        return False
+
+    tenant_azure_id = _ssm_get_parameter_value(f"/secamo/tenants/{tenant_id}/graph/tenant_azure_id")
+    if not tenant_azure_id:
+        return False
+
+    jwks_url = f"https://login.microsoftonline.com/{tenant_azure_id}/discovery/v2.0/keys"
+    try:
+        with urlopen(jwks_url, timeout=5) as jwks_resp:
+            if jwks_resp.status != 200:
+                return False
+            json.loads(jwks_resp.read().decode("utf-8"))
+
+        jwk_client = jwt.PyJWKClient(jwks_url)
+        signing_key = jwk_client.get_signing_key_from_jwt(token).key
+        claims = jwt.decode(
+            token,
+            signing_key,
+            algorithms=["RS256"],
+            audience="https://management.azure.com/",
+            options={"require": ["exp", "iat", "iss", "aud"]},
+        )
+    except Exception:
+        return False
+
+    issuer = str(claims.get("iss", ""))
+    allowed_issuers = {
+        f"https://login.microsoftonline.com/{tenant_azure_id}/v2.0",
+        f"https://sts.windows.net/{tenant_azure_id}/",
+    }
+    return issuer in allowed_issuers
+
+
+def _validate_crowdstrike_signature(event: IngressEvent, tenant_id: str) -> bool:
+    signature = _find_header(event.headers, "x-cs-signature")
+    secret = _ssm_get_parameter_value(f"/secamo/tenants/{tenant_id}/webhooks/crowdstrike_secret")
+    return _validate_hmac_sha256(signature=signature, secret=secret, raw_body=event.raw_body or "")
+
+
+def _validate_sentinelone_signature(event: IngressEvent, tenant_id: str) -> bool:
+    signature = _find_header(event.headers, "x-sentinel-one-signature")
+    secret = _ssm_get_parameter_value(f"/secamo/tenants/{tenant_id}/webhooks/sentinelone_secret")
+    return _validate_hmac_sha256(signature=signature, secret=secret, raw_body=event.raw_body or "")
+
+
+def _validate_jira_ingress_signature(event: IngressEvent, tenant_id: str) -> bool:
+    signature = _find_header(event.headers, "x-hub-signature-256")
+    secret = _ssm_get_parameter_value(f"/secamo/tenants/{tenant_id}/webhooks/jira_secret")
+    return _validate_hmac_sha256(signature=signature, secret=secret, raw_body=event.raw_body or "")
+
+
+_SIGNATURE_VALIDATORS = {
+    "microsoft_defender": _validate_microsoft_defender_signature,
+    "crowdstrike": _validate_crowdstrike_signature,
+    "sentinelone": _validate_sentinelone_signature,
+    "jira": _validate_jira_ingress_signature,
+}
+
+
 PROVIDER_EVENT_ROUTING = {
     ("microsoft_defender", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
     ("microsoft_defender", "impossible_travel"): ("ImpossibleTravelWorkflow", "soc-defender"),
@@ -92,47 +182,6 @@ PROVIDER_EVENT_ROUTING = {
     ("jira", "jira:issue_created"): ("IamOnboardingWorkflow", "iam-graph"),
     ("jira", "jira:issue_updated"): ("IamOnboardingWorkflow", "iam-graph"),
 }
-
-
-# ── Route: /api/v1/ingress/defender ──────────────────────────
-
-async def handle_defender(event: IngressEvent) -> dict:
-    """Start a DefenderAlertEnrichmentWorkflow on the soc-defender queue."""
-    normalized = normalize_event_body(
-        provider="microsoft_defender",
-        event_type="alert",
-        tenant_id=event.tenant_id,
-        raw_body=event.body,
-    )
-
-    result = await temporal.start_workflow(
-        workflow="DefenderAlertEnrichmentWorkflow",
-        input=normalized,
-        tenant_id=event.tenant_id,
-        task_queue="soc-defender",
-    )
-    return response.accepted(result)
-
-
-# ── Route: /api/v1/ingress/teams ─────────────────────────────
-
-async def handle_teams(event: IngressEvent) -> dict:
-    """Send an 'approve' signal to an active workflow."""
-    workflow_id = event.body.get("workflow_id")
-    if not workflow_id:
-        return response.error(400, "workflow_id is required in the request body")
-
-    result = await temporal.signal_workflow(
-        workflow_id=workflow_id,
-        signal="approve",
-        payload={
-            "approved": event.body.get("approved", True),
-            "reviewer": event.body.get("reviewer", "teams-user"),
-            "action": event.body.get("action", "dismiss"),
-            "comments": event.body.get("comments", ""),
-        },
-    )
-    return response.ok(result)
 
 
 # ── Route: /api/v1/hitl/respond ─────────────────────────────
@@ -282,10 +331,10 @@ async def handle_hitl_jira(event: IngressEvent) -> dict:
     return response.ok({"signaled": workflow_id})
 
 
-# ── Route: /api/v1/ingress/iam ───────────────────────────────
+# ── Route: /api/v1/ingress/internal ───────────────────────────────
 
-async def handle_iam(event: IngressEvent) -> dict:
-    """Validate an IAM request and start an IamOnboardingWorkflow."""
+async def handle_internal(event: IngressEvent) -> dict:
+    """Validate an internal request and start an IamOnboardingWorkflow."""
 
     # 1. Validate request body with Pydantic ingress model
     try:
@@ -310,11 +359,21 @@ async def handle_iam(event: IngressEvent) -> dict:
     return response.accepted(result)
 
 
-async def handle_generic_event(event: IngressEvent) -> dict:
+async def handle_event(event: IngressEvent) -> dict:
     """Generic provider-event ingress route for workflow starts."""
+    tenant_id = str((event.path_params or {}).get("tenant_id", "")).strip()
+    if not tenant_id:
+        return response.error(400, "tenant_id path parameter is required")
+
     provider = str(event.body.get("provider", "")).strip().lower()
     if not provider:
         return response.error(400, "provider is required in request body")
+
+    validator = _SIGNATURE_VALIDATORS.get(provider)
+    if validator is None:
+        logger.warning("No signature validator configured for provider=%s; allowing request", provider)
+    elif not validator(event, tenant_id):
+        return response.error(401, "Invalid provider signature")
 
     event_type = str(event.body.get("event_type", "alert")).strip().lower() or "alert"
     routing = PROVIDER_EVENT_ROUTING.get((provider, event_type))
@@ -328,14 +387,14 @@ async def handle_generic_event(event: IngressEvent) -> dict:
     normalized = normalize_event_body(
         provider=provider,
         event_type=event_type,
-        tenant_id=event.tenant_id,
+        tenant_id=tenant_id,
         raw_body=event.body,
     )
 
     result = await temporal.start_workflow(
         workflow=workflow_name,
         input=normalized,
-        tenant_id=event.tenant_id,
+        tenant_id=tenant_id,
         task_queue=task_queue,
     )
     return response.accepted(result)
@@ -344,10 +403,8 @@ async def handle_generic_event(event: IngressEvent) -> dict:
 # ── Lambda Entrypoint ────────────────────────────────────────
 
 handler = async_handler({
-    "/api/v1/ingress/defender": handle_defender,
-    "/api/v1/ingress/teams": handle_teams,
-    "/api/v1/ingress/iam": handle_iam,
-    "/api/v1/ingress/event": handle_generic_event,
+    "/api/v1/ingress/event/{tenant_id}": handle_event,
+    "/api/v1/ingress/internal": handle_internal,
     "/api/v1/hitl/respond": handle_hitl_respond,
     "/api/v1/hitl/jira": handle_hitl_jira,
 })

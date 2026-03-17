@@ -26,6 +26,7 @@ echo "── Installing dependencies into ${LAYER_DIR} ──"
 pip install \
   temporalio \
   pydantic \
+  PyJWT \
   --target "${LAYER_DIR}" \
   --platform manylinux2014_aarch64 \
   --implementation cp \

@@ -67,10 +67,10 @@ def generate_policy(principal_id: str, effect: str, resource: str, context: Opti
     return policy
 
 def extract_headers(event: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-    """Extract required headers dynamically handling different cases."""
+    """Extract tenant and bearer token headers for internal ingress auth."""
     headers = {k.lower(): v for k, v in event.get("headers", {}).items() if v}
     tenant_id = headers.get("x-tenant-id")
-    auth_token = headers.get("authorization") or headers.get("x-signature")
+    auth_token = headers.get("authorization")
     
     return tenant_id, auth_token
 
@@ -89,7 +89,7 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     tenant_id, auth_token = extract_headers(event)
 
     if not tenant_id or not auth_token:
-        logger.warning("Missing required headers (x-tenant-id or authorization/x-signature)")
+        logger.warning("Missing required headers (x-tenant-id or authorization)")
         return generate_policy("anonymous", "Deny", method_arn)
 
     tenant_id = tenant_id.strip()
