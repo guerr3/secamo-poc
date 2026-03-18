@@ -33,6 +33,44 @@ from shared.models.provider_events import (
 )
 
 
+PROVIDER_EVENT_ROUTING: dict[tuple[str, str], tuple[str, str]] = {
+    ("microsoft_defender", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
+    ("microsoft_defender", "impossible_travel"): ("ImpossibleTravelWorkflow", "soc-defender"),
+    ("crowdstrike", "detection_summary"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
+    ("crowdstrike", "impossible_travel"): ("ImpossibleTravelWorkflow", "soc-defender"),
+    ("sentinelone", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
+    ("jira", "jira:issue_created"): ("IamOnboardingWorkflow", "iam-graph"),
+    ("jira", "jira:issue_updated"): ("IamOnboardingWorkflow", "iam-graph"),
+    # Backwards-compatible alias used by current webhook mapper/tests.
+    ("defender", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
+}
+
+POLLING_RESOURCE_EVENT_TYPES: dict[tuple[str, str], str] = {
+    ("microsoft_defender", "defender_alerts"): "alert",
+    ("microsoft_defender", "entra_signin_logs"): "impossible_travel",
+}
+
+
+def resolve_provider_event_route(provider: str, event_type: str) -> tuple[str, str] | None:
+    return PROVIDER_EVENT_ROUTING.get((provider.lower(), event_type.lower()))
+
+
+def resolve_polling_route(provider: str, resource_type: str, payload: dict[str, Any] | None = None) -> tuple[str, str] | None:
+    provider_key = provider.lower()
+    resource_key = resource_type.lower()
+    configured_event_type = POLLING_RESOURCE_EVENT_TYPES.get((provider_key, resource_key))
+    if not configured_event_type:
+        return None
+
+    provider_event_type = configured_event_type
+    if payload and payload.get("provider_event_type"):
+        provider_event_type = str(payload["provider_event_type"])
+
+    if not provider_event_type:
+        return None
+    return resolve_provider_event_route(provider, str(provider_event_type))
+
+
 # ── Envelope → ProviderEvent ──────────────────────────────────
 
 _PROVIDER_MAP: dict[str, type[ProviderEvent]] = {
@@ -160,6 +198,10 @@ _EVENT_TYPE_TO_WORKFLOW: dict[str, dict[str, str]] = {
     },
 }
 
+_CANONICAL_EVENT_TO_PROVIDER_ROUTE: dict[str, tuple[str, str]] = {
+    "defender.alert": ("microsoft_defender", "alert"),
+}
+
 
 def to_workflow_command(event: CanonicalEvent) -> WorkflowCommand:
     """
@@ -181,6 +223,18 @@ def to_workflow_command(event: CanonicalEvent) -> WorkflowCommand:
         )
 
     # Workflow starts
+    provider_route = _CANONICAL_EVENT_TO_PROVIDER_ROUTE.get(event.event_type)
+    if provider_route is not None:
+        routed = resolve_provider_event_route(provider_route[0], provider_route[1])
+        if routed is not None:
+            workflow_name, task_queue = routed
+            return StartWorkflowCommand(
+                tenant_id=event.tenant_id,
+                workflow_name=workflow_name,
+                task_queue=task_queue,
+                workflow_input=to_security_event(event),
+            )
+
     mapping = _EVENT_TYPE_TO_WORKFLOW.get(event.event_type)
     if mapping is None:
         raise ValueError(f"No workflow mapping for event_type={event.event_type!r}")

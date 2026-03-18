@@ -12,6 +12,7 @@ from shared.config import (
     QUEUE_IAM,
     QUEUE_SOC,
     QUEUE_AUDIT,
+    QUEUE_POLLER,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -23,12 +24,14 @@ def load_activities_by_queue() -> dict[str, list]:
     iam_activities: list = []
     soc_activities: list = []
     audit_activities: list = []
+    poller_activities: list = []
 
     try:
         from activities.tenant import validate_tenant_context, get_tenant_config, get_tenant_secrets
         iam_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets])
         soc_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets])
         audit_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets])
+        poller_activities.extend([get_tenant_config, get_tenant_secrets])
         logger.info("✓ Tenant activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Tenant activities: {e}")
@@ -146,6 +149,7 @@ def load_activities_by_queue() -> dict[str, list]:
             connector_health_check,
             connector_threat_intel_fanout,
         ])
+        poller_activities.extend([connector_fetch_events])
         logger.info("✓ Connector dispatch activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Connector dispatch activities: {e}")
@@ -155,6 +159,7 @@ def load_activities_by_queue() -> dict[str, list]:
         "iam": iam_activities,
         "soc": soc_activities,
         "audit": audit_activities,
+        "poller": poller_activities,
     }
 
 
@@ -199,10 +204,20 @@ def load_workflows() -> dict:
         logger.error(f"✗ Fout bij het laden van Impossible Travel Workflow: {e}")
         sys.exit(1)
 
+    poller_workflows = []
+    try:
+        from workflows.polling_manager import PollingManagerWorkflow
+        poller_workflows.append(PollingManagerWorkflow)
+        logger.info("✓ Polling Manager workflow geladen")
+    except ImportError as e:
+        logger.error(f"✗ Fout bij het laden van Polling Manager Workflow: {e}")
+        sys.exit(1)
+
     return {
         "iam":   iam_workflows,
         "soc":   soc_workflows,
         "audit": [],
+        "poller": poller_workflows,
     }
 
 
@@ -213,7 +228,12 @@ async def main() -> None:
     activities_map = load_activities_by_queue()
     workflows_map  = load_workflows()
 
-    if not activities_map["iam"] and not activities_map["soc"] and not activities_map["audit"]:
+    if (
+        not activities_map["iam"]
+        and not activities_map["soc"]
+        and not activities_map["audit"]
+        and not activities_map["poller"]
+    ):
         logger.error("✗ Geen activiteiten ingeladen — worker wordt niet gestart.")
         sys.exit(1)
 
@@ -233,9 +253,10 @@ async def main() -> None:
         Worker(client, task_queue=QUEUE_IAM,   workflows=workflows_map["iam"],   activities=activities_map["iam"]),
         Worker(client, task_queue=QUEUE_SOC,   workflows=workflows_map["soc"],   activities=activities_map["soc"]),
         Worker(client, task_queue=QUEUE_AUDIT, workflows=workflows_map["audit"], activities=activities_map["audit"]),
+        Worker(client, task_queue=QUEUE_POLLER, workflows=workflows_map["poller"], activities=activities_map["poller"]),
     ]
 
-    logger.info(f"Workers starten op queues: {QUEUE_IAM}, {QUEUE_SOC}, {QUEUE_AUDIT}")
+    logger.info(f"Workers starten op queues: {QUEUE_IAM}, {QUEUE_SOC}, {QUEUE_AUDIT}, {QUEUE_POLLER}")
 
     async with asyncio.TaskGroup() as tg:
         for worker in workers:

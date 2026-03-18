@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import httpx
@@ -39,17 +39,36 @@ class JiraConnector(BaseConnector):
             ],
         }
 
+    @staticmethod
+    def _parse_iso_datetime(value: str | None) -> datetime | None:
+        if not value:
+            return None
+        parsed = value
+        if parsed.endswith("Z"):
+            parsed = parsed[:-1] + "+00:00"
+        try:
+            return datetime.fromisoformat(parsed)
+        except ValueError:
+            return None
+
     async def fetch_events(self, query: dict) -> list[CanonicalEvent]:
-        jql = query.get("jql", "ORDER BY created DESC")
+        since = query.get("since")
+        if since:
+            jql = f'updated > "{since}" ORDER BY updated ASC'
+        else:
+            jql = query.get("jql", "ORDER BY created DESC")
+
+        max_results = int(query.get("max_results", query.get("top", 20)))
         url = f"{self._base_url()}/rest/api/3/search"
         async with httpx.AsyncClient(timeout=20.0, auth=self._auth()) as client:
-            response = await client.post(url, json={"jql": jql, "maxResults": int(query.get("max_results", 20))})
+            response = await client.post(url, json={"jql": jql, "maxResults": max_results})
             response.raise_for_status()
             body = response.json()
 
         events: list[CanonicalEvent] = []
         for issue in body.get("issues", []):
             fields = issue.get("fields", {})
+            occurred_at = self._parse_iso_datetime(fields.get("updated") or fields.get("created"))
             events.append(
                 CanonicalEvent(
                     event_type="jira.issue",
@@ -58,12 +77,13 @@ class JiraConnector(BaseConnector):
                     external_event_id=issue.get("id"),
                     subject=issue.get("key"),
                     severity=(fields.get("priority") or {}).get("name"),
-                    occurred_at=datetime.now(timezone.utc),
+                    occurred_at=occurred_at,
                     payload={
                         "issue_id": issue.get("id"),
                         "issue_key": issue.get("key"),
                         "summary": fields.get("summary"),
                         "status": (fields.get("status") or {}).get("name"),
+                        "provider_event_type": "jira:issue_updated",
                     },
                 )
             )

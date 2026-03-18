@@ -1,7 +1,7 @@
 import boto3
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
-from shared.models import TenantConfig, TenantSecrets
+from shared.models import PollingProviderConfig, TenantConfig, TenantSecrets
 
 # We initialize the SSM client at the module level so it can be reused across activity invocations
 # but since AWS credentials need to be picked up by boto3 automatically, this is fine.
@@ -47,6 +47,38 @@ def _parse_int(value: str | None, default: int) -> int:
         return default
 
 
+def _parse_polling_providers(raw_value: str | None) -> list[PollingProviderConfig]:
+    if not raw_value:
+        return []
+
+    providers: list[PollingProviderConfig] = []
+    for entry in raw_value.split(","):
+        chunk = entry.strip()
+        if not chunk:
+            continue
+
+        parts = [part.strip() for part in chunk.split(":")]
+        if len(parts) < 2:
+            activity.logger.warning("Ongeldige polling_providers entry overgeslagen: '%s'", chunk)
+            continue
+
+        provider = parts[0]
+        resource_type = parts[1]
+        secret_type = parts[2] if len(parts) > 2 and parts[2] else "graph"
+        poll_interval_seconds = _parse_int(parts[3] if len(parts) > 3 else None, 300)
+
+        providers.append(
+            PollingProviderConfig(
+                provider=provider,
+                resource_type=resource_type,
+                secret_type=secret_type,
+                poll_interval_seconds=poll_interval_seconds,
+            )
+        )
+
+    return providers
+
+
 @activity.defn
 async def get_tenant_config(tenant_id: str) -> TenantConfig:
     """
@@ -85,6 +117,7 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
         evidence_bundle_enabled=_parse_bool(parameters.get("evidence_bundle_enabled"), True),
         auto_ticket_creation=_parse_bool(parameters.get("auto_ticket_creation"), True),
         misp_sharing_enabled=_parse_bool(parameters.get("misp_sharing_enabled"), False),
+        polling_providers=_parse_polling_providers(parameters.get("polling_providers")),
     )
 
     activity.logger.info(f"Tenant config geladen voor '{tenant_id}': {config.model_dump()}")

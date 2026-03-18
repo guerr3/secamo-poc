@@ -19,6 +19,7 @@ from shared.models import (
     to_security_event,
     to_workflow_command,
 )
+from shared.models.mappers import resolve_polling_route, resolve_provider_event_route
 from shared.models.common import LifecycleAction
 from shared.models.provider_events import DefenderWebhook, TeamsApprovalCallback
 
@@ -176,3 +177,17 @@ class TestExtraFieldsIgnored:
         env = RawIngressEnvelope.model_validate(data)
         assert env.request_id == "r1"
         assert not hasattr(env, "futuristic_field")
+
+
+class TestRoutingResolution:
+    def test_provider_event_route(self):
+        route = resolve_provider_event_route("microsoft_defender", "alert")
+        assert route == ("DefenderAlertEnrichmentWorkflow", "soc-defender")
+
+    def test_polling_route_prefers_payload_provider_event_type(self):
+        route = resolve_polling_route(
+            provider="microsoft_defender",
+            resource_type="defender_alerts",
+            payload={"provider_event_type": "impossible_travel"},
+        )
+        assert route == ("ImpossibleTravelWorkflow", "soc-defender")

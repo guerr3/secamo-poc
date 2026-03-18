@@ -13,6 +13,7 @@ TEMPORAL_NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
 QUEUE_IAM    = "iam-graph"
 QUEUE_SOC    = "soc-defender"
 QUEUE_AUDIT  = "audit"
+QUEUE_POLLER = "poller"
 
 # ── Shared runtime settings ──────────────────────────────────
 SECAMO_SENDER_EMAIL = os.environ.get("SECAMO_SENDER_EMAIL", "noreply@secamo.local")

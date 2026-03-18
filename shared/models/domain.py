@@ -52,6 +52,16 @@ class TenantConfig(BaseModel):
     evidence_bundle_enabled: bool = True
     auto_ticket_creation: bool = True
     misp_sharing_enabled: bool = False
+    polling_providers: list["PollingProviderConfig"] = Field(default_factory=list)
+
+
+class PollingProviderConfig(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    provider: str
+    resource_type: str
+    secret_type: str = "graph"
+    poll_interval_seconds: int = 300
 
 
 class GraphUser(BaseModel):
@@ -324,3 +334,15 @@ class UserDeprovisioningRequest(BaseModel):
     user_id: str
     user_email: str
     secrets: TenantSecrets
+
+
+class PollingManagerInput(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    provider: str
+    resource_type: str
+    secret_type: str = "graph"
+    poll_interval_seconds: int = 300
+    cursor: str | None = None
+    iteration: int = 0

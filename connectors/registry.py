@@ -4,7 +4,7 @@ from collections.abc import Callable
 
 from connectors.base import BaseConnector
 from connectors.jira import JiraConnector
-from connectors.microsoft_defender import MicrosoftDefenderConnector
+from connectors.microsoft_defender import MicrosoftGraphConnector
 from connectors.stub_providers import (
     AbuseIpdbConnector,
     CrowdStrikeConnector,
@@ -27,7 +27,7 @@ def _factory(cls: type[BaseConnector]) -> ConnectorFactory:
 
 
 _CONNECTOR_FACTORIES: dict[str, ConnectorFactory] = {
-    "microsoft_defender": _factory(MicrosoftDefenderConnector),
+    "microsoft_defender": _factory(MicrosoftGraphConnector),
     "jira": _factory(JiraConnector),
     "crowdstrike": _factory(CrowdStrikeConnector),
     "sentinelone": _factory(SentinelOneConnector),
