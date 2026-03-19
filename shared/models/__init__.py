@@ -10,9 +10,11 @@ from shared.models.common import LifecycleAction
 
 # ── Domain contracts (Temporal workflows) ─────────────────────
 from shared.models.domain import (
+    AITriageConfig,
     AlertEnrichmentRequest,
     AlertEnrichmentResult,
     ApprovalDecision,
+    ChatOpsConfig,
     ConnectorActionResult,
     ConnectorFetchResult,
     ConnectorHealthResult,
@@ -40,6 +42,10 @@ from shared.models.domain import (
     ThreatIntelResult,
     UserDeprovisioningRequest,
 )
+
+# ── AI triage and ChatOps contracts ─────────────────────────
+from shared.models.chatops import ChatOpsAction, ChatOpsMessage, ChatOpsProvider
+from shared.models.triage import AITriageProvider, TriageRequest, TriageResult
 
 # ── Ingress transport models ─────────────────────────────────
 from shared.models.ingress import IamIngressRequest, RawIngressEnvelope
@@ -85,10 +91,15 @@ __all__ = [
     # common
     "LifecycleAction",
     # domain
+    "AITriageConfig",
     "AlertData",
     "AlertEnrichmentRequest",
     "AlertEnrichmentResult",
     "ApprovalDecision",
+    "ChatOpsConfig",
+    "ChatOpsAction",
+    "ChatOpsMessage",
+    "ChatOpsProvider",
     "ConnectorActionResult",
     "ConnectorFetchResult",
     "ConnectorHealthResult",
@@ -116,6 +127,9 @@ __all__ = [
     "TicketResult",
     "ThreatIntelEnrichmentRequest",
     "ThreatIntelResult",
+    "TriageRequest",
+    "TriageResult",
+    "AITriageProvider",
     "UserDeprovisioningRequest",
     # ingress
     "IamIngressRequest",

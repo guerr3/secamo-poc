@@ -8,12 +8,14 @@ from fastapi.responses import PlainTextResponse
 
 from shared.models import GraphNotificationEnvelope
 
+from .chatops_webhook import router as chatops_router
 from .dispatcher import TemporalGraphIngressDispatcher
 from .validator import GraphIngressValidator
 
 app = FastAPI(title="Secamo Graph Ingress Service", version="1.0.0")
 _validator = GraphIngressValidator()
 _dispatcher = TemporalGraphIngressDispatcher()
+app.include_router(chatops_router)
 
 
 @app.get("/graph/notifications", response_class=PlainTextResponse)

@@ -155,6 +155,15 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
+        from activities.triage import perform_ai_triage
+        from activities.chatops import send_interactive_alert
+        soc_activities.extend([perform_ai_triage, send_interactive_alert])
+        logger.info("✓ AI triage/ChatOps activities geladen")
+    except ImportError as e:
+        logger.error(f"✗ Fout bij het laden van AI triage/ChatOps activities: {e}")
+        sys.exit(1)
+
+    try:
         from activities.audit import create_audit_log
         from activities.evidence import collect_evidence_bundle
         iam_activities.append(create_audit_log)

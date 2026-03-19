@@ -29,6 +29,8 @@ _SYMBOL_TO_MODULE = {
     "renew_graph_subscription": "activities.graph_subscriptions",
     "store_subscription_metadata": "activities.graph_subscriptions",
     "request_hitl_approval": "activities.hitl",
+    "perform_ai_triage": "activities.triage",
+    "send_interactive_alert": "activities.chatops",
     "teams_send_adaptive_card": "activities.notify_teams",
     "teams_send_notification": "activities.notify_teams",
     "threat_intel_lookup": "activities.threat_intel",

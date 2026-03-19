@@ -54,6 +54,50 @@ class GraphSubscriptionState(BaseModel):
     client_state: str = Field(repr=False)
 
 
+class AITriageConfig(BaseModel):
+    """Per-tenant configuration for AI triage provider selection and routing.
+
+    Attributes:
+        provider_type: Logical AI provider to instantiate via provider factory.
+        credentials_path: SSM base path used to load provider credentials.
+        default_channel: Optional default ChatOps target for triage outcomes.
+        model_name: Optional model/deployment identifier for provider selection.
+        temperature: Optional model temperature used for non-deterministic prompts.
+        max_tokens: Optional response length cap for provider requests.
+        enabled: Enables or disables AI triage for the tenant.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    provider_type: Literal["azure_openai", "aws_bedrock", "local"] = "azure_openai"
+    credentials_path: str = "/secamo/tenants/{tenant_id}/ai_triage"
+    default_channel: Optional[str] = None
+    model_name: Optional[str] = None
+    temperature: float = 0.0
+    max_tokens: int = 512
+    enabled: bool = True
+
+
+class ChatOpsConfig(BaseModel):
+    """Per-tenant configuration for ChatOps provider selection and destinations.
+
+    Attributes:
+        provider_type: Logical ChatOps provider to instantiate via factory.
+        credentials_path: SSM base path used to load provider credentials.
+        default_channel: Default destination channel when a caller omits target.
+        default_channels: Optional fan-out destinations for broadcast notifications.
+        enabled: Enables or disables ChatOps notifications for the tenant.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    provider_type: Literal["ms_teams", "slack"] = "ms_teams"
+    credentials_path: str = "/secamo/tenants/{tenant_id}/chatops"
+    default_channel: Optional[str] = None
+    default_channels: list[str] = Field(default_factory=list)
+    enabled: bool = True
+
+
 class TenantConfig(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -76,6 +120,8 @@ class TenantConfig(BaseModel):
     evidence_bundle_enabled: bool = True
     auto_ticket_creation: bool = True
     misp_sharing_enabled: bool = False
+    ai_triage_config: AITriageConfig = Field(default_factory=AITriageConfig)
+    chatops_config: ChatOpsConfig = Field(default_factory=ChatOpsConfig)
     polling_providers: list["PollingProviderConfig"] = Field(default_factory=list)
     graph_subscriptions: list[GraphSubscriptionConfig] = Field(default_factory=list)
 
