@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 import time
 
 import httpx
@@ -74,3 +75,18 @@ async def get_defender_token(secrets: TenantSecrets) -> str:
         scope="https://api.securitycenter.microsoft.com/.default",
         cache_prefix="defender",
     )
+
+
+@asynccontextmanager
+async def get_graph_client(
+    secrets: TenantSecrets,
+    timeout: float = 30.0,
+) -> httpx.AsyncClient:
+    """Yield an AsyncClient configured with a valid Graph bearer token."""
+    token = await get_graph_token(secrets)
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
+        yield client

@@ -25,6 +25,7 @@ COPY --from=builder /install /usr/local
 COPY shared/ ./shared/
 COPY activities/ ./activities/
 COPY connectors/ ./connectors/
+COPY graph_ingress/ ./graph_ingress/
 COPY workflows/ ./workflows/
 COPY workers/ ./workers/
 

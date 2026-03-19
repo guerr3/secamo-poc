@@ -27,14 +27,43 @@ def load_activities_by_queue() -> dict[str, list]:
     poller_activities: list = []
 
     try:
-        from activities.tenant import validate_tenant_context, get_tenant_config, get_tenant_secrets
+        from activities.tenant import (
+            get_all_active_tenants,
+            get_tenant_config,
+            get_tenant_secrets,
+            validate_tenant_context,
+        )
         iam_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets])
-        soc_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets])
+        soc_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets, get_all_active_tenants])
         audit_activities.extend([validate_tenant_context, get_tenant_config, get_tenant_secrets])
-        poller_activities.extend([get_tenant_config, get_tenant_secrets])
+        poller_activities.extend([get_tenant_config, get_tenant_secrets, get_all_active_tenants])
         logger.info("✓ Tenant activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Tenant activities: {e}")
+        sys.exit(1)
+
+    try:
+        from activities.graph_subscriptions import (
+            create_graph_subscription,
+            delete_graph_subscription,
+            list_graph_subscriptions,
+            load_subscription_metadata,
+            lookup_subscription_metadata,
+            renew_graph_subscription,
+            store_subscription_metadata,
+        )
+        soc_activities.extend([
+            create_graph_subscription,
+            renew_graph_subscription,
+            delete_graph_subscription,
+            list_graph_subscriptions,
+            store_subscription_metadata,
+            load_subscription_metadata,
+            lookup_subscription_metadata,
+        ])
+        logger.info("✓ Graph subscription activities geladen")
+    except ImportError as e:
+        logger.error(f"✗ Fout bij het laden van Graph subscription activities: {e}")
         sys.exit(1)
 
     try:
@@ -202,6 +231,15 @@ def load_workflows() -> dict:
         logger.info("✓ Impossible Travel workflow geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Impossible Travel Workflow: {e}")
+        sys.exit(1)
+
+    try:
+        from workflows.graph_ingress_router import GraphIngressRouterWorkflow
+        from workflows.graph_subscription_manager import GraphSubscriptionManagerWorkflow
+        soc_workflows.extend([GraphIngressRouterWorkflow, GraphSubscriptionManagerWorkflow])
+        logger.info("✓ Graph ingress/subscription workflows geladen")
+    except ImportError as e:
+        logger.error(f"✗ Fout bij het laden van Graph ingress/subscription workflows: {e}")
         sys.exit(1)
 
     poller_workflows = []

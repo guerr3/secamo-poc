@@ -19,6 +19,9 @@ from shared.models.domain import (
     EnrichedAlert,
     EvidenceBundle,
     DeviceDetail,
+    GraphSubscriptionManagerInput,
+    GraphSubscriptionConfig,
+    GraphSubscriptionState,
     GraphUser,
     HiTLApprovalRequest,
     HiTLRequest,
@@ -40,6 +43,7 @@ from shared.models.domain import (
 
 # ── Ingress transport models ─────────────────────────────────
 from shared.models.ingress import IamIngressRequest, RawIngressEnvelope
+from shared.models.ingress import GraphNotificationEnvelope, GraphNotificationItem
 
 # ── Provider event models ────────────────────────────────────
 from shared.models.provider_events import (
@@ -70,6 +74,7 @@ from shared.models.commands import (
 from shared.models.mappers import (
     build_provider_event,
     iam_request_to_canonical,
+    resolve_webhook_route,
     to_approval_decision,
     to_canonical_event,
     to_security_event,
@@ -90,6 +95,11 @@ __all__ = [
     "DeviceDetail",
     "EnrichedAlert",
     "EvidenceBundle",
+    "GraphNotificationEnvelope",
+    "GraphNotificationItem",
+    "GraphSubscriptionManagerInput",
+    "GraphSubscriptionConfig",
+    "GraphSubscriptionState",
     "GraphUser",
     "HiTLApprovalRequest",
     "HiTLRequest",
@@ -129,6 +139,7 @@ __all__ = [
     # mappers
     "build_provider_event",
     "iam_request_to_canonical",
+    "resolve_webhook_route",
     "to_approval_decision",
     "to_canonical_event",
     "to_security_event",

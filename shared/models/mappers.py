@@ -50,6 +50,13 @@ POLLING_RESOURCE_EVENT_TYPES: dict[tuple[str, str], str] = {
     ("microsoft_defender", "entra_signin_logs"): "impossible_travel",
 }
 
+WEBHOOK_RESOURCE_ROUTING: dict[tuple[str, str], tuple[str, str]] = {
+    ("microsoft_graph", "security/alerts"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
+    ("microsoft_graph", "security/alerts_v2"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
+    ("microsoft_graph", "auditlogs/signins"): ("ImpossibleTravelWorkflow", "soc-defender"),
+    ("microsoft_graph", "identityprotection/riskyusers"): ("ImpossibleTravelWorkflow", "soc-defender"),
+}
+
 
 def resolve_provider_event_route(provider: str, event_type: str) -> tuple[str, str] | None:
     return PROVIDER_EVENT_ROUTING.get((provider.lower(), event_type.lower()))
@@ -69,6 +76,24 @@ def resolve_polling_route(provider: str, resource_type: str, payload: dict[str, 
     if not provider_event_type:
         return None
     return resolve_provider_event_route(provider, str(provider_event_type))
+
+
+def resolve_webhook_route(provider: str, resource_type: str, payload: dict[str, Any] | None = None) -> tuple[str, str] | None:
+    provider_key = provider.lower().strip()
+    resource_key = resource_type.lower().strip().lstrip("/")
+
+    if resource_key.count("/") >= 2:
+        # Microsoft Graph often sends resources like security/alerts_v2/{id}.
+        resource_key = resource_key.rsplit("/", 1)[0]
+
+    direct = WEBHOOK_RESOURCE_ROUTING.get((provider_key, resource_key))
+    if direct is not None:
+        return direct
+
+    if payload and payload.get("provider_event_type"):
+        return resolve_provider_event_route(provider, str(payload["provider_event_type"]))
+
+    return None
 
 
 # ── Envelope → ProviderEvent ──────────────────────────────────

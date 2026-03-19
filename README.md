@@ -85,6 +85,11 @@ Completed Workflow Action (ticket, notification, audit, containment)
 | WF-02 | Defender Alert Enrichment | Security alert ingress (`/api/v1/ingress/defender` or `/api/v1/ingress/event`) | Enriches alert context, optionally runs threat intel fanout, computes risk score, creates/updates ticketing artifacts, sends notifications, and audits the outcome. |
 | WF-05 | Impossible Travel HITL    | Impossible travel event ingress (`/api/v1/ingress/event`)                      | Creates triage ticket, sends human approval request, applies analyst decision or timeout policy (escalation/isolation), and optionally collects evidence bundle.    |
 
+Additional workflow services:
+
+- WF-06 Graph Ingress Router (`/graph/notifications`): routes validated multi-tenant Graph notifications to SOC workflows with deterministic child workflow IDs.
+- WF-07 Graph Subscription Manager: reconciles per-tenant Graph subscription create/renew/delete lifecycle via continue-as-new.
+
 ## 4. Supported Connectors
 
 | Provider           | Type                    | Status     |
@@ -110,9 +115,14 @@ secamo-poc/
 |-- activities/                 # Temporal activities (Graph, ticketing, notifications, audit, tenant config)
 |   |-- graph_users.py          # IAM-related Graph operations
 |   |-- graph_alerts.py         # Alert enrichment, alert lookup, containment, risk inputs
+|   |-- graph_subscriptions.py  # Graph /subscriptions lifecycle + metadata persistence
 |   |-- connector_dispatch.py   # Provider-agnostic connector dispatch activities
 |   |-- tenant.py               # Tenant validation, config retrieval, secret retrieval
 |   `-- audit.py                # Audit log persistence and evidence bundle handling
+|-- graph_ingress/              # FastAPI service for Graph validation + webhook ingress
+|   |-- app.py                  # /graph/notifications endpoints
+|   |-- validator.py            # tenant resolution + clientState checks
+|   `-- dispatcher.py           # Temporal workflow dispatch bridge
 |-- connectors/                 # Connector adapter contract + provider implementations
 |   |-- base.py                 # Abstract connector interface
 |   |-- registry.py             # Provider registration and lookup
@@ -127,6 +137,8 @@ secamo-poc/
 |-- workflows/                  # Temporal workflow definitions
 |   |-- iam_onboarding.py       # WF-01
 |   |-- defender_alert_enrichment.py  # WF-02
+|   |-- graph_ingress_router.py # WF-06
+|   |-- graph_subscription_manager.py # WF-07
 |   `-- impossible_travel.py    # WF-05
 |-- workers/                    # Worker bootstrap and queue registration
 |   `-- run_worker.py           # Starts workers for iam-graph, soc-defender, audit queues
@@ -151,6 +163,10 @@ For complete infrastructure details, use `terraform/environments/temporal-test`.
    - `terraform apply -var="my_ip=<YOUR_PUBLIC_IP>/32"`
 3. Start the worker process from repository root:
    - `python -m workers.run_worker`
+4. Start the Graph ingress service:
+      - `uvicorn graph_ingress.app:app --host 0.0.0.0 --port 8081`
+5. Or start both as containers in the Temporal compose stack:
+      - `docker compose -f terraform/temporal-compose/docker-compose.yml up -d secamo-worker secamo-graph-ingress`
 
 ## 7. Onboarding a New Tenant
 

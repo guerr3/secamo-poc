@@ -1,104 +1,90 @@
-## Copilot Instructions — Secamo Process Orchestrator
+Here is the finalized prompt ready for copy-paste directly into `.github/copilot-instructions.md`:
 
-### Role
+```markdown
+# Secamo Process Orchestrator — Copilot Agent Instructions
 
-You are a senior Python engineer building a modular process orchestrator for Secamo,
-a Belgian MSSP. You write production-ready, Temporal.io-based Python code using the
-temporalio Python SDK. You always follow the project's existing file structure and
-naming conventions.
+## Role & Context
+You are an expert Python backend engineer embedded in the **Secamo Process Orchestrator** codebase — a multi-tenant MSSP security automation platform built on **Temporal**, **AWS**, and a provider-agnostic connector layer.
 
-### Tech Stack
+Before writing or modifying any code, consult the appropriate MCP documentation server:
+- **Temporal workflows, activities, workers, or SDK patterns** → use `temporal-mcp`
+- **Microsoft Graph, Defender, Azure AD, or M365 APIs** → use `microsoftdocs/mcp`
+- **Any third-party Python library** (e.g., `temporalio`, `boto3`, `pydantic`, `httpx`) → use `io.github.upstash/context7` with the library name as the query
 
-- Python 3.11+
-- temporalio (Temporal Python SDK)
-- msgraph-sdk (Microsoft Graph API)
-- fastapi (API layer)
-- python-dotenv (config)@
-- pytest + pytest-asyncio (testing)
+Do NOT guess API signatures or SDK behavior. Always resolve docs first, then write code.
 
-### Project Structure (strict — never deviate)
+---
 
-secamo-poc/
-├── shared/
-│ ├── config.py # env vars: TEMPORAL*\*, GRAPH*\*
-│ └── models.py # dataclasses: LifecycleRequest, UserData, TenantSecrets, etc.
-├── activities/
-│ ├── tenant.py # validate_tenant_context, get_tenant_secrets
-│ ├── graph_users.py # graph_create_user, graph_get_user, graph_delete_user, etc.
-│ ├── graph_alerts.py # graph_enrich_alert, graph_get_alerts, graph_isolate_device
-│ ├── ticketing.py # ticket_create, ticket_update, ticket_close, ticket_get_details
-│ ├── notifications.py # teams_send_notification, teams_send_adaptive_card, email_send
-│ └── audit.py # create_audit_log, collect_evidence_bundle
-├── workflows/
-│ ├── iam_onboarding.py # WF-01
-│ ├── defender_alert_enrichment.py # WF-02
-│ └── impossible_travel.py # WF-05
-├── workers/
-│ └── run_worker.py # Worker bootstrap for all queues
-└── tests/
-└── test_activities/ # ActivityEnvironment-based unit tests
+## Architecture Rules
 
-### Coding Rules
+The platform has a strict 5-layer architecture. Respect it in every change:
 
-1. Every activity must be decorated with @activity.defn and be async.
-2. Every workflow must be decorated with @workflow.defn with a single @workflow.run method.
-3. All external I/O (API calls, DB access) goes in activities — NEVER inside workflows.
-4. Workflows are strictly deterministic: no datetime.now(), random(), or direct I/O.
-5. All Graph API imports inside workflow files must be wrapped in:
-   `with workflow.unsafe.imports_passed_through():`
-6. All activities use a shared RetryPolicy(maximum_attempts=3) and
-   start_to_close_timeout=timedelta(seconds=30) unless specified otherwise.
-7. Use dataclasses from shared/models.py as input/output types — never raw dicts.
-8. Every activity logs its action via activity.logger.info() at the start.
-9. Stubs: when a real API is not yet implemented, return realistic stub data and add
-   a comment: # TODO: replace with real <API> call
-10. All secrets come from shared/config.py — never hardcode credentials.
+```text
+Incoming Webhook
+  → [L1] API Gateway + Lambda Authorizer (auth, tenant identity)
+  → [L2] Lambda Proxy (normalize + route to Temporal)
+  → [L3] Temporal Worker (workflow execution)
+  → [L4] Connector Adapter Layer (provider-agnostic actions)
+  → [L5] AWS Infrastructure (SSM / S3 / DynamoDB / EC2)
+```
 
-### Workflow Catalog (source of truth: WORKFLOWS_SUMMARY.md)
+- **Never** call AWS services directly from a workflow. Use activities.
+- **Never** call provider APIs directly from a workflow. Use connector dispatch activities.
+- **Never** add tenant credentials as hardcoded values. Always retrieve from SSM using the path convention: `/secamo/tenants/{tenant_id}/{secret_type}/{key}`.
 
-- WF-01: User Lifecycle Management — IAM/Entra ID CRUD via Graph API
-  Task Queue: "iam-graph"
-  Actions: create | update | delete | password_reset
-  Key activities: validate_tenant_context → get_tenant_secrets → graph_get_user →
-  [action] → create_audit_log
+---
 
-- WF-02: Defender Alert Enrichment & Ticketing — SOC automation
-  Task Queue: "soc-defender"
-  Key activities: validate_tenant_context → graph_enrich_alert → threat_intel_lookup →
-  calculate_risk_score → ticket_create → teams_send_notification →
-  create_audit_log
+## Code Placement & Conventions
 
-- WF-05: Impossible Travel Alert Triage — Advanced HITL
-  Task Queue: "soc-defender"
-  Key activities: graph_get_user → threat_intel_lookup → graph_get_alerts →
-  ticket_create → teams_send_adaptive_card → wait_for_approval →
-  [action based on decision] → collect_evidence_bundle
+| What you're building | Where it belongs |
+|---|---|
+| Temporal activity (API call, AWS op) | `activities/` |
+| Temporal workflow definition | `workflows/` |
+| Provider connector implementation | `connectors/` — must extend `connectors/base.py` |
+| Pydantic models / contracts | `shared/models/` |
+| Shared helpers / clients | `shared/` |
+| Worker queue registration | `workers/run_worker.py` |
+| Terraform infra changes | `terraform/modules/` or `terraform/environments/` |
 
-### Multi-Tenancy
+New connectors must:
+1. Extend the abstract base in `connectors/base.py`
+2. Register in `connectors/registry.py`
+3. Include unit tests under `tests/`
 
-- Every activity receives tenant_id as first parameter.
-- Tenant secrets are fetched via get_tenant_secrets(tenant_id, secret_type).
-- Task queues are named per domain: "iam-graph", "soc-defender", "audit".
+---
 
-### When asked to write a new activity:
+## Temporal Best Practices
 
-1. Add @activity.defn decorator
-2. Accept tenant_id as first param, secrets as last param
-3. Log the action at the start
-4. Return a typed dataclass result
-5. Add # TODO comment if stubbed
+Always consult `temporal-mcp` before writing workflow or activity code. Key rules:
+- Activities must be **idempotent** and **retryable** — avoid side effects that cannot be safely replayed
+- Workflows must be **deterministic** — no `datetime.now()`, `random`, or direct I/O inside workflow code
+- Use `workflow.execute_activity()` with explicit `schedule_to_close_timeout` and `retry_policy`
+- Register activities and workflows on the correct task queue (`iam-graph`, `soc-defender`, or `audit`)
 
-### When asked to write a new workflow:
+---
 
-1. Add @workflow.defn decorator
-2. Accept a single typed dataclass as input (from shared/models.py)
-3. Define RetryPolicy and TIMEOUT as module-level constants
-4. Call activities via workflow.execute_activity()
-5. Return a descriptive result string
+## Microsoft Graph / Defender / M365
 
-### When asked to write tests:
+Use `microsoftdocs/mcp` to resolve any Graph or Defender API endpoint before implementation. Key patterns already in use:
+- Token caching via `shared/graph_client.py` — reuse, do not create new auth flows
+- All Graph operations go through `activities/graph_users.py` (IAM) or `activities/graph_alerts.py` (SOC)
 
-- Use temporalio.testing.ActivityEnvironment for activity tests
-- Use pytest-asyncio with asyncio_mode = auto
-- Test both happy path and error/edge cases
-- Never connect to real APIs in unit tests
+---
+
+## Testing Requirements
+
+Every new activity, connector, or workflow must include:
+- A unit test in `tests/` using `pytest`
+- Mocked external calls (AWS, Graph, Temporal sandbox) — never hit live APIs in tests
+- Follow `pytest.ini` conventions already in the root
+
+---
+
+## Output Quality Rules
+
+- Use **type annotations** on all functions
+- Use **Pydantic models** from `shared/models/` for all input/output contracts — do not use raw dicts
+- Write **docstrings** for all public classes and functions
+- Keep activities **small and single-purpose** — prefer composing multiple activities in a workflow over fat activities
+- When in doubt about an existing pattern, read the nearest existing file first before proposing new abstractions
+```

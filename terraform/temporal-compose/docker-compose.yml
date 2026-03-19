@@ -116,6 +116,36 @@ services:
       - temporal-network
     restart: unless-stopped
 
+  secamo-graph-ingress:
+    container_name: secamo-graph-ingress
+    build:
+      context: /opt/secamo-poc
+      dockerfile: Dockerfile
+    depends_on:
+      temporal:
+        condition: service_healthy
+      temporal-create-namespace:
+        condition: service_completed_successfully
+    env_file:
+      - /opt/secamo-poc/.env
+    environment:
+      - TEMPORAL_ADDRESS=temporal:7233
+      - TEMPORAL_NAMESPACE=${temporal_namespace}
+      - GRAPH_INGRESS_HOST=0.0.0.0
+      - GRAPH_INGRESS_PORT=8081
+    entrypoint: ["python", "-m", "graph_ingress.launcher"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/healthz', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    ports:
+      - "8081:8081"
+    networks:
+      - temporal-network
+    restart: unless-stopped
+
 networks:
   temporal-network:
     driver: bridge

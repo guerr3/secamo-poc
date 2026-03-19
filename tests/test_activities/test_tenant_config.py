@@ -31,6 +31,18 @@ class _FakeSsmClientWithPolling:
         }
 
 
+class _FakeSsmClientWithGraphSubscriptions:
+    def get_parameters_by_path(self, Path: str, WithDecryption: bool) -> dict:
+        return {
+            "Parameters": [
+                {
+                    "Name": f"{Path}graph_subscriptions",
+                    "Value": "security/alerts_v2:created+updated:false:24,auditLogs/signIns:created:false:12",
+                }
+            ]
+        }
+
+
 @pytest.mark.asyncio
 async def test_get_tenant_config_defaults_without_ssm(monkeypatch: pytest.MonkeyPatch) -> None:
     from activities import tenant as tenant_module
@@ -77,3 +89,20 @@ async def test_get_tenant_config_parses_polling_providers(monkeypatch: pytest.Mo
     assert cfg.polling_providers[1].resource_type == "tickets"
     assert cfg.polling_providers[1].secret_type == "ticketing"
     assert cfg.polling_providers[1].poll_interval_seconds == 120
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_config_parses_graph_subscriptions(monkeypatch: pytest.MonkeyPatch) -> None:
+    from activities import tenant as tenant_module
+
+    monkeypatch.setattr(tenant_module, "ssm_client", _FakeSsmClientWithGraphSubscriptions())
+    env = ActivityEnvironment()
+
+    cfg: TenantConfig = await env.run(get_tenant_config, "tenant-demo-001")
+
+    assert len(cfg.graph_subscriptions) == 2
+    assert cfg.graph_subscriptions[0].resource == "security/alerts_v2"
+    assert cfg.graph_subscriptions[0].change_types == ["created", "updated"]
+    assert cfg.graph_subscriptions[0].include_resource_data is False
+    assert cfg.graph_subscriptions[0].expiration_hours == 24
+    assert cfg.graph_subscriptions[1].resource == "auditLogs/signIns"

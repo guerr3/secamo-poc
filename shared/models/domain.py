@@ -8,6 +8,7 @@ backwards compatibility.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,6 +29,29 @@ class TenantSecrets(BaseModel):
     project_key: Optional[str] = None
     virustotal_api_key: Optional[str] = Field(default=None, repr=False)
     abuseipdb_api_key: Optional[str] = Field(default=None, repr=False)
+
+
+class GraphSubscriptionConfig(BaseModel):
+    """Declarative per-tenant Graph subscription configuration."""
+    model_config = ConfigDict(from_attributes=True)
+
+    resource: str
+    change_types: list[str] = Field(default_factory=lambda: ["created", "updated"])
+    include_resource_data: bool = False
+    expiration_hours: int = 24
+
+
+class GraphSubscriptionState(BaseModel):
+    """Persisted runtime state for a Graph subscription."""
+    model_config = ConfigDict(from_attributes=True)
+
+    subscription_id: str
+    tenant_id: str
+    resource: str
+    change_types: list[str] = Field(default_factory=list)
+    expires_at: datetime
+    notification_url: str
+    client_state: str = Field(repr=False)
 
 
 class TenantConfig(BaseModel):
@@ -53,6 +77,7 @@ class TenantConfig(BaseModel):
     auto_ticket_creation: bool = True
     misp_sharing_enabled: bool = False
     polling_providers: list["PollingProviderConfig"] = Field(default_factory=list)
+    graph_subscriptions: list[GraphSubscriptionConfig] = Field(default_factory=list)
 
 
 class PollingProviderConfig(BaseModel):
@@ -345,4 +370,13 @@ class PollingManagerInput(BaseModel):
     secret_type: str = "graph"
     poll_interval_seconds: int = 300
     cursor: str | None = None
+    iteration: int = 0
+
+
+class GraphSubscriptionManagerInput(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    tenant_id: str
+    notification_url: str
+    secret_type: str = "graph"
     iteration: int = 0

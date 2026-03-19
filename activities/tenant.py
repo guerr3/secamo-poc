@@ -1,8 +1,15 @@
+import json
+import os
+
 import boto3
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
-from shared.models import PollingProviderConfig, TenantConfig, TenantSecrets
-from shared.ssm_client import get_secret_bundle
+from shared.models import (
+    GraphSubscriptionConfig,
+    PollingProviderConfig,
+    TenantConfig,
+    TenantSecrets,
+)
 
 
 # Tenant registry — maps internal tenant_id to metadata & Azure tenant ID.
@@ -13,6 +20,72 @@ KNOWN_TENANTS = {
     },
 }
 
+ssm_client = None
+dynamodb = None
+TENANT_TABLE_NAME = os.environ.get("TENANT_TABLE_NAME", "").strip()
+
+
+def _get_ssm_client():
+    global ssm_client
+    if ssm_client is None:
+        ssm_client = boto3.client("ssm", region_name="eu-west-1")
+    return ssm_client
+
+
+def _get_dynamodb_resource():
+    global dynamodb
+    if dynamodb is None:
+        dynamodb = boto3.resource("dynamodb", region_name="eu-west-1")
+    return dynamodb
+
+
+@activity.defn
+async def get_all_active_tenants() -> list[dict]:
+    """Load active tenants from DynamoDB; falls back to static bootstrap tenants."""
+    if not TENANT_TABLE_NAME:
+        return [
+            {
+                "tenant_id": tenant_id,
+                "name": metadata.get("name", tenant_id),
+                "active": True,
+            }
+            for tenant_id, metadata in KNOWN_TENANTS.items()
+        ]
+
+    try:
+        table = _get_dynamodb_resource().Table(TENANT_TABLE_NAME)
+        response = table.scan(
+            ProjectionExpression="tenant_id, display_name, #status",
+            ExpressionAttributeNames={"#status": "status"},
+        )
+    except Exception as exc:
+        activity.logger.warning("Tenant scan via DynamoDB failed: %s", exc)
+        return [
+            {
+                "tenant_id": tenant_id,
+                "name": metadata.get("name", tenant_id),
+                "active": True,
+            }
+            for tenant_id, metadata in KNOWN_TENANTS.items()
+        ]
+
+    tenants: list[dict] = []
+    for item in response.get("Items", []):
+        status = str(item.get("status", "active")).lower()
+        if status not in {"active", "enabled", "true", "1"}:
+            continue
+        tenant_id = str(item.get("tenant_id", "")).strip()
+        if not tenant_id:
+            continue
+        tenants.append(
+            {
+                "tenant_id": tenant_id,
+                "name": str(item.get("display_name") or tenant_id),
+                "active": True,
+            }
+        )
+    return tenants
+
 
 @activity.defn
 async def validate_tenant_context(tenant_id: str) -> dict:
@@ -22,8 +95,9 @@ async def validate_tenant_context(tenant_id: str) -> dict:
     """
     activity.logger.info(f"Valideren tenant context voor '{tenant_id}'")
 
-    tenant = KNOWN_TENANTS.get(tenant_id)
-    if not tenant:
+    active_tenants = await get_all_active_tenants()
+    tenant = next((item for item in active_tenants if item["tenant_id"] == tenant_id), None)
+    if tenant is None:
         raise ApplicationError(f"Tenant '{tenant_id}' niet gevonden.", non_retryable=True)
 
     activity.logger.info(f"Tenant gevalideerd: {tenant['name']}")
@@ -77,6 +151,54 @@ def _parse_polling_providers(raw_value: str | None) -> list[PollingProviderConfi
     return providers
 
 
+def _parse_graph_subscriptions(raw_value: str | None) -> list[GraphSubscriptionConfig]:
+    if not raw_value:
+        return []
+
+    parsed_json: list[dict] | None = None
+    try:
+        value = json.loads(raw_value)
+        if isinstance(value, list):
+            parsed_json = [item for item in value if isinstance(item, dict)]
+    except json.JSONDecodeError:
+        parsed_json = None
+
+    if parsed_json is not None:
+        configs: list[GraphSubscriptionConfig] = []
+        for item in parsed_json:
+            try:
+                configs.append(GraphSubscriptionConfig.model_validate(item))
+            except Exception:
+                activity.logger.warning("Ongeldige graph_subscriptions JSON entry overgeslagen: %s", item)
+        return configs
+
+    providers: list[GraphSubscriptionConfig] = []
+    for entry in raw_value.split(","):
+        chunk = entry.strip()
+        if not chunk:
+            continue
+
+        parts = [part.strip() for part in chunk.split(":")]
+        if len(parts) < 1:
+            continue
+
+        resource = parts[0]
+        change_types = [p for p in (parts[1].split("+") if len(parts) > 1 and parts[1] else ["created", "updated"]) if p]
+        include_resource_data = _parse_bool(parts[2] if len(parts) > 2 else None, False)
+        expiration_hours = _parse_int(parts[3] if len(parts) > 3 else None, 24)
+
+        providers.append(
+            GraphSubscriptionConfig(
+                resource=resource,
+                change_types=change_types,
+                include_resource_data=include_resource_data,
+                expiration_hours=expiration_hours,
+            )
+        )
+
+    return providers
+
+
 @activity.defn
 async def get_tenant_config(tenant_id: str) -> TenantConfig:
     """
@@ -87,7 +209,7 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
     path = f"/secamo/tenants/{tenant_id}/config/"
 
     try:
-        response = ssm_client.get_parameters_by_path(Path=path, WithDecryption=False)
+        response = _get_ssm_client().get_parameters_by_path(Path=path, WithDecryption=False)
         parameters = {p["Name"].split("/")[-1]: p["Value"] for p in response.get("Parameters", [])}
     except Exception as e:
         activity.logger.warning(
@@ -95,9 +217,11 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
         )
         parameters = {}
 
+    tenant_registry = {item["tenant_id"]: item for item in await get_all_active_tenants()}
+
     config = TenantConfig(
         tenant_id=tenant_id,
-        display_name=parameters.get("display_name") or KNOWN_TENANTS.get(tenant_id, {}).get("name", "Unknown Tenant"),
+        display_name=parameters.get("display_name") or tenant_registry.get(tenant_id, {}).get("name", "Unknown Tenant"),
         edr_provider=parameters.get("edr_provider", "microsoft_defender"),
         ticketing_provider=parameters.get("ticketing_provider", "jira"),
         threat_intel_providers=[
@@ -116,6 +240,7 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
         auto_ticket_creation=_parse_bool(parameters.get("auto_ticket_creation"), True),
         misp_sharing_enabled=_parse_bool(parameters.get("misp_sharing_enabled"), False),
         polling_providers=_parse_polling_providers(parameters.get("polling_providers")),
+        graph_subscriptions=_parse_graph_subscriptions(parameters.get("graph_subscriptions")),
     )
 
     activity.logger.info(f"Tenant config geladen voor '{tenant_id}': {config.model_dump()}")
@@ -139,7 +264,7 @@ async def get_tenant_secrets(tenant_id: str, secret_type: str) -> TenantSecrets:
     path = f"/secamo/tenants/{tenant_id}/{secret_type}/"
     
     try:
-        response = ssm_client.get_parameters_by_path(
+        response = _get_ssm_client().get_parameters_by_path(
             Path=path,
             WithDecryption=True
         )
@@ -180,9 +305,9 @@ async def get_tenant_secrets(tenant_id: str, secret_type: str) -> TenantSecrets:
             )
 
         return TenantSecrets(
-            client_id=client_id,
-            client_secret=client_secret,
-            tenant_azure_id=tenant_azure_id,
+            client_id=str(client_id),
+            client_secret=str(client_secret),
+            tenant_azure_id=str(tenant_azure_id),
             **_build_optional(),
         )
 
