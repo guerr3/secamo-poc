@@ -2,10 +2,8 @@ import boto3
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 from shared.models import PollingProviderConfig, TenantConfig, TenantSecrets
+from shared.ssm_client import get_secret_bundle
 
-# We initialize the SSM client at the module level so it can be reused across activity invocations
-# but since AWS credentials need to be picked up by boto3 automatically, this is fine.
-ssm_client = boto3.client("ssm", region_name="eu-west-1")
 
 # Tenant registry — maps internal tenant_id to metadata & Azure tenant ID.
 # TODO: lookup metadata in DynamoDB. For now, we still hardcode the mapping or we rely entirely on SSM.
