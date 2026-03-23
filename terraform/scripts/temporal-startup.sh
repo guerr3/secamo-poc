@@ -316,17 +316,35 @@ echo "  Namespace aangemaakt."
 
 
 
-# ── Start Worker Container ───────────────────────────────────
-echo "[6/6] Building and starting secamo-worker container..."
+# ── Start Worker + Ingress Containers ───────────────────────
+echo "[6/6] Building and starting secamo-worker and secamo-graph-ingress containers..."
 cd "$TEMPORAL_DIR"
-docker compose up -d --build secamo-worker
+docker compose up -d --build secamo-worker secamo-graph-ingress
+
+echo "  Wachten tot secamo-graph-ingress healthy is..."
+INGRESS_ATTEMPTS=24
+INGRESS_COUNT=0
+until docker inspect --format='{{.State.Health.Status}}' secamo-graph-ingress 2>/dev/null | grep -q "^healthy$"; do
+  INGRESS_COUNT=$((INGRESS_COUNT + 1))
+  if [ "$INGRESS_COUNT" -ge "$INGRESS_ATTEMPTS" ]; then
+    echo "  FOUT: secamo-graph-ingress werd niet healthy binnen timeout"
+    docker logs secamo-graph-ingress || true
+    exit 1
+  fi
+  echo "  secamo-graph-ingress nog niet healthy, wacht 5s... (attempt $INGRESS_COUNT/$INGRESS_ATTEMPTS)"
+  sleep 5
+done
+echo "  secamo-graph-ingress is healthy en bereikbaar op poort 8081."
 
 echo ""
 echo "=== Temporal startup script completed at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 echo "Temporal Server:  0.0.0.0:7233"
 echo "Temporal UI:      0.0.0.0:8080"
+echo "Graph Ingress:    0.0.0.0:8081/healthz"
 echo "Namespace:        ${temporal_namespace}"
 echo "Worker:           secamo-worker (running)"
+echo "Ingress:          secamo-graph-ingress (running)"
 echo ""
 echo "View logs: cd /opt/temporal-compose && docker compose logs -f"
 echo "Worker logs: docker logs -f secamo-worker"
+echo "Ingress logs: docker logs -f secamo-graph-ingress"

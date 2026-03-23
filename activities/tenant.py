@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Any
 
 import boto3
 from temporalio import activity
@@ -11,14 +12,6 @@ from shared.models import (
     TenantSecrets,
 )
 
-
-# Tenant registry — maps internal tenant_id to metadata & Azure tenant ID.
-# TODO: lookup metadata in DynamoDB. For now, we still hardcode the mapping or we rely entirely on SSM.
-KNOWN_TENANTS = {
-    "tenant-demo-001": {
-        "name": "Demo Klant BV",
-    },
-}
 
 ssm_client = None
 dynamodb = None
@@ -39,52 +32,108 @@ def _get_dynamodb_resource():
     return dynamodb
 
 
-@activity.defn
-async def get_all_active_tenants() -> list[dict]:
-    """Load active tenants from DynamoDB; falls back to static bootstrap tenants."""
-    if not TENANT_TABLE_NAME:
-        return [
-            {
-                "tenant_id": tenant_id,
-                "name": metadata.get("name", tenant_id),
-                "active": True,
-            }
-            for tenant_id, metadata in KNOWN_TENANTS.items()
-        ]
+def _ssm_get_parameters_by_path(path: str, with_decryption: bool) -> list[dict[str, Any]]:
+    """Fetch all SSM parameters for a path with pagination support."""
+    client = _get_ssm_client()
+    next_token: str | None = None
+    collected: list[dict[str, Any]] = []
 
+    while True:
+        request: dict[str, Any] = {
+            "Path": path,
+            "WithDecryption": with_decryption,
+            "Recursive": True,
+        }
+        if next_token:
+            request["NextToken"] = next_token
+
+        response = client.get_parameters_by_path(**request)
+        collected.extend(response.get("Parameters", []))
+        next_token = response.get("NextToken")
+        if not next_token:
+            break
+
+    return collected
+
+
+def _discover_tenants_from_ssm() -> list[dict[str, Any]]:
+    """Discover tenant IDs and optional display names from /secamo/tenants paths."""
     try:
-        table = _get_dynamodb_resource().Table(TENANT_TABLE_NAME)
-        response = table.scan(
-            ProjectionExpression="tenant_id, display_name, #status",
-            ExpressionAttributeNames={"#status": "status"},
-        )
+        parameters = _ssm_get_parameters_by_path("/secamo/tenants/", with_decryption=False)
     except Exception as exc:
-        activity.logger.warning("Tenant scan via DynamoDB failed: %s", exc)
-        return [
-            {
-                "tenant_id": tenant_id,
-                "name": metadata.get("name", tenant_id),
-                "active": True,
-            }
-            for tenant_id, metadata in KNOWN_TENANTS.items()
-        ]
+        activity.logger.warning("Tenant discovery via SSM failed: %s", exc)
+        return []
 
-    tenants: list[dict] = []
-    for item in response.get("Items", []):
-        status = str(item.get("status", "active")).lower()
-        if status not in {"active", "enabled", "true", "1"}:
+    tenant_map: dict[str, dict[str, Any]] = {}
+    for parameter in parameters:
+        name = str(parameter.get("Name") or "")
+        parts = [part for part in name.split("/") if part]
+        if len(parts) < 3 or parts[0] != "secamo" or parts[1] != "tenants":
             continue
-        tenant_id = str(item.get("tenant_id", "")).strip()
+
+        tenant_id = parts[2].strip()
         if not tenant_id:
             continue
-        tenants.append(
-            {
-                "tenant_id": tenant_id,
-                "name": str(item.get("display_name") or tenant_id),
-                "active": True,
-            }
+
+        entry = tenant_map.setdefault(
+            tenant_id,
+            {"tenant_id": tenant_id, "name": tenant_id, "active": True},
         )
-    return tenants
+
+        if len(parts) >= 5 and parts[3] == "config" and parts[4] == "display_name":
+            value = str(parameter.get("Value") or "").strip()
+            if value:
+                entry["name"] = value
+
+    return list(tenant_map.values())
+
+
+@activity.defn
+async def get_all_active_tenants() -> list[dict]:
+    """Load active tenants from DynamoDB, falling back to SSM tenant discovery."""
+    if TENANT_TABLE_NAME:
+        try:
+            table = _get_dynamodb_resource().Table(TENANT_TABLE_NAME)
+            items: list[dict[str, Any]] = []
+            last_key: dict[str, Any] | None = None
+            while True:
+                scan_kwargs: dict[str, Any] = {
+                    "ProjectionExpression": "tenant_id, display_name, #status",
+                    "ExpressionAttributeNames": {"#status": "status"},
+                }
+                if last_key is not None:
+                    scan_kwargs["ExclusiveStartKey"] = last_key
+
+                response = table.scan(**scan_kwargs)
+                items.extend(response.get("Items", []))
+                last_key = response.get("LastEvaluatedKey")
+                if not last_key:
+                    break
+
+            tenants: list[dict[str, Any]] = []
+            for item in items:
+                status = str(item.get("status", "active")).lower()
+                if status not in {"active", "enabled", "true", "1"}:
+                    continue
+
+                tenant_id = str(item.get("tenant_id", "")).strip()
+                if not tenant_id:
+                    continue
+
+                tenants.append(
+                    {
+                        "tenant_id": tenant_id,
+                        "name": str(item.get("display_name") or tenant_id),
+                        "active": True,
+                    }
+                )
+
+            if tenants:
+                return tenants
+        except Exception as exc:
+            activity.logger.warning("Tenant scan via DynamoDB failed: %s", exc)
+
+    return _discover_tenants_from_ssm()
 
 
 @activity.defn
@@ -209,8 +258,8 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
     path = f"/secamo/tenants/{tenant_id}/config/"
 
     try:
-        response = _get_ssm_client().get_parameters_by_path(Path=path, WithDecryption=False)
-        parameters = {p["Name"].split("/")[-1]: p["Value"] for p in response.get("Parameters", [])}
+        ssm_parameters = _ssm_get_parameters_by_path(path, with_decryption=False)
+        parameters = {p["Name"].split("/")[-1]: p["Value"] for p in ssm_parameters}
     except Exception as e:
         activity.logger.warning(
             f"SSM config ophalen mislukt voor tenant '{tenant_id}', defaults worden gebruikt: {e}"
@@ -264,10 +313,7 @@ async def get_tenant_secrets(tenant_id: str, secret_type: str) -> TenantSecrets:
     path = f"/secamo/tenants/{tenant_id}/{secret_type}/"
     
     try:
-        response = _get_ssm_client().get_parameters_by_path(
-            Path=path,
-            WithDecryption=True
-        )
+        ssm_parameters = _ssm_get_parameters_by_path(path, with_decryption=True)
     except Exception as e:
         activity.logger.error(f"Fout bij ophalen SSM parameters voor {tenant_id}: {e}")
         raise ApplicationError(
@@ -276,7 +322,7 @@ async def get_tenant_secrets(tenant_id: str, secret_type: str) -> TenantSecrets:
             non_retryable=False
         )
 
-    parameters = {p["Name"].split("/")[-1]: p["Value"] for p in response.get("Parameters", [])}
+    parameters = {p["Name"].split("/")[-1]: p["Value"] for p in ssm_parameters}
 
     def _build_optional() -> dict:
         return {

@@ -15,7 +15,6 @@ terraform/modules/ingress/layers/ingress/python/
 # ── Environment & Secrets ────────────────────────────────────
 .env
 .env.*
-!.env.example
 
 # ── IDE ──────────────────────────────────────────────────────
 .vscode/
