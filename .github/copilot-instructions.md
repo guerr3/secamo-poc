@@ -1,91 +1,143 @@
-Here is the finalized prompt ready for copy-paste directly into `.github/copilot-instructions.md`:
+# Secamo Process Orchestrator - Copilot Agent Instructions
 
-```markdown
-# Secamo Process Orchestrator — Copilot Agent Instructions
+## Role And Scope
+You are an expert Python backend engineer in this repository.
 
-## Role & Context
-You are an expert Python backend engineer embedded in the **Secamo Process Orchestrator** codebase — a multi-tenant MSSP security automation platform built on **Temporal**, **AWS**, and a provider-agnostic connector layer.
+Primary stack:
+- Python 3.11
+- Temporal Python SDK (`temporalio`)
+- FastAPI ingress service
+- AWS (SSM, DynamoDB, S3) via `boto3`
+- Pydantic v2 contracts
 
-Before writing or modifying any code, consult the appropriate MCP documentation server:
-- **Temporal workflows, activities, workers, or SDK patterns** → use `temporal-mcp`
-- **Microsoft Graph, Defender, Azure AD, or M365 APIs** → use `microsoftdocs/mcp`
-- **Any third-party Python library** (e.g., `temporalio`, `boto3`, `pydantic`, `httpx`) → use `io.github.upstash/context7` with the library name as the query
+Before writing or modifying code, resolve external API/SDK behavior from documentation tools:
+- Temporal workflows/activities/workers: `temporal-mcp`
+- Microsoft Graph, Defender, Entra ID, M365: `microsoftdocs/mcp`
+- Third-party Python libraries: `io.github.upstash/context7`
 
-Do NOT guess API signatures or SDK behavior. Always resolve docs first, then write code.
+Do not guess API signatures.
 
----
+## Fast Start Commands
+Use these commands by default unless task context requires otherwise:
 
-## Architecture Rules
+```bash
+pip install -r requirements.txt
+python -m pytest -q
+python -m workers.run_worker
+python -m graph_ingress.launcher
+docker compose -f terraform/temporal-compose/docker-compose.yml up -d
+```
 
-The platform has a strict 5-layer architecture. Respect it in every change:
+Reference:
+- [README.md](../README.md)
+- [workers/README.md](../workers/README.md)
+- [graph_ingress/README.md](../graph_ingress/README.md)
+
+## Architecture Boundaries (Non-Negotiable)
+Respect the 5-layer model:
 
 ```text
-Incoming Webhook
-  → [L1] API Gateway + Lambda Authorizer (auth, tenant identity)
-  → [L2] Lambda Proxy (normalize + route to Temporal)
-  → [L3] Temporal Worker (workflow execution)
-  → [L4] Connector Adapter Layer (provider-agnostic actions)
-  → [L5] AWS Infrastructure (SSM / S3 / DynamoDB / EC2)
+Incoming Webhook/Event
+  -> [L1] API Gateway + Lambda Authorizer
+  -> [L2] Ingress Service / Lambda Proxy
+  -> [L3] Temporal Workflows
+  -> [L4] Activities + Connector Adapter Layer
+  -> [L5] AWS services + provider APIs
 ```
 
-- **Never** call AWS services directly from a workflow. Use activities.
-- **Never** call provider APIs directly from a workflow. Use connector dispatch activities.
-- **Never** add tenant credentials as hardcoded values. Always retrieve from SSM using the path convention: `/secamo/tenants/{tenant_id}/{secret_type}/{key}`.
+Rules:
+- Never call AWS services directly from workflow code.
+- Never call provider APIs directly from workflow code.
+- Never hardcode tenant credentials.
+- Always retrieve tenant secrets from SSM path: `/secamo/tenants/{tenant_id}/{secret_type}/{key}`.
 
----
+Reference:
+- [ARCHITECTURE.md](../ARCHITECTURE.md)
+- [activities/tenant.py](../activities/tenant.py)
 
-## Code Placement & Conventions
+## Source Of Truth For Queues And Routing
+Queue names are defined in [shared/config.py](../shared/config.py).
 
-| What you're building | Where it belongs |
-|---|---|
-| Temporal activity (API call, AWS op) | `activities/` |
-| Temporal workflow definition | `workflows/` |
-| Provider connector implementation | `connectors/` — must extend `connectors/base.py` |
-| Ingress/Auth/Normalization/Routing/Temporal contracts | `shared/ingress/`, `shared/auth/`, `shared/normalization/`, `shared/routing/`, `shared/temporal/` |
-| Domain and canonical model contracts | `shared/models/` |
-| Shared helpers / clients | `shared/` |
-| Worker queue registration | `workers/run_worker.py` |
-| Terraform infra changes | `terraform/modules/` or `terraform/environments/` |
+Current queues:
+- `iam-graph`
+- `soc-defender`
+- `audit`
+- `poller`
 
-New connectors must:
-1. Extend the abstract base in `connectors/base.py`
-2. Register in `connectors/registry.py`
-3. Include unit tests under `tests/`
+Workflow/activity registration by queue is in [workers/run_worker.py](../workers/run_worker.py).
 
----
+Ingress routing defaults are in:
+- [shared/routing/defaults.py](../shared/routing/defaults.py)
+- [shared/routing/registry.py](../shared/routing/registry.py)
+- [terraform/modules/ingress/src/ingress/handler.py](../terraform/modules/ingress/src/ingress/handler.py)
 
-## Temporal Best Practices
+Keep these mappings consistent when adding or renaming routes/workflows.
 
-Always consult `temporal-mcp` before writing workflow or activity code. Key rules:
-- Activities must be **idempotent** and **retryable** — avoid side effects that cannot be safely replayed
-- Workflows must be **deterministic** — no `datetime.now()`, `random`, or direct I/O inside workflow code
-- Use `workflow.execute_activity()` with explicit `schedule_to_close_timeout` and `retry_policy`
-- Register activities and workflows on the correct task queue (`iam-graph`, `soc-defender`, or `audit`)
+## Placement Conventions
+Place new code in the narrowest correct layer:
 
----
+- Temporal activities: `activities/`
+- Temporal workflows: `workflows/` and `workflows/child/`
+- Provider connectors: `connectors/` (must extend [connectors/base.py](../connectors/base.py))
+- Connector registration: [connectors/registry.py](../connectors/registry.py)
+- Shared contracts/models: `shared/` subpackages (especially `shared/models/`, `shared/routing/`, `shared/ingress/`, `shared/auth/`)
+- Worker queue registration: [workers/run_worker.py](../workers/run_worker.py)
+- Infrastructure changes: `terraform/modules/` or `terraform/environments/`
 
-## Microsoft Graph / Defender / M365
+For new connectors, always do all three:
+1. Implement connector class extending `BaseConnector`.
+2. Register it in the connector registry.
+3. Add tests under `tests/`.
 
-Use `microsoftdocs/mcp` to resolve any Graph or Defender API endpoint before implementation. Key patterns already in use:
-- Token caching via `shared/graph_client.py` — reuse, do not create new auth flows
-- All Graph operations go through `activities/graph_users.py` (IAM) or `activities/graph_alerts.py` (SOC)
+## Temporal Engineering Rules
+Workflow code must remain deterministic:
+- No direct network, filesystem, or AWS I/O inside workflows.
+- No `datetime.now()`, `random`, or other non-deterministic behavior.
+- Prefer `workflow.now()` when a logical timestamp is needed.
 
----
+Activity code must be retry-safe:
+- Keep activities idempotent.
+- Translate transient failures to retryable errors.
+- Use explicit timeouts/retry policy on `workflow.execute_activity(...)` calls.
+
+Reference examples:
+- [workflows/graph_subscription_manager.py](../workflows/graph_subscription_manager.py)
+- [workflows/iam_onboarding.py](../workflows/iam_onboarding.py)
+- [activities/_activity_errors.py](../activities/_activity_errors.py)
+
+## Graph, Defender, And Auth Patterns
+Follow existing integration patterns:
+- Reuse token caching/client logic in [shared/graph_client.py](../shared/graph_client.py).
+- Keep Graph/Defender side effects in activities (for example [activities/graph_users.py](../activities/graph_users.py), [activities/graph_alerts.py](../activities/graph_alerts.py)).
+- Keep ingress tenant resolution logic aligned with [graph_ingress/validator.py](../graph_ingress/validator.py).
 
 ## Testing Requirements
+Every new activity, workflow, or connector change should include unit tests:
+- Use `pytest` (configured via [pytest.ini](../pytest.ini)).
+- Mock AWS, Graph, connector, and Temporal boundaries; do not call live services in tests.
+- Prefer focused tests near the changed behavior (for example `tests/test_activities/`, `tests/routing/`, `tests/contracts/`).
 
-Every new activity, connector, or workflow must include:
-- A unit test in `tests/` using `pytest`
-- Mocked external calls (AWS, Graph, Temporal sandbox) — never hit live APIs in tests
-- Follow `pytest.ini` conventions already in the root
+Reference:
+- [tests/README.md](../tests/README.md)
 
----
+## Project-Specific Pitfalls
+- Avoid eager imports that trigger side effects at import time. Keep activity exports lazy in [activities/__init__.py](../activities/__init__.py).
+- Preserve frozen Pydantic input contracts for Temporal-facing models where used (for replay safety).
+- Keep connector error translation behavior explicit; do not hide failures behind success-looking payloads.
 
-## Output Quality Rules
+## Quality Bar
+- Use type annotations on all new and modified functions.
+- Use existing Pydantic contracts instead of raw dict payload plumbing where contracts already exist.
+- Add concise docstrings for public functions/classes.
+- Prefer small single-purpose activities composed by workflows.
+- Read nearest existing implementation before introducing new abstractions.
 
-- Use **type annotations** on all functions
-- Use **Pydantic models** from the appropriate `shared/` contract package (`shared/normalization`, `shared/routing`, `shared/approval`, `shared/models`) for all input/output contracts — do not use raw dicts
-- Write **docstrings** for all public classes and functions
-- Keep activities **small and single-purpose** — prefer composing multiple activities in a workflow over fat activities
-- When in doubt about an existing pattern, read the nearest existing file first before proposing new abstractions
-```
+## Link, Do Not Duplicate
+When updating documentation-like instructions or comments, link to canonical files instead of duplicating large blocks:
+- [README.md](../README.md)
+- [ARCHITECTURE.md](../ARCHITECTURE.md)
+- [activities/README.md](../activities/README.md)
+- [workflows/README.md](../workflows/README.md)
+- [connectors/README.md](../connectors/README.md)
+- [shared/README.md](../shared/README.md)
+- [terraform/README.md](../terraform/README.md)
