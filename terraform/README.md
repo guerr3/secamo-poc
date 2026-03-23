@@ -60,4 +60,4 @@ Infrastructure defined here provides the execution environment consumed by code 
 
 - `scripts/worker-startup.sh` still has the worker container launch section commented out, so PoC bootstrap is not fully automated yet.
 - Security module SSM parameters are scaffolded with placeholder values and intended to be overwritten through secure operational workflows.
-- Ingress route/policy changes should stay aligned with runtime handlers in `modules/ingress/src` and routing contracts in `shared/models/mappers.py`.
+- Ingress route/policy changes should stay aligned with runtime handlers in `modules/ingress/src`, normalization boundaries in `shared/normalization/normalizers.py`, and route mappings in `shared/routing/defaults.py`.

@@ -14,12 +14,12 @@
 | `HITL.md` | Legacy standalone HITL document (superseded by folder READMEs). | Historical reference only. |
 | `graph_ingress_service.md` | Legacy Graph ingress document (superseded by folder READMEs). | Historical reference only. |
 | `activities/` | Temporal activity layer: Graph, ticketing, notifications, audit, tenant config, connector dispatch. | `workers/run_worker.py` queue registrations and workflow activity execution. |
-| `workflows/` | Parent workflows that orchestrate IAM, SOC, ingress routing, subscriptions, and polling loops. | Temporal workers and ingress dispatchers. |
+| `workflows/` | Parent workflows that orchestrate IAM, SOC, subscriptions, and polling loops. | Temporal workers and ingress dispatchers. |
 | `workflows/child/` | Child workflows for enrichment, ticketing, HITL, incident response, and user deprovisioning. | Parent workflows in `workflows/`. |
 | `connectors/` | Provider adapter interface + concrete/stub providers. | `activities/connector_dispatch.py`, ticketing/risk workflows. |
 | `workers/` | Worker bootstrap and queue-scoped registration logic. | Runtime process entrypoint. |
 | `graph_ingress/` | FastAPI ingress service for Graph notifications and ChatOps callbacks. | Microsoft Graph webhook endpoint and workflow signaling path. |
-| `shared/` | Shared settings, auth clients, Pydantic contracts, mappers, provider factories. | Activities, workflows, ingress, connectors, tests. |
+| `shared/` | Shared settings, auth clients, ingress/normalization/routing contracts, Pydantic models, provider factories. | Activities, workflows, ingress, connectors, tests. |
 | `terraform/` | IaC for PoC and temporal-test infrastructure. | Deployment and environment provisioning. |
 | `tests/` | Unit tests for selected shared models, activities, ingress routing, and tenant config behavior. | CI/local test execution. |
 
@@ -39,9 +39,8 @@ Incoming Webhook/Event
 | Workflow | File | Trigger Source | Core Actions | Queue | Status |
 |----------|------|----------------|--------------|-------|--------|
 | `IamOnboardingWorkflow` | `workflows/iam_onboarding.py` | IAM ingress/polling lifecycle events | Create/update/delete/reset Graph users, optional license assignment, audit logging, optional poller child startup. | `iam-graph` | Active |
-| `DefenderAlertEnrichmentWorkflow` | `workflows/defender_alert_enrichment.py` | Routed Graph Defender alert notifications | Optional threat intel child, alert enrichment child, optional ticket child, Teams notify, audit log. | `soc-defender` | Active |
-| `ImpossibleTravelWorkflow` | `workflows/impossible_travel.py` | Routed sign-in/risky-user notifications | User enrichment, optional threat intel child, ticket child, HITL approval child, incident response child. | `soc-defender` | Active |
-| `GraphIngressRouterWorkflow` | `workflows/graph_ingress_router.py` | `POST /graph/notifications` via ingress dispatcher | Validates route mapping and starts child workflows per notification resource. | `soc-defender` | Active |
+| `DefenderAlertEnrichmentWorkflow` | `workflows/defender_alert_enrichment.py` | Routed ingress intent fan-out for `defender.alert` notifications | Optional threat intel child, alert enrichment child, optional ticket child, Teams notify, audit log. | `soc-defender` | Active |
+| `ImpossibleTravelWorkflow` | `workflows/impossible_travel.py` | Routed ingress intent fan-out for `defender.impossible_travel` notifications | User enrichment, optional threat intel child, ticket child, HITL approval child, incident response child. | `soc-defender` | Active |
 | `GraphSubscriptionManagerWorkflow` | `workflows/graph_subscription_manager.py` | Scheduled/manual Temporal start | Reconciles desired Graph subscriptions, renews expiring subscriptions, handles signals and continue-as-new loop. | `soc-defender` | Active |
 | `PollingManagerWorkflow` | `workflows/polling_manager.py` | Started by onboarding workflow per polling provider | Fetches provider events through connector dispatch, maps routes, starts downstream child workflows, continue-as-new loop. | `poller` | Active |
 | `AlertEnrichmentWorkflow` | `workflows/child/alert_enrichment.py` | Child of defender enrichment workflow | Connector enrichment + device/user context + risk score calculation. | `soc-defender` | Active |
@@ -77,6 +76,7 @@ Incoming Webhook/Event
 | `TENANT_TABLE_NAME` | empty | `activities/tenant.py` | DynamoDB table for active tenant discovery fallback. |
 | `GRAPH_SUBSCRIPTIONS_TABLE` | empty | `activities/graph_subscriptions.py`, `graph_ingress/validator.py` | DynamoDB table for Graph subscription metadata lookup. |
 | `HITL_TOKEN_TABLE` | empty | `activities/hitl.py`, Terraform ingress handler | DynamoDB table that stores approval tokens. |
+| `HITL_TOKEN_TTL_SECONDS` | `900` | `shared/approval/token_store.py`, Terraform ingress handler env | TTL for HITL callback token validity in seconds. |
 | `HITL_NAME_PREFIX` | `secamo-temporal-test` | `activities/hitl.py` | Name prefix used for HITL response URLs. |
 | `GRAPH_INGRESS_HOST` | `0.0.0.0` | `graph_ingress/launcher.py` | Bind host for FastAPI ingress process. |
 | `GRAPH_INGRESS_PORT` | `8081` | `graph_ingress/launcher.py` | Bind port for FastAPI ingress process. |

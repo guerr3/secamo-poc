@@ -10,7 +10,7 @@ From a workflow author perspective, integration is intentionally simple:
 
 1. Build a HiTLRequest model with business context.
 2. Execute the request_hitl_approval activity.
-3. Wait for the existing approve signal carrying ApprovalDecision.
+3. Wait for the existing approve signal carrying `ApprovalSignal`.
 
 Workflows do not handle token generation, URL construction, DynamoDB storage, channel dispatch, or ingress callback logic.
 
@@ -42,7 +42,7 @@ Workflows do not handle token generation, URL construction, DynamoDB storage, ch
          |                           |
          +-------------+-------------+
                        v
-         temporal.signal_workflow("approve", ApprovalDecision)
+         temporal.signal_workflow("approve", ApprovalSignal)
 ```
 
 ## Workflow Adoption Pattern
@@ -56,6 +56,7 @@ Any workflow can adopt the module with the same 3-step pattern:
    - Pass tenant_id, HiTLRequest, graph secrets, optional jira secrets
 3. Wait for signal approve
    - Reuse the existing signal handler and wait_condition timeout logic
+   - Signal payload shape: `approved`, `action`, `actor`, `comments`
 
 ## Post-Deploy Manual Steps
 
@@ -69,6 +70,7 @@ Any workflow can adopt the module with the same 3-step pattern:
 - Tokens are generated with cryptographically secure randomness.
 - Each email approval token is one-time use.
 - Token validity is TTL-enforced through DynamoDB expires_at.
+- Token TTL defaults to 900 seconds and can be overridden with `HITL_TOKEN_TTL_SECONDS`.
 - Ingress callback marks token used via a single atomic conditional UpdateItem.
 - Replay or expired token usage returns HTTP 410.
 - Token value is never fully logged; only masked previews are logged.
@@ -82,7 +84,7 @@ To add a new channel (for example Slack or PagerDuty), follow this extension pat
    - Register channel key in dispatch_map used by request_hitl_approval
 2. Add a corresponding ingress callback route in terraform/modules/ingress/src/ingress/handler.py
    - Validate channel-specific callback auth
-   - Build ApprovalDecision-compatible payload
+   - Build ApprovalSignal-compatible payload
    - Signal workflow approve
 3. Add API Gateway + Terraform route wiring for the new callback endpoint
    - Route resources

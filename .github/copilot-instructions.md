@@ -41,7 +41,8 @@ Incoming Webhook
 | Temporal activity (API call, AWS op) | `activities/` |
 | Temporal workflow definition | `workflows/` |
 | Provider connector implementation | `connectors/` — must extend `connectors/base.py` |
-| Pydantic models / contracts | `shared/models/` |
+| Ingress/Auth/Normalization/Routing/Temporal contracts | `shared/ingress/`, `shared/auth/`, `shared/normalization/`, `shared/routing/`, `shared/temporal/` |
+| Domain and canonical model contracts | `shared/models/` |
 | Shared helpers / clients | `shared/` |
 | Worker queue registration | `workers/run_worker.py` |
 | Terraform infra changes | `terraform/modules/` or `terraform/environments/` |
@@ -83,7 +84,7 @@ Every new activity, connector, or workflow must include:
 ## Output Quality Rules
 
 - Use **type annotations** on all functions
-- Use **Pydantic models** from `shared/models/` for all input/output contracts — do not use raw dicts
+- Use **Pydantic models** from the appropriate `shared/` contract package (`shared/normalization`, `shared/routing`, `shared/approval`, `shared/models`) for all input/output contracts — do not use raw dicts
 - Write **docstrings** for all public classes and functions
 - Keep activities **small and single-purpose** — prefer composing multiple activities in a workflow over fat activities
 - When in doubt about an existing pattern, read the nearest existing file first before proposing new abstractions

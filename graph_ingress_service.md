@@ -12,9 +12,8 @@ Implemented components:
 - `graph_ingress/validator.py`
 - `graph_ingress/dispatcher.py`
 - `activities/graph_subscriptions.py`
-- `workflows/graph_ingress_router.py`
 - `workflows/graph_subscription_manager.py`
-- model updates in `shared/models/`
+- model and boundary updates in `shared/models/`, `shared/normalization/`, `shared/routing/`, and `shared/temporal/`
 - worker registration updates in `workers/run_worker.py`
 
 ## Runtime Flow
@@ -30,11 +29,9 @@ FastAPI graph ingress service
   -> GraphIngressValidator resolves tenant by:
      1) clientState format: secamo:{tenant_id}:{resource}
      2) fallback metadata lookup by subscription_id
-  -> TemporalGraphIngressDispatcher starts GraphIngressRouterWorkflow
-
-GraphIngressRouterWorkflow
-  -> resolve_webhook_route(provider, resource)
-  -> start routed child workflow with deterministic child workflow id
+  -> TemporalGraphIngressDispatcher converts notifications to canonical events
+  -> CanonicalEvent -> WorkflowIntent normalization
+  -> Route fan-out starts mapped workflows (best-effort)
 
 Existing domain workflows
   -> DefenderAlertEnrichmentWorkflow
@@ -90,7 +87,7 @@ Fallback storage:
 
 ## New Route Mapping
 
-Webhook routing (`resolve_webhook_route`) currently includes:
+Route mappings (`shared/routing/defaults.py`) currently include:
 
 - `security/alerts` -> `DefenderAlertEnrichmentWorkflow` on `soc-defender`
 - `security/alerts_v2` -> `DefenderAlertEnrichmentWorkflow` on `soc-defender`

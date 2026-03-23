@@ -63,6 +63,7 @@ resource "aws_lambda_function" "proxy" {
       TEMPORAL_HOST      = var.temporal_host
       TEMPORAL_NAMESPACE = var.temporal_namespace
       HITL_TOKEN_TABLE   = var.hitl_token_table
+      HITL_TOKEN_TTL_SECONDS = tostring(var.hitl_token_ttl_seconds)
       LOG_LEVEL          = "INFO"
     }
   }

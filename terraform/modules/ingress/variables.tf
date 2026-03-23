@@ -60,6 +60,12 @@ variable "hitl_token_table" {
   default     = ""
 }
 
+variable "hitl_token_ttl_seconds" {
+  description = "HiTL approval token TTL in seconds"
+  type        = number
+  default     = 900
+}
+
 # ── Resource Policy ─────────────────────────────────────────
 
 variable "allowed_cidr_blocks" {

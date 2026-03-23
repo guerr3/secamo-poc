@@ -1,3 +1,9 @@
+"""Temporal worker bootstrap module.
+
+Responsibility: load workflows/activities per queue and run worker processes.
+This module must not contain ingress routing logic or provider webhook parsing.
+"""
+
 import asyncio
 import logging
 import sys
@@ -243,9 +249,8 @@ def load_workflows() -> dict:
         sys.exit(1)
 
     try:
-        from workflows.graph_ingress_router import GraphIngressRouterWorkflow
         from workflows.graph_subscription_manager import GraphSubscriptionManagerWorkflow
-        soc_workflows.extend([GraphIngressRouterWorkflow, GraphSubscriptionManagerWorkflow])
+        soc_workflows.extend([GraphSubscriptionManagerWorkflow])
         logger.info("✓ Graph ingress/subscription workflows geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Graph ingress/subscription workflows: {e}")

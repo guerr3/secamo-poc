@@ -9,6 +9,9 @@ Routes:
 
 All infrastructure (Temporal client, event parsing, response formatting,
 async dispatch) is provided by the ingress_sdk Lambda Layer.
+
+Responsibility: route ingress requests to Temporal workflows through shared normalization/routing boundaries.
+This module must not contain workflow business logic or activity implementations.
 """
 
 import hashlib
@@ -27,13 +30,44 @@ from ingress_sdk import temporal, response
 from ingress_sdk.dispatch import async_handler
 from ingress_sdk.event import IngressEvent
 
-from shared.models import IamIngressRequest
+from shared.models import CanonicalEvent, IamIngressRequest
+from shared.models.mappers import to_security_event
+from shared.normalization.normalizers import canonical_event_to_workflow_intent
+from shared.routing import build_default_route_registry
+from shared.temporal.dispatcher import RouteFanoutDispatcher, WorkflowStarter
 from mappers import normalize_event_body
 
 
 _dynamo = boto3.client("dynamodb", region_name="eu-west-1")
 _ssm = boto3.client("ssm", region_name="eu-west-1")
 logger = logging.getLogger("ingress.hitl")
+
+
+class _IngressSdkWorkflowStarter(WorkflowStarter):
+    """Workflow starter adapter bridging route fan-out to ingress_sdk temporal starts."""
+
+    async def start(
+        self,
+        *,
+        workflow_name: str,
+        workflow_input: dict,
+        task_queue: str,
+        tenant_id: str,
+        workflow_id: str,
+    ) -> dict:
+        return await temporal.start_workflow(
+            workflow=workflow_name,
+            input=workflow_input,
+            tenant_id=tenant_id,
+            task_queue=task_queue,
+            workflow_id=workflow_id,
+        )
+
+
+_route_fanout_dispatcher = RouteFanoutDispatcher(
+    route_registry=build_default_route_registry(),
+    workflow_starter=_IngressSdkWorkflowStarter(),
+)
 
 
 def _html_response(status_code: int, body: str) -> dict:
@@ -383,7 +417,6 @@ async def handle_event(event: IngressEvent) -> dict:
             f"No workflow mapping found for provider='{provider}' event_type='{event_type}'",
         )
 
-    workflow_name, task_queue = routing
     normalized = normalize_event_body(
         provider=provider,
         event_type=event_type,
@@ -391,13 +424,30 @@ async def handle_event(event: IngressEvent) -> dict:
         raw_body=event.body,
     )
 
-    result = await temporal.start_workflow(
-        workflow=workflow_name,
-        input=normalized,
+    canonical_event = CanonicalEvent(
+        event_type=str(normalized.get("event_type") or event_type),
         tenant_id=tenant_id,
-        task_queue=task_queue,
+        provider=provider,
+        external_event_id=str(normalized.get("event_id") or ""),
+        subject=str((normalized.get("alert") or {}).get("title") or "ingress event"),
+        severity=normalized.get("severity"),
+        payload=normalized,
+        request_id=str(normalized.get("correlation_id") or ""),
     )
-    return response.accepted(result)
+    workflow_input = to_security_event(canonical_event).model_dump(mode="json")
+    intent = canonical_event_to_workflow_intent(canonical_event, workflow_input=workflow_input)
+
+    fanout_report = await _route_fanout_dispatcher.dispatch_intent(intent)
+    return response.accepted(
+        {
+            "tenant_id": tenant_id,
+            "provider": provider,
+            "event_type": event_type,
+            "attempted": fanout_report.attempted,
+            "succeeded": fanout_report.succeeded,
+            "failed": fanout_report.failed,
+        }
+    )
 
 
 # ── Lambda Entrypoint ────────────────────────────────────────

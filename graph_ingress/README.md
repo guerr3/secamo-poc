@@ -9,7 +9,7 @@
 | `__init__.py` | Package marker. | Python module loading. |
 | `app.py` | FastAPI app with `/graph/notifications` (challenge + notification receive), `/healthz`, and ChatOps router mount. | Uvicorn launcher and ingress container runtime. |
 | `chatops_webhook.py` | Handles `/chatops/action` callback payloads, validates signatures via provider implementations, and signals workflow handles. | ChatOps buttons/cards from Teams and Slack. |
-| `dispatcher.py` | Starts `GraphIngressRouterWorkflow` on the SOC queue using Temporal client. | `app.py` dispatch path after validation. |
+| `dispatcher.py` | Converts validated Graph notifications to canonical events, normalizes to `WorkflowIntent`, and starts routed workflows via shared fan-out dispatcher. | `app.py` dispatch path after validation. |
 | `launcher.py` | Uvicorn startup entrypoint, reading `GRAPH_INGRESS_HOST` and `GRAPH_INGRESS_PORT`. | Local run and container command. |
 | `validator.py` | Resolves tenant from `clientState` or Graph subscription metadata table and filters unsupported notifications. | `app.py` notification intake flow. |
 
@@ -20,5 +20,5 @@ This service is the HTTP boundary for Microsoft Graph webhook payloads before or
 ## Notes / Extension Points
 
 - `validator.py` supports both clientState-based tenant resolution and optional DynamoDB subscription metadata lookup via `GRAPH_SUBSCRIPTIONS_TABLE`.
-- New webhook resources require route updates in `shared/models/mappers.py` so `GraphIngressRouterWorkflow` can start the correct workflow.
+- New webhook resources require route updates in `shared/routing/defaults.py` and, if needed, normalization updates in `shared/normalization/normalizers.py`.
 - Keep callback verification strict; provider signatures are validated before workflow signals are sent.
