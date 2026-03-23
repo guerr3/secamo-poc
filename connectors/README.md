@@ -21,5 +21,7 @@ Activities call connector operations through `get_connector(...)` from this fold
 ## Notes / Extension Points
 
 - New providers must implement `BaseConnector`, then be added to `_CONNECTOR_FACTORIES` in `registry.py`.
+- Connectors must either return a successful payload or raise a typed connector exception. Avoid returning `{"success": false}` for real failures.
+- Use typed connector errors to express retry intent: permanent configuration/validation failures should be raised as non-retryable categories, while transient HTTP/network failures should be raised as retryable categories.
 - Stub connectors intentionally return non-success placeholder results and should be replaced before claiming provider support.
 - Keep connector methods idempotent and explicit because they are called through Temporal activity retries.

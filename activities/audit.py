@@ -8,7 +8,21 @@ from temporalio import activity
 
 from shared.config import AUDIT_TABLE_NAME
 
-_dynamo = boto3.client("dynamodb", region_name="eu-west-1")
+
+class _LazyDynamoClient:
+    def __init__(self) -> None:
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            self._client = boto3.client("dynamodb", region_name="eu-west-1")
+        return self._client
+
+    def put_item(self, *args, **kwargs):
+        return self._get_client().put_item(*args, **kwargs)
+
+
+_dynamo = _LazyDynamoClient()
 
 
 @activity.defn

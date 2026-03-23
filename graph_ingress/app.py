@@ -26,9 +26,15 @@ async def graph_validation_challenge(validationToken: str | None = None) -> Plai
     return PlainTextResponse(content=validationToken, media_type="text/plain")
 
 
-@app.post("/graph/notifications")
-async def receive_graph_notifications(request: Request) -> dict:
+@app.post("/graph/notifications", response_model=None)
+async def receive_graph_notifications(
+    request: Request,
+    validationToken: str | None = None,
+) -> dict:
     """Validate and enqueue Graph change notifications for Temporal routing."""
+    if validationToken:
+        return PlainTextResponse(content=validationToken, media_type="text/plain")
+
     payload = await request.json()
     envelope = GraphNotificationEnvelope.model_validate(payload)
 

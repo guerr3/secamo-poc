@@ -30,8 +30,7 @@ from ingress_sdk import temporal, response
 from ingress_sdk.dispatch import async_handler
 from ingress_sdk.event import IngressEvent
 
-from shared.models import CanonicalEvent, IamIngressRequest
-from shared.models.mappers import to_security_event
+from shared.models import CanonicalEvent, IamIngressRequest, SecurityEvent
 from shared.normalization.normalizers import canonical_event_to_workflow_intent
 from shared.routing import build_default_route_registry
 from shared.temporal.dispatcher import RouteFanoutDispatcher, WorkflowStarter
@@ -383,10 +382,15 @@ async def handle_internal(event: IngressEvent) -> dict:
         raw_body=iam_request.model_dump(mode="json"),
     )
 
+    try:
+        security_event = SecurityEvent.model_validate(normalized)
+    except Exception as exc:
+        return response.error(400, f"Normalized IAM payload failed SecurityEvent validation: {exc}")
+
     # 2. Start workflow via ingress_sdk with universal SecurityEvent payload shape.
     result = await temporal.start_workflow(
         workflow="IamOnboardingWorkflow",
-        input=normalized,
+        input=security_event.model_dump(mode="json"),
         tenant_id=event.tenant_id,
         task_queue="iam-graph",
     )
@@ -424,17 +428,22 @@ async def handle_event(event: IngressEvent) -> dict:
         raw_body=event.body,
     )
 
+    try:
+        security_event = SecurityEvent.model_validate(normalized)
+    except Exception as exc:
+        return response.error(400, f"Normalized ingress payload failed SecurityEvent validation: {exc}")
+
     canonical_event = CanonicalEvent(
-        event_type=str(normalized.get("event_type") or event_type),
+        event_type=security_event.event_type,
         tenant_id=tenant_id,
         provider=provider,
-        external_event_id=str(normalized.get("event_id") or ""),
-        subject=str((normalized.get("alert") or {}).get("title") or "ingress event"),
-        severity=normalized.get("severity"),
-        payload=normalized,
-        request_id=str(normalized.get("correlation_id") or ""),
+        external_event_id=security_event.event_id,
+        subject=(security_event.alert.title if security_event.alert else "ingress event"),
+        severity=security_event.severity,
+        payload=dict(event.body),
+        request_id=security_event.correlation_id,
     )
-    workflow_input = to_security_event(canonical_event).model_dump(mode="json")
+    workflow_input = security_event.model_dump(mode="json")
     intent = canonical_event_to_workflow_intent(canonical_event, workflow_input=workflow_input)
 
     fanout_report = await _route_fanout_dispatcher.dispatch_intent(intent)

@@ -16,8 +16,24 @@ from shared.graph_client import get_graph_token
 from shared.models import HiTLRequest, TenantSecrets
 from activities.hitl_renderers import _render_approval_email
 
-_ssm = boto3.client("ssm", region_name="eu-west-1")
-_dynamo = boto3.client("dynamodb", region_name="eu-west-1")
+
+class _LazyBotoClient:
+    def __init__(self, service_name: str, region_name: str) -> None:
+        self._service_name = service_name
+        self._region_name = region_name
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            self._client = boto3.client(self._service_name, region_name=self._region_name)
+        return self._client
+
+    def __getattr__(self, name: str):
+        return getattr(self._get_client(), name)
+
+
+_ssm = _LazyBotoClient("ssm", "eu-west-1")
+_dynamo = _LazyBotoClient("dynamodb", "eu-west-1")
 
 
 def _token_table_name() -> str:

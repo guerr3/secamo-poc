@@ -105,12 +105,20 @@ class TemporalGraphIngressDispatcher:
         fanout = RouteFanoutDispatcher(build_default_route_registry(), starter)
 
         dispatched = 0
+        ignored = 0
         request_id = str(uuid4())
         for item in notifications:
             canonical_event = self._item_to_canonical(tenant_id, item, request_id)
             if canonical_event is None:
+                ignored += 1
                 continue
             security_event = to_security_event(canonical_event)
+
+            if canonical_event.event_type == "defender.impossible_travel":
+                if security_event.user is None or not security_event.user.user_principal_name:
+                    ignored += 1
+                    continue
+
             intent = canonical_event_to_workflow_intent(
                 canonical_event,
                 workflow_input=security_event.model_dump(mode="json"),
@@ -118,4 +126,4 @@ class TemporalGraphIngressDispatcher:
             report = await fanout.dispatch_intent(intent)
             dispatched += report.succeeded
 
-        return f"dispatched={dispatched}"
+        return f"dispatched={dispatched},ignored={ignored}"

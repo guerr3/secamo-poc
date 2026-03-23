@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from connectors.base import BaseConnector
+from connectors.errors import ConnectorConfigurationError
 from connectors.jira import JiraConnector
 from connectors.microsoft_defender import MicrosoftGraphConnector
 from connectors.stub_providers import (
@@ -42,7 +43,7 @@ _CONNECTOR_FACTORIES: dict[str, ConnectorFactory] = {
 def get_connector(provider: str, tenant_id: str, secrets: TenantSecrets) -> BaseConnector:
     factory = _CONNECTOR_FACTORIES.get(provider.lower())
     if factory is None:
-        raise ValueError(f"No connector registered for provider '{provider}'")
+        raise ConnectorConfigurationError(f"No connector registered for provider '{provider}'")
     return factory(tenant_id, secrets)
 
 

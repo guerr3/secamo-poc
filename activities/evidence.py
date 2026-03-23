@@ -9,7 +9,21 @@ from temporalio import activity
 from shared.config import EVIDENCE_BUCKET_NAME
 from shared.models import EvidenceBundle
 
-_s3 = boto3.client("s3", region_name="eu-west-1")
+
+class _LazyS3Client:
+    def __init__(self) -> None:
+        self._client = None
+
+    def _get_client(self):
+        if self._client is None:
+            self._client = boto3.client("s3", region_name="eu-west-1")
+        return self._client
+
+    def put_object(self, *args, **kwargs):
+        return self._get_client().put_object(*args, **kwargs)
+
+
+_s3 = _LazyS3Client()
 
 
 @activity.defn

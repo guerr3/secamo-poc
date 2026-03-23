@@ -33,5 +33,7 @@ Workflows in [../workflows/README.md](../workflows/README.md) call these functio
 ## Notes / Extension Points
 
 - Keep activity inputs/outputs on Pydantic models from `shared/models` so workflow boundaries stay stable.
+- `connector_dispatch.py` is the translation boundary between connector exceptions and Temporal `ApplicationError` retry semantics.
+- Connector activities should not silently convert provider failures into successful result objects.
 - `threat_intel.py` currently has limited provider depth compared with configured provider keys; additional providers should be added via connector dispatch.
 - Tenant secret lookups follow `/secamo/tenants/{tenant_id}/{secret_type}/{key}` and should not be bypassed.

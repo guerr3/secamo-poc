@@ -1,18 +1,26 @@
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from urllib.parse import quote
 
 import httpx
-from azure.identity.aio import ClientSecretCredential
 
 from connectors.base import BaseConnector
+from connectors.errors import (
+    ConnectorPermanentError,
+    ConnectorTransientError,
+    ConnectorUnsupportedActionError,
+)
+from shared.graph_client import get_defender_token, get_graph_token
 from shared.models import CanonicalEvent
 
 
 class MicrosoftGraphConnector(BaseConnector):
     """Microsoft Graph/Defender connector implementation."""
+
+    _MAX_ATTEMPTS = 3
 
     _RESOURCE_CONFIG: dict[str, dict[str, str]] = {
         "defender_alerts": {
@@ -57,17 +65,74 @@ class MicrosoftGraphConnector(BaseConnector):
     def provider(self) -> str:
         return "microsoft_defender"
 
-    async def _get_graph_token(self) -> str:
-        credential = ClientSecretCredential(
-            tenant_id=self.secrets.tenant_azure_id,
-            client_id=self.secrets.client_id,
-            client_secret=self.secrets.client_secret,
-        )
-        try:
-            token = await credential.get_token("https://graph.microsoft.com/.default")
-            return token.token
-        finally:
-            await credential.close()
+    @staticmethod
+    def _retry_delay_seconds(retry_after_header: str | None, attempt: int) -> float:
+        if retry_after_header:
+            try:
+                return max(0.0, float(retry_after_header))
+            except ValueError:
+                pass
+        return float(min(2 ** (attempt - 1), 30))
+
+    async def _request_with_retry(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        params: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+        timeout: float = 20.0,
+    ) -> httpx.Response:
+        last_error: Exception | None = None
+
+        for attempt in range(1, self._MAX_ATTEMPTS + 1):
+            try:
+                # Open a new connection on each attempt to avoid sticky failures.
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    response = await client.request(
+                        method=method,
+                        url=url,
+                        headers=headers,
+                        params=params,
+                        json=json,
+                    )
+            except httpx.RequestError as exc:
+                last_error = exc
+                if attempt == self._MAX_ATTEMPTS:
+                    break
+                await asyncio.sleep(self._retry_delay_seconds(None, attempt))
+                continue
+
+            if response.status_code in (429, 503):
+                if attempt == self._MAX_ATTEMPTS:
+                    raise ConnectorTransientError(
+                        f"Graph request throttled/unavailable after retries: status={response.status_code} url={url}"
+                    )
+                await asyncio.sleep(self._retry_delay_seconds(response.headers.get("Retry-After"), attempt))
+                continue
+
+            if response.status_code in (400, 401, 403, 404):
+                raise ConnectorPermanentError(
+                    f"Graph request rejected: status={response.status_code} url={url}"
+                )
+
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as exc:
+                if 500 <= response.status_code < 600:
+                    last_error = exc
+                    if attempt == self._MAX_ATTEMPTS:
+                        break
+                    await asyncio.sleep(self._retry_delay_seconds(response.headers.get("Retry-After"), attempt))
+                    continue
+                raise ConnectorPermanentError(
+                    f"Graph request failed: status={response.status_code} url={url}"
+                ) from exc
+
+            return response
+
+        raise ConnectorTransientError(f"Graph request failed after retries: {url}") from last_error
 
     @staticmethod
     def _parse_iso_datetime(value: str | None) -> datetime | None:
@@ -119,12 +184,14 @@ class MicrosoftGraphConnector(BaseConnector):
         )
 
     async def fetch_events(self, query: dict) -> list[CanonicalEvent]:
-        token = await self._get_graph_token()
+        token = await get_graph_token(self.secrets)
         top = int(query.get("top", 20))
         resource_type = str(query.get("resource_type", "defender_alerts")).strip().lower() or "defender_alerts"
         resource_config = self._RESOURCE_CONFIG.get(resource_type)
         if resource_config is None:
-            raise ValueError(f"Unsupported resource_type '{resource_type}' for provider '{self.provider}'")
+            raise ConnectorUnsupportedActionError(
+                f"Unsupported resource_type '{resource_type}' for provider '{self.provider}'"
+            )
 
         since_raw = query.get("since")
         since_dt = self._parse_iso_datetime(str(since_raw)) if since_raw else None
@@ -145,10 +212,13 @@ class MicrosoftGraphConnector(BaseConnector):
         }
 
         headers = {"Authorization": f"Bearer {token}"}
-        async with httpx.AsyncClient(timeout=20.0) as client:
-            response = await client.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            payload = response.json()
+        response = await self._request_with_retry(
+            "GET",
+            url,
+            headers=headers,
+            params=params,
+        )
+        payload = response.json()
 
         events: list[CanonicalEvent] = []
         for item in payload.get("value", []):
@@ -164,52 +234,50 @@ class MicrosoftGraphConnector(BaseConnector):
         return events
 
     async def execute_action(self, action: str, payload: dict) -> dict:
-        token = await self._get_graph_token()
-        headers = {"Authorization": f"Bearer {token}"}
-
         if action == "enrich_alert":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
             alert_id = payload["alert_id"]
             url = f"https://graph.microsoft.com/v1.0/security/alerts_v2/{quote(alert_id)}"
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                return response.json()
+            response = await self._request_with_retry("GET", url, headers=headers)
+            return response.json()
 
         if action == "get_user_alerts":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
             user_email = payload["user_email"]
             filt = quote(f"userStates/any(u:u/userPrincipalName eq '{user_email}')")
             url = f"https://graph.microsoft.com/v1.0/security/alerts_v2?$filter={filt}"
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await client.get(url, headers=headers)
-                response.raise_for_status()
-                body = response.json()
-                return {"alerts": body.get("value", [])}
+            response = await self._request_with_retry("GET", url, headers=headers)
+            body = response.json()
+            return {"alerts": body.get("value", [])}
 
         if action == "isolate_device":
             # TODO: validate tenant API permissions for Defender isolate endpoint.
+            token = await get_defender_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
             device_id = payload["device_id"]
             comment = payload.get("comment", "Isolated by Secamo workflow")
             body = {"Comment": comment, "IsolationType": "Full"}
             url = f"https://api.securitycenter.microsoft.com/api/machines/{quote(device_id)}/isolate"
-            async with httpx.AsyncClient(timeout=20.0) as client:
-                response = await client.post(url, headers=headers, json=body)
-                response.raise_for_status()
-                return response.json() if response.content else {"status": "submitted"}
+            response = await self._request_with_retry("POST", url, headers=headers, json=body)
+            return response.json() if response.content else {"status": "submitted"}
 
-        raise ValueError(f"Unsupported action '{action}' for provider '{self.provider}'")
+        raise ConnectorUnsupportedActionError(
+            f"Unsupported action '{action}' for provider '{self.provider}'"
+        )
 
     async def health_check(self) -> dict:
-        token = await self._get_graph_token()
+        token = await get_graph_token(self.secrets)
         headers = {"Authorization": f"Bearer {token}"}
         url = "https://graph.microsoft.com/v1.0/organization?$top=1"
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.get(url, headers=headers)
-            ok = response.status_code == 200
-            return {
-                "healthy": ok,
-                "status_code": response.status_code,
-                "provider": self.provider,
-            }
+        response = await self._request_with_retry("GET", url, headers=headers, timeout=15.0)
+        ok = response.status_code == 200
+        return {
+            "healthy": ok,
+            "status_code": response.status_code,
+            "provider": self.provider,
+        }
 
 
 # Backwards-compatible alias for older imports.

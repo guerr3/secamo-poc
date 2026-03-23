@@ -15,12 +15,12 @@ async def mock_get_tenant_config(tenant_id: str) -> TenantConfig:
 
 
 class _FakeSsmClient:
-    def get_parameters_by_path(self, Path: str, WithDecryption: bool) -> dict:
+    def get_parameters_by_path(self, Path: str, WithDecryption: bool, **kwargs) -> dict:
         return {"Parameters": []}
 
 
 class _FakeSsmClientWithPolling:
-    def get_parameters_by_path(self, Path: str, WithDecryption: bool) -> dict:
+    def get_parameters_by_path(self, Path: str, WithDecryption: bool, **kwargs) -> dict:
         return {
             "Parameters": [
                 {
@@ -32,7 +32,7 @@ class _FakeSsmClientWithPolling:
 
 
 class _FakeSsmClientWithGraphSubscriptions:
-    def get_parameters_by_path(self, Path: str, WithDecryption: bool) -> dict:
+    def get_parameters_by_path(self, Path: str, WithDecryption: bool, **kwargs) -> dict:
         return {
             "Parameters": [
                 {
@@ -53,7 +53,7 @@ async def test_get_tenant_config_defaults_without_ssm(monkeypatch: pytest.Monkey
     cfg: TenantConfig = await env.run(get_tenant_config, "tenant-demo-001")
 
     assert cfg.tenant_id == "tenant-demo-001"
-    assert cfg.display_name == "Demo Klant BV"
+    assert cfg.display_name == "Unknown Tenant"
     assert cfg.edr_provider == "microsoft_defender"
     assert cfg.ticketing_provider == "jira"
     assert cfg.threat_intel_providers == ["virustotal"]

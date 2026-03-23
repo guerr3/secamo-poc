@@ -21,8 +21,20 @@ class _FakeDynamo:
         return _FakeTable(self._item)
 
 
-def test_validator_uses_client_state_prefix() -> None:
-    validator = GraphIngressValidator()
+def test_validator_resolves_via_subscription_lookup(monkeypatch) -> None:
+    import graph_ingress.validator as validator_module
+
+    monkeypatch.setattr(validator_module, "GRAPH_SUBSCRIPTIONS_TABLE", "secamo-graph-subscriptions")
+    validator = GraphIngressValidator(validation_app_ids={"app-id"})
+    validator._ddb = _FakeDynamo(
+        {
+            "subscription_id": "sub-1",
+            "tenant_id": "tenant-demo-001",
+            "client_state": "secamo:tenant-demo-001:security-alerts_v2",
+        }
+    )
+    validator._validate_validation_tokens = lambda tokens: True
+
     payload = GraphNotificationEnvelope.model_validate(
         {
             "value": [
@@ -41,11 +53,11 @@ def test_validator_uses_client_state_prefix() -> None:
     assert resolved[0].tenant_id == "tenant-demo-001"
 
 
-def test_validator_falls_back_to_subscription_lookup(monkeypatch) -> None:
+def test_validator_rejects_client_state_mismatch(monkeypatch) -> None:
     import graph_ingress.validator as validator_module
 
     monkeypatch.setattr(validator_module, "GRAPH_SUBSCRIPTIONS_TABLE", "secamo-graph-subscriptions")
-    validator = GraphIngressValidator()
+    validator = GraphIngressValidator(validation_app_ids={"app-id"})
     validator._ddb = _FakeDynamo(
         {
             "subscription_id": "sub-2",
@@ -53,6 +65,7 @@ def test_validator_falls_back_to_subscription_lookup(monkeypatch) -> None:
             "client_state": "secamo:tenant-demo-002:security-alerts_v2",
         }
     )
+    validator._validate_validation_tokens = lambda tokens: True
 
     payload = GraphNotificationEnvelope.model_validate(
         {
@@ -61,12 +74,42 @@ def test_validator_falls_back_to_subscription_lookup(monkeypatch) -> None:
                     "subscriptionId": "sub-2",
                     "changeType": "updated",
                     "resource": "security/alerts_v2/2",
-                    "clientState": "secamo:tenant-demo-002:security-alerts_v2",
+                    "clientState": "tampered-state",
                 }
             ]
         }
     )
 
     resolved = validator.validate_and_resolve(payload)
-    assert len(resolved) == 1
-    assert resolved[0].tenant_id == "tenant-demo-002"
+    assert resolved == []
+
+
+def test_validator_rejects_unvalidated_rich_notifications(monkeypatch) -> None:
+    import graph_ingress.validator as validator_module
+
+    monkeypatch.setattr(validator_module, "GRAPH_SUBSCRIPTIONS_TABLE", "secamo-graph-subscriptions")
+    validator = GraphIngressValidator(validation_app_ids=set())
+    validator._ddb = _FakeDynamo(
+        {
+            "subscription_id": "sub-3",
+            "tenant_id": "tenant-demo-003",
+            "client_state": "secamo:tenant-demo-003:security-alerts_v2",
+        }
+    )
+
+    payload = GraphNotificationEnvelope.model_validate(
+        {
+            "value": [
+                {
+                    "subscriptionId": "sub-3",
+                    "changeType": "created",
+                    "resource": "security/alerts_v2/3",
+                    "clientState": "secamo:tenant-demo-003:security-alerts_v2",
+                }
+            ],
+            "validationTokens": ["invalid-token"],
+        }
+    )
+
+    resolved = validator.validate_and_resolve(payload)
+    assert resolved == []

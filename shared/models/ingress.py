@@ -70,3 +70,4 @@ class GraphNotificationEnvelope(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     value: list[GraphNotificationItem] = Field(default_factory=list)
+    validationTokens: list[str] | None = None

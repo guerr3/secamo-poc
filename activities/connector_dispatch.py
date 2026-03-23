@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
+from connectors.errors import ConnectorPermanentError, ConnectorTransientError
 from connectors.registry import get_connector
 from shared.models import (
     CanonicalEvent,
@@ -13,6 +15,31 @@ from shared.models import (
 )
 
 
+def _raise_connector_activity_error(operation: str, provider: str, error: Exception) -> None:
+    """Translate connector errors into explicit Temporal retry semantics."""
+    message = f"connector {operation} failed for provider '{provider}': {error}"
+
+    if isinstance(error, ConnectorPermanentError):
+        raise ApplicationError(
+            message,
+            type="ConnectorPermanentError",
+            non_retryable=True,
+        ) from error
+
+    if isinstance(error, ConnectorTransientError):
+        raise ApplicationError(
+            message,
+            type="ConnectorTransientError",
+            non_retryable=False,
+        ) from error
+
+    raise ApplicationError(
+        message,
+        type="ConnectorActivityError",
+        non_retryable=False,
+    ) from error
+
+
 @activity.defn
 async def connector_fetch_events(
     tenant_id: str,
@@ -21,9 +48,17 @@ async def connector_fetch_events(
     secrets: TenantSecrets,
 ) -> ConnectorFetchResult:
     activity.logger.info("[%s] Connector fetch events via provider '%s'", tenant_id, provider)
-    connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
-    events = await connector.fetch_events(query)
-    return ConnectorFetchResult(provider=provider, events=events, raw_count=len(events))
+    try:
+        connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
+        events = await connector.fetch_events(query)
+        return ConnectorFetchResult(provider=provider, events=events, raw_count=len(events))
+    except Exception as exc:
+        activity.logger.exception(
+            "[%s] Connector fetch events failed for provider '%s'",
+            tenant_id,
+            provider,
+        )
+        _raise_connector_activity_error("fetch_events", provider, exc)
 
 
 @activity.defn
@@ -35,15 +70,39 @@ async def connector_execute_action(
     secrets: TenantSecrets,
 ) -> ConnectorActionResult:
     activity.logger.info("[%s] Connector action '%s' via provider '%s'", tenant_id, action, provider)
-    connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
-    data = await connector.execute_action(action=action, payload=payload)
-    return ConnectorActionResult(
-        provider=provider,
-        action=action,
-        success=True,
-        details="action completed",
-        data=data,
-    )
+    try:
+        connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
+        data = await connector.execute_action(action=action, payload=payload)
+
+        success = not (isinstance(data, dict) and data.get("success") is False)
+        details = "action completed"
+        if isinstance(data, dict):
+            details = str(data.get("details") or data.get("reason") or details)
+
+        if not success:
+            raise ApplicationError(
+                f"connector action '{action}' reported failure for provider '{provider}': {details}",
+                type="ConnectorActionReportedFailure",
+                non_retryable=True,
+            )
+
+        return ConnectorActionResult(
+            provider=provider,
+            action=action,
+            success=True,
+            details=details,
+            data=data if isinstance(data, dict) else {},
+        )
+    except ApplicationError:
+        raise
+    except Exception as exc:
+        activity.logger.exception(
+            "[%s] Connector action '%s' failed for provider '%s'",
+            tenant_id,
+            action,
+            provider,
+        )
+        _raise_connector_activity_error("execute_action", provider, exc)
 
 
 @activity.defn
@@ -53,13 +112,21 @@ async def connector_health_check(
     secrets: TenantSecrets,
 ) -> ConnectorHealthResult:
     activity.logger.info("[%s] Connector health check via provider '%s'", tenant_id, provider)
-    connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
-    result = await connector.health_check()
-    return ConnectorHealthResult(
-        provider=provider,
-        healthy=bool(result.get("healthy", False)),
-        details=str(result),
-    )
+    try:
+        connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
+        result = await connector.health_check()
+        return ConnectorHealthResult(
+            provider=provider,
+            healthy=bool(result.get("healthy", False)),
+            details=str(result),
+        )
+    except Exception as exc:
+        activity.logger.exception(
+            "[%s] Connector health check failed for provider '%s'",
+            tenant_id,
+            provider,
+        )
+        _raise_connector_activity_error("health_check", provider, exc)
 
 
 @activity.defn
@@ -86,16 +153,24 @@ async def connector_threat_intel_fanout(
     )
 
     for provider in providers:
-        connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
-        response = await connector.execute_action("lookup_indicator", {"indicator": indicator})
-        score = float(response.get("reputation_score", 0.0))
-        if score > best.reputation_score:
-            best = ThreatIntelResult(
-                indicator=indicator,
-                is_malicious=bool(response.get("is_malicious", False)),
-                provider=provider,
-                reputation_score=score,
-                details=response.get("details", ""),
+        try:
+            connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
+            response = await connector.execute_action("lookup_indicator", {"indicator": indicator})
+            score = float(response.get("reputation_score", 0.0))
+            if score > best.reputation_score:
+                best = ThreatIntelResult(
+                    indicator=indicator,
+                    is_malicious=bool(response.get("is_malicious", False)),
+                    provider=provider,
+                    reputation_score=score,
+                    details=response.get("details", ""),
+                )
+        except Exception as exc:
+            activity.logger.warning(
+                "[%s] Threat-intel lookup failed for provider '%s': %s",
+                tenant_id,
+                provider,
+                exc,
             )
 
     return best
