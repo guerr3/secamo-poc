@@ -1,234 +1,105 @@
-# Secamo Process Orchestrator
+# Root
 
-## 1. Project Overview
+> The repository root ties together Temporal workflows, activity implementations, ingress services, connector adapters, and Terraform deployment assets for a multi-tenant security orchestrator.
 
-Secamo is a multi-tenant security automation orchestrator for MSSP teams that standardizes IAM and SOC response workflows across client environments. It is designed for security engineers operating managed tenants and ops engineers deploying tenant-specific configuration, with Temporal-based workflows coordinating provider APIs, ticketing actions, notifications, and auditable evidence handling through a provider-agnostic connector layer.
+## Files
 
-## 2. Architecture
+| File | Purpose | Used By |
+|------|---------|---------|
+| `README.md` | Repository-level architecture, workflow, connector, and runtime guide. | Engineers onboarding to the codebase. |
+| `requirements.txt` | Python dependency lock list for runtime and tests. | Local development, Docker image build, CI test runs. |
+| `pytest.ini` | Pytest configuration (`asyncio_mode = auto`). | `pytest` test runner. |
+| `Dockerfile` | Builds the worker runtime image and starts `python -m workers.run_worker`. | Temporal test compose stack and EC2/container deployments. |
+| `payload.json` | Sample ingress payload for local/manual workflow trigger tests. | Manual API and workflow validation. |
+| `HITL.md` | Legacy standalone HITL document (superseded by folder READMEs). | Historical reference only. |
+| `graph_ingress_service.md` | Legacy Graph ingress document (superseded by folder READMEs). | Historical reference only. |
+| `activities/` | Temporal activity layer: Graph, ticketing, notifications, audit, tenant config, connector dispatch. | `workers/run_worker.py` queue registrations and workflow activity execution. |
+| `workflows/` | Parent workflows that orchestrate IAM, SOC, ingress routing, subscriptions, and polling loops. | Temporal workers and ingress dispatchers. |
+| `workflows/child/` | Child workflows for enrichment, ticketing, HITL, incident response, and user deprovisioning. | Parent workflows in `workflows/`. |
+| `connectors/` | Provider adapter interface + concrete/stub providers. | `activities/connector_dispatch.py`, ticketing/risk workflows. |
+| `workers/` | Worker bootstrap and queue-scoped registration logic. | Runtime process entrypoint. |
+| `graph_ingress/` | FastAPI ingress service for Graph notifications and ChatOps callbacks. | Microsoft Graph webhook endpoint and workflow signaling path. |
+| `shared/` | Shared settings, auth clients, Pydantic contracts, mappers, provider factories. | Activities, workflows, ingress, connectors, tests. |
+| `terraform/` | IaC for PoC and temporal-test infrastructure. | Deployment and environment provisioning. |
+| `tests/` | Unit tests for selected shared models, activities, ingress routing, and tenant config behavior. | CI/local test execution. |
 
-The platform is organized into five connected layers: API Gateway and Lambda Authorizer validate ingress requests and enforce tenant identity, ingress services normalize provider payloads and route workflow starts, Temporal Workers execute deterministic workflows and activities, the Connector Adapter Layer abstracts provider-specific integrations behind stable actions, and AWS infrastructure services provide tenant configuration and persistence (SSM Parameter Store, S3, DynamoDB, EC2).
-
-```text
-Incoming Webhook
-      |
-      v
-[Layer 1] API Gateway + Lambda Authorizer
-      |
-      v
-[Layer 2] Ingress Services (Lambda/FastAPI normalize + route)
-      |
-      v
-[Layer 3] Temporal Worker (workflow execution)
-      |
-      v
-[Layer 4] Connector Adapter Layer (provider action)
-      |
-      v
-[Layer 5] AWS Infrastructure (SSM/S3/DynamoDB/EC2)
-      |
-      v
-Completed Workflow Action (ticket, notification, audit, containment)
-```
-
-`temporal-test` deployment topology:
+## Architecture Overview
 
 ```text
-                        Internet
-                           |
-                           v
-          +-------------------------------+
-          | API Gateway (REST Ingress)   |
-          | /api/v1/ingress/*            |
-          +---------------+---------------+
-                              |
-                              v
-          +-------------------------------+
-          | Lambda Authorizer            |
-          | tenant identity + auth check |
-          +---------------+---------------+
-                              |
-                              v
-          +-------------------------------+
-          | Lambda Proxy (VPC-attached)  |
-          | normalize + route workflow    |
-          +---------------+---------------+
-                              |
-                        gRPC :7233
-                              |
-       +------------------v------------------+
-       | VPC 10.99.0.0/16 (temporal-test)    |
-       |                                      |
-       |  Public Subnet                       |
-       |  +--------------------------------+  |
-       |  | EC2 secamo-temporal-test      |  |
-       |  | Docker Compose stack:         |  |
-       |  | - Temporal Server             |  |
-       |  | - Temporal UI (:8080)         |  |
-       |  | - PostgreSQL                  |  |
-      |  | - secamo-worker               |  |
-      |  | - secamo-graph-ingress        |  |
-       |  +---------------+----------------+  |
-       +------------------|-------------------+
-                              |
-      +-------------------+-----------------------------+
-      | AWS Service Integrations                        |
-      | - SSM Parameter Store (tenant config/secrets)   |
-      | - S3 (evidence bundles)                         |
-      | - DynamoDB (audit logs)                         |
-      +-------------------------------------------------+
+Incoming Webhook/Event
+  -> [L1] API Gateway + Lambda Authorizer (tenant auth/identity)
+  -> [L2] Ingress Service (normalize payload + dispatch)
+  -> [L3] Temporal Workflows (deterministic orchestration)
+  -> [L4] Activity + Connector Layer (provider-specific actions)
+  -> [L5] AWS Services (SSM, S3, DynamoDB, EC2/RDS)
 ```
 
-## 3. Supported Workflows
+## Supported Workflows
 
-| ID    | Name                      | Trigger                                                                        | Description                                                                                                                                                         |
-| ----- | ------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| WF-01 | IAM Onboarding            | IAM ingress request (`/api/v1/ingress/iam`)                                    | Executes user lifecycle actions (`create`, `update`, `delete`, `password_reset`) using tenant-scoped Graph credentials, then writes audit records.                  |
-| WF-02 | Defender Alert Enrichment | Security alert ingress (`/api/v1/ingress/defender` or `/api/v1/ingress/event`) | Enriches alert context, optionally runs threat intel fanout, computes risk score, creates/updates ticketing artifacts, sends notifications, and audits the outcome. |
-| WF-05 | Impossible Travel HITL    | Impossible travel event ingress (`/api/v1/ingress/event`)                      | Creates triage ticket, sends human approval request, applies analyst decision or timeout policy (escalation/isolation), and optionally collects evidence bundle.    |
+| Workflow | File | Trigger Source | Core Actions | Queue | Status |
+|----------|------|----------------|--------------|-------|--------|
+| `IamOnboardingWorkflow` | `workflows/iam_onboarding.py` | IAM ingress/polling lifecycle events | Create/update/delete/reset Graph users, optional license assignment, audit logging, optional poller child startup. | `iam-graph` | Active |
+| `DefenderAlertEnrichmentWorkflow` | `workflows/defender_alert_enrichment.py` | Routed Graph Defender alert notifications | Optional threat intel child, alert enrichment child, optional ticket child, Teams notify, audit log. | `soc-defender` | Active |
+| `ImpossibleTravelWorkflow` | `workflows/impossible_travel.py` | Routed sign-in/risky-user notifications | User enrichment, optional threat intel child, ticket child, HITL approval child, incident response child. | `soc-defender` | Active |
+| `GraphIngressRouterWorkflow` | `workflows/graph_ingress_router.py` | `POST /graph/notifications` via ingress dispatcher | Validates route mapping and starts child workflows per notification resource. | `soc-defender` | Active |
+| `GraphSubscriptionManagerWorkflow` | `workflows/graph_subscription_manager.py` | Scheduled/manual Temporal start | Reconciles desired Graph subscriptions, renews expiring subscriptions, handles signals and continue-as-new loop. | `soc-defender` | Active |
+| `PollingManagerWorkflow` | `workflows/polling_manager.py` | Started by onboarding workflow per polling provider | Fetches provider events through connector dispatch, maps routes, starts downstream child workflows, continue-as-new loop. | `poller` | Active |
+| `AlertEnrichmentWorkflow` | `workflows/child/alert_enrichment.py` | Child of defender enrichment workflow | Connector enrichment + device/user context + risk score calculation. | `soc-defender` | Active |
+| `ThreatIntelEnrichmentWorkflow` | `workflows/child/threat_intel_enrichment.py` | Child of defender/impossible-travel workflows | Fanout threat intel lookup activity. | `soc-defender` | Active |
+| `TicketCreationWorkflow` | `workflows/child/ticket_creation.py` | Child of defender/impossible-travel workflows | Creates ticket through provider-agnostic connector activity. | `soc-defender` | Active |
+| `HiTLApprovalWorkflow` | `workflows/child/hitl_approval.py` | Child of impossible-travel workflow | Sends approval request, waits for signal, handles timeout policy and optional escalation/isolation action. | `soc-defender` | Active |
+| `IncidentResponseWorkflow` | `workflows/child/incident_response.py` | Child of impossible-travel workflow | Applies analyst decision (dismiss/isolate/disable user) and optional evidence collection. | `soc-defender` | Active |
+| `UserDeprovisioningWorkflow` | `workflows/child/user_deprovisioning.py` | Child of onboarding workflow on delete action | Revokes sessions and deletes user in Graph. | `iam-graph` | Active |
 
-Additional orchestrators and child workflows used by the worker:
+## Supported Connectors
 
-- WF-06 Graph Ingress Router handles `/graph/notifications` and starts routed SOC child workflows.
-- WF-07 Graph Subscription Manager reconciles per-tenant Graph subscription lifecycle state via continue-as-new.
-- PollingManagerWorkflow on `poller` queue for provider polling loops.
-- Child SOC workflows: `AlertEnrichmentWorkflow`, `ThreatIntelEnrichmentWorkflow`, `TicketCreationWorkflow`, `HiTLApprovalWorkflow`, `IncidentResponseWorkflow`.
-- Child IAM workflow: `UserDeprovisioningWorkflow`.
-- ChatOps callback endpoint `/chatops/action` mounted in the Graph ingress service, signaling running workflows.
+| Connector Key | File/Class | Type | Status |
+|---------------|------------|------|--------|
+| `microsoft_defender` | `connectors/microsoft_defender.py` / `MicrosoftGraphConnector` | EDR + Graph security data/actions | Active |
+| `jira` | `connectors/jira.py` / `JiraConnector` | Ticketing | Active |
+| `crowdstrike` | `connectors/stub_providers.py` / `CrowdStrikeConnector` | EDR | `[STUB]` |
+| `sentinelone` | `connectors/stub_providers.py` / `SentinelOneConnector` | EDR | `[STUB]` |
+| `halo_itsm` | `connectors/stub_providers.py` / `HaloItsmConnector` | Ticketing | `[STUB]` |
+| `servicenow` | `connectors/stub_providers.py` / `ServiceNowConnector` | Ticketing | `[STUB]` |
+| `virustotal` | `connectors/stub_providers.py` / `VirusTotalConnector` | Threat intel | `[STUB]` |
+| `abuseipdb` | `connectors/stub_providers.py` / `AbuseIpdbConnector` | Threat intel | `[STUB]` |
+| `misp` | `connectors/stub_providers.py` / `MispConnector` | Threat intel sharing | `[STUB]` |
 
-## 4. Supported Connectors
+## Environment Variables Reference
 
-| Provider           | Type                    | Status     |
-| ------------------ | ----------------------- | ---------- |
-| Microsoft Defender | EDR / Alerting          | Production |
-| Microsoft Graph    | Identity / Security API | Production |
-| Jira               | Ticketing               | Production |
-| HaloITSM           | Ticketing               | Stub       |
-| ServiceNow         | Ticketing               | Stub       |
-| CrowdStrike        | EDR                     | Stub       |
-| SentinelOne        | EDR                     | Stub       |
-| VirusTotal         | Threat Intel            | Stub       |
-| AbuseIPDB          | Threat Intel            | Stub       |
-| MISP               | Threat Intel Sharing    | Stub       |
-| Microsoft Teams    | Notification            | Production |
+| Variable | Default | Used In | Purpose |
+|----------|---------|---------|---------|
+| `TEMPORAL_ADDRESS` | `temporal:7233` | `shared/config.py`, worker and ingress Temporal clients | Temporal frontend address. |
+| `TEMPORAL_NAMESPACE` | `default` | `shared/config.py`, worker and ingress Temporal clients | Temporal namespace for workflow execution. |
+| `SECAMO_SENDER_EMAIL` | `noreply@secamo.local` | `shared/config.py`, email notification activity | Sender identity for Graph mail notifications. |
+| `EVIDENCE_BUCKET_NAME` | empty | `shared/config.py`, evidence activity | S3 bucket for evidence bundles. |
+| `AUDIT_TABLE_NAME` | empty | `shared/config.py`, audit activity | DynamoDB table for audit records. |
+| `TENANT_TABLE_NAME` | empty | `activities/tenant.py` | DynamoDB table for active tenant discovery fallback. |
+| `GRAPH_SUBSCRIPTIONS_TABLE` | empty | `activities/graph_subscriptions.py`, `graph_ingress/validator.py` | DynamoDB table for Graph subscription metadata lookup. |
+| `HITL_TOKEN_TABLE` | empty | `activities/hitl.py`, Terraform ingress handler | DynamoDB table that stores approval tokens. |
+| `HITL_NAME_PREFIX` | `secamo-temporal-test` | `activities/hitl.py` | Name prefix used for HITL response URLs. |
+| `GRAPH_INGRESS_HOST` | `0.0.0.0` | `graph_ingress/launcher.py` | Bind host for FastAPI ingress process. |
+| `GRAPH_INGRESS_PORT` | `8081` | `graph_ingress/launcher.py` | Bind port for FastAPI ingress process. |
+| `LOG_LEVEL` | `INFO` | `terraform/modules/ingress/src/authorizer/handler.py` | Lambda authorizer logging level. |
+| `CACHE_TTL_SECONDS` | `300` | `terraform/modules/ingress/src/authorizer/handler.py` | Authorizer credential cache TTL. |
 
-ChatOps providers (used by `shared/providers/chatops` and webhook callbacks):
+## Quick Start
 
-- Microsoft Teams
-- Slack
+1. Create and activate a Python 3.11 virtual environment.
+2. Install dependencies with `pip install -r requirements.txt`.
+3. Start a Temporal stack (for local test, use `docker compose -f terraform/temporal-compose/docker-compose.yml up -d`).
+4. Export required runtime variables at minimum: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`; optionally set storage/audit/tenant table variables.
+5. Start workers with `python -m workers.run_worker`.
+6. Start ingress service with `python -m graph_ingress.launcher`.
+7. Run tests with `pytest`.
 
-AI triage provider support (used by `activities/triage.py`):
+## How It Fits
 
-- Azure OpenAI (implemented)
-- AWS Bedrock (planned)
-- Local provider (planned)
+The root folder connects all runtime layers: ingress receives and validates events, workflows orchestrate deterministic execution, activities perform side effects, connectors isolate provider APIs, and Terraform deploys the infrastructure those layers depend on. Folder-level details are documented in [activities/README.md](activities/README.md), [workflows/README.md](workflows/README.md), [connectors/README.md](connectors/README.md), [workers/README.md](workers/README.md), [graph_ingress/README.md](graph_ingress/README.md), [shared/README.md](shared/README.md), [terraform/README.md](terraform/README.md), and [tests/README.md](tests/README.md).
 
-For connector implementation and extension details, see `connectors/README.md`.
+## Notes / Extension Points
 
-## 5. Repository Structure
+- Tenant config and secrets are loaded from SSM paths under `/secamo/tenants/{tenant_id}/...`; avoid hardcoded credentials.
+- `workflows/iam_onboarding.py` contains a TODO hardcoded temporary password path that should be replaced with secure password generation.
+- Connector keys are centrally registered in `connectors/registry.py`; new provider support requires implementation plus registration.
 
-```text
-secamo-poc/
-|-- activities/                 # Temporal activities (Graph, ticketing, notifications, audit, tenant config)
-|   |-- graph_users.py          # IAM-related Graph operations
-|   |-- graph_alerts.py         # Alert enrichment, alert lookup, containment, risk inputs
-|   |-- graph_subscriptions.py  # Graph /subscriptions lifecycle + metadata persistence
-|   |-- triage.py               # AI triage decision support activity
-|   |-- chatops.py              # Interactive ChatOps notification activity
-|   |-- connector_dispatch.py   # Provider-agnostic connector dispatch activities
-|   |-- tenant.py               # Tenant validation, config retrieval, secret retrieval
-|   `-- audit.py                # Audit log persistence and evidence bundle handling
-|-- graph_ingress/              # FastAPI service for Graph validation + webhook ingress
-|   |-- app.py                  # /graph/notifications endpoints
-|   |-- chatops_webhook.py      # /chatops/action callback endpoint
-|   |-- launcher.py             # Process launcher entrypoint for ingress container
-|   |-- validator.py            # tenant resolution + clientState checks
-|   `-- dispatcher.py           # Temporal workflow dispatch bridge
-|-- connectors/                 # Connector adapter contract + provider implementations
-|   |-- base.py                 # Abstract connector interface
-|   |-- registry.py             # Provider registration and lookup
-|   |-- microsoft_defender.py   # Defender connector implementation
-|   |-- jira.py                 # Jira connector implementation
-|   `-- stub_providers.py       # Stub connectors for planned providers
-|-- shared/                     # Shared configuration, models, and helpers
-|   |-- config.py               # Worker runtime settings and queue names
-|   |-- graph_client.py         # Cached Graph/Defender token helper
-|   |-- providers/              # AI + ChatOps provider abstractions and factories
-|   |-- workflow_helpers.py     # Shared workflow bootstrap helper
-|   `-- models/                 # Pydantic contracts for workflows, commands, ingress, canonical events
-|-- workflows/                  # Temporal workflow definitions
-|   |-- iam_onboarding.py       # WF-01
-|   |-- defender_alert_enrichment.py  # WF-02
-|   |-- graph_ingress_router.py # WF-06
-|   |-- graph_subscription_manager.py # WF-07
-|   `-- impossible_travel.py    # WF-05
-|-- workers/                    # Worker bootstrap and queue registration
-|   `-- run_worker.py           # Starts workers for iam-graph, soc-defender, audit, poller queues
-|-- terraform/                  # Infrastructure as Code for AWS deployment
-|   |-- environments/           # Environment-specific root modules
-|   `-- modules/                # Reusable VPC, ingress, compute, storage, security modules
-|-- tests/                      # Unit tests for models, activities, ingress mappers, token cache
-`-- requirements.txt            # Python dependencies
-```
-
-## 6. Deploying the Test Environment
-
-For complete infrastructure details, use `terraform/environments/temporal-test`.
-
-1. Provision tenant parameters in SSM using these conventions:
-   - Config path: `/secamo/tenants/{tenant_id}/config/{key}`
-   - Secret path: `/secamo/tenants/{tenant_id}/{secret_type}/{key}`
-2. Deploy infrastructure:
-   - `cd terraform/environments/temporal-test`
-   - `terraform init`
-   - `terraform plan -var="my_ip=<YOUR_PUBLIC_IP>/32"`
-   - `terraform apply -var="my_ip=<YOUR_PUBLIC_IP>/32"`
-3. Start the worker process from repository root:
-   - `python -m workers.run_worker`
-4. Start the Graph ingress service:
-      - `python -m graph_ingress.launcher`
-5. Or start both as containers in the Temporal compose stack:
-      - `docker compose -f terraform/temporal-compose/docker-compose.yml up -d secamo-worker secamo-graph-ingress`
-
-## 7. Onboarding a New Tenant
-
-1. Create an Entra ID app registration in the client tenant for Secamo automation.
-2. Grant required Microsoft Graph and Defender API permissions, then provide admin consent in the client tenant.
-3. Provision tenant configuration and secrets in SSM:
-   - `/secamo/tenants/{tenant_id}/config/*`
-   - `/secamo/tenants/{tenant_id}/graph/*`
-   - `/secamo/tenants/{tenant_id}/ticketing/*`
-   - `/secamo/tenants/{tenant_id}/threatintel/*`
-   - `/secamo/tenants/{tenant_id}/chatops/*`
-   - `/secamo/tenants/{tenant_id}/ai_triage/*`
-4. Optional multi-tenant Graph subscription persistence:
-   - Configure `GRAPH_SUBSCRIPTIONS_TABLE` for direct `subscription_id -> tenant_id` lookup.
-   - Configure `TENANT_TABLE_NAME` to enable dynamic tenant registry activity.
-5. Validate ingress and routing with test requests:
-   - Provider ingress: `/api/v1/ingress/event`
-   - Graph ingress challenge: `/graph/notifications?validationToken=...`
-   - ChatOps callback: `/chatops/action`
-6. Example provider ingress call:
-   - `curl -X POST "https://<api-id>.execute-api.<region>.amazonaws.com/v1/api/v1/ingress/event" -H "Authorization: Bearer <token>" -H "Content-Type: application/json" -d '{"provider":"microsoft_defender","event_type":"alert","id":"a-1","severity":"high","title":"test"}'`
-
-## 8. Adding a New Connector
-
-1. Implement a provider connector class under `connectors/` following the base contract.
-2. Register the provider key in `connectors/registry.py`.
-3. Update tenant configuration values and routing mappings as needed.
-4. Add or update dispatch and normalizer coverage for ingress-triggered flows.
-5. Add tests for connector behavior and workflow activity integration.
-
-Full connector extension guidance is documented in `connectors/README.md`.
-
-## 9. Environment Variables
-
-- `TEMPORAL_ADDRESS` (required): Temporal gRPC endpoint used by workers and ingress dispatcher (for example `temporal:7233`).
-- `TEMPORAL_NAMESPACE` (required): Temporal namespace for workflow execution.
-- `AWS_REGION` (required): AWS region used by boto clients for SSM/S3/DynamoDB access.
-- `EVIDENCE_BUCKET_NAME` (optional): S3 bucket used by evidence collection activities.
-- `AUDIT_TABLE_NAME` (optional): DynamoDB table used by audit log activity.
-- `SECAMO_SENDER_EMAIL` (optional): Sender identity for outbound email notifications.
-- `GRAPH_SUBSCRIPTIONS_TABLE` (optional): DynamoDB table for Graph subscription metadata lookup by `subscription_id`.
-- `TENANT_TABLE_NAME` (optional): DynamoDB table for dynamic active tenant discovery.
-- `GRAPH_INGRESS_HOST` (optional): Bind host for ingress launcher, default `0.0.0.0`.
-- `GRAPH_INGRESS_PORT` (optional): Bind port for ingress launcher, default `8081`.

@@ -1,3 +1,5 @@
+> DEPRECATED: This document is superseded by [activities/README.md](activities/README.md), [workflows/child/README.md](workflows/child/README.md), and [terraform/README.md](terraform/README.md).
+
 # Secamo HiTL Module
 
 ## Overview

@@ -1,3 +1,5 @@
+> DEPRECATED: This document is superseded by [graph_ingress/README.md](graph_ingress/README.md), [workflows/README.md](workflows/README.md), and [activities/README.md](activities/README.md).
+
 # Graph Ingress Service (Implemented)
 
 ## Overview
