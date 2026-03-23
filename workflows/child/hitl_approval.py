@@ -44,19 +44,22 @@ class HiTLApprovalWorkflow:
             retry_policy=RETRY_POLICY,
         )
 
-        await workflow.execute_activity(
-            teams_send_notification,
-            args=[
-                request.tenant_id,
-                request.graph_secrets.teams_webhook_url or "",
-                (
-                    f"HITL decision requested. Ticket: {request.hitl_request.ticket_key}. "
-                    f"Awaiting signal on child workflow {workflow.info().workflow_id}."
-                ),
-            ],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
-        )
+        try:
+            await workflow.execute_activity(
+                teams_send_notification,
+                args=[
+                    request.tenant_id,
+                    request.graph_secrets.teams_webhook_url or "",
+                    (
+                        f"HITL decision requested. Ticket: {request.hitl_request.ticket_key}. "
+                        f"Awaiting signal on child workflow {workflow.info().workflow_id}."
+                    ),
+                ],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=RETRY_POLICY,
+            )
+        except Exception as exc:
+            workflow.logger.warning("HITL Teams reminder failed; continuing: %s", exc)
 
         approval_timeout = timedelta(hours=request.config.hitl_timeout_hours)
         try:

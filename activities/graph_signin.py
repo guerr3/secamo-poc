@@ -5,6 +5,7 @@ from urllib.parse import quote
 import httpx
 from temporalio import activity
 
+from activities._activity_errors import application_error_from_http_status
 from shared.graph_client import get_graph_token
 from shared.models import RiskyUserResult, TenantSecrets
 
@@ -16,12 +17,8 @@ def _auth_headers(token: str) -> dict[str, str]:
 
 
 def _handle_http_error(tenant_id: str, provider: str, status: int, action: str) -> None:
-    if status in (401, 403):
-        raise RuntimeError(f"[{tenant_id}] Auth failed for {provider}: {status}")
-    if status == 429:
-        raise RuntimeError(f"[{tenant_id}] {provider} rate limited during {action}: {status}")
-    if status >= 500:
-        raise RuntimeError(f"[{tenant_id}] {provider} server error during {action}: {status}")
+    if status >= 400:
+        raise application_error_from_http_status(tenant_id, provider, action, status)
 
 
 def _to_risky_user_result(payload: dict) -> RiskyUserResult:
@@ -53,7 +50,12 @@ async def graph_get_risky_user(tenant_id: str, risky_user_id: str, secrets: Tena
         return None
     _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_get_risky_user")
     if response.status_code != 200:
-        raise RuntimeError(f"[{tenant_id}] graph_get_risky_user failed: {response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_get_risky_user",
+            response.status_code,
+        )
 
     return _to_risky_user_result(response.json())
 
@@ -112,7 +114,12 @@ async def graph_get_signin_history(
 
     _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_get_signin_history")
     if response.status_code != 200:
-        return []
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_get_signin_history",
+            response.status_code,
+        )
     return response.json().get("value", [])
 
 
@@ -141,6 +148,11 @@ async def graph_list_risky_users(
 
     _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_list_risky_users")
     if response.status_code != 200:
-        return []
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_list_risky_users",
+            response.status_code,
+        )
 
     return [_to_risky_user_result(item) for item in response.json().get("value", [])]

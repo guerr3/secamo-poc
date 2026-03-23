@@ -145,32 +145,38 @@ class DefenderAlertEnrichmentWorkflow:
             f"Ticket: {ticket.url}"
         )
 
-        await workflow.execute_activity(
-            teams_send_notification,
-            args=[event.tenant_id, graph_secrets.teams_webhook_url or "", notification_msg],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=runtime_retry,
-        )
+        try:
+            await workflow.execute_activity(
+                teams_send_notification,
+                args=[event.tenant_id, graph_secrets.teams_webhook_url or "", notification_msg],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=runtime_retry,
+            )
+        except Exception as exc:
+            workflow.logger.warning("Teams notification failed, continuing workflow: %s", exc)
 
         # 8. Audit log
-        await workflow.execute_activity(
-            create_audit_log,
-            args=[
-                event.tenant_id,
-                workflow.info().workflow_id,
-                "defender_alert_enrichment",
-                f"Ticket {ticket.ticket_id} aangemaakt met risicoscore {risk.score}",
-                {
-                    "alert_id": enriched.alert_id,
-                    "risk_score": risk.score,
-                    "risk_level": risk.level,
-                    "ticket_id": ticket.ticket_id,
-                    "requester": event.requester,
-                },
-            ],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=runtime_retry,
-        )
+        try:
+            await workflow.execute_activity(
+                create_audit_log,
+                args=[
+                    event.tenant_id,
+                    workflow.info().workflow_id,
+                    "defender_alert_enrichment",
+                    f"Ticket {ticket.ticket_id} aangemaakt met risicoscore {risk.score}",
+                    {
+                        "alert_id": enriched.alert_id,
+                        "risk_score": risk.score,
+                        "risk_level": risk.level,
+                        "ticket_id": ticket.ticket_id,
+                        "requester": event.requester,
+                    },
+                ],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=runtime_retry,
+            )
+        except Exception as exc:
+            workflow.logger.warning("Audit log write failed, continuing workflow: %s", exc)
 
         result_msg = (
             f"WF-02 afgerond — alert '{enriched.alert_id}' verrijkt, "

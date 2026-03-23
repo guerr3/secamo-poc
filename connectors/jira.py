@@ -163,6 +163,36 @@ class JiraConnector(BaseConnector):
             )
         return events
 
+    async def _resolve_transition_id(self, issue_key: str, transition_name: str | None = None) -> str:
+        response = await self._request_with_retry(
+            "GET",
+            f"{self._base_url()}/rest/api/3/issue/{issue_key}/transitions",
+        )
+        transitions = response.json().get("transitions", [])
+        if not transitions:
+            raise ConnectorPermanentError(f"No available transitions for issue '{issue_key}'")
+
+        if transition_name:
+            desired = transition_name.strip().lower()
+            for transition in transitions:
+                name = str(transition.get("name") or "").strip().lower()
+                if name == desired:
+                    transition_id = str(transition.get("id") or "").strip()
+                    if transition_id:
+                        return transition_id
+
+        preferred_names = {"done", "closed", "close", "resolve", "resolved"}
+        for transition in transitions:
+            name = str(transition.get("name") or "").strip().lower()
+            transition_id = str(transition.get("id") or "").strip()
+            if transition_id and name in preferred_names:
+                return transition_id
+
+        fallback_id = str(transitions[0].get("id") or "").strip()
+        if fallback_id:
+            return fallback_id
+        raise ConnectorPermanentError(f"Unable to resolve transition for issue '{issue_key}'")
+
     async def execute_action(self, action: str, payload: dict) -> dict:
         base_url = self._base_url()
 
@@ -201,11 +231,22 @@ class JiraConnector(BaseConnector):
 
         if action in ("close_ticket", "close_issue"):
             issue_key = payload["ticket_id"]
-            transition_id = payload["transition_id"]
+            transition_id = payload.get("transition_id")
+            if not transition_id:
+                transition_id = await self._resolve_transition_id(
+                    issue_key,
+                    transition_name=payload.get("transition_name"),
+                )
+
+            transition_request: dict[str, Any] = {"transition": {"id": str(transition_id)}}
+            resolution = payload.get("resolution")
+            if resolution:
+                transition_request["fields"] = {"resolution": {"name": str(resolution)}}
+
             await self._request_with_retry(
                 "POST",
                 f"{base_url}/rest/api/3/issue/{issue_key}/transitions",
-                json={"transition": {"id": str(transition_id)}},
+                json=transition_request,
             )
             return {"ticket_id": issue_key, "closed": True}
 

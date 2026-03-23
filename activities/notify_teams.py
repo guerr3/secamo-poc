@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import httpx
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
+from activities._activity_errors import application_error_from_http_status, raise_activity_error
 from shared.models import NotificationResult
 
 
@@ -14,8 +16,11 @@ def _result(success: bool, channel: str, message_id: str | None = None) -> Notif
 async def teams_send_notification(tenant_id: str, channel_webhook_url: str, message: str) -> NotificationResult:
     activity.logger.info(f"[{tenant_id}] teams_send_notification")
     if not channel_webhook_url:
-        activity.logger.error(f"[{tenant_id}] teams_send_notification missing webhook url")
-        return _result(False, "teams")
+        raise_activity_error(
+            f"[{tenant_id}] teams_send_notification missing webhook url",
+            error_type="MissingTeamsWebhook",
+            non_retryable=True,
+        )
 
     payload = {"@type": "MessageCard", "text": message}
     try:
@@ -26,24 +31,32 @@ async def teams_send_notification(tenant_id: str, channel_webhook_url: str, mess
                 json=payload,
             )
         if response.status_code >= 400:
-            activity.logger.error(
-                f"[{tenant_id}] teams_send_notification failed status={response.status_code}"
+            raise application_error_from_http_status(
+                tenant_id,
+                "microsoft_teams",
+                "teams_send_notification",
+                response.status_code,
             )
-            return _result(False, "teams")
         return _result(True, "teams", message_id=response.headers.get("x-ms-request-id"))
+    except ApplicationError:
+        raise
     except Exception as exc:
-        activity.logger.error(
-            f"[{tenant_id}] teams_send_notification error={type(exc).__name__}"
+        raise_activity_error(
+            f"[{tenant_id}] teams_send_notification unexpected error={type(exc).__name__}",
+            error_type="TeamsNotificationUnexpectedError",
+            non_retryable=False,
         )
-        return _result(False, "teams")
 
 
 @activity.defn
 async def teams_send_adaptive_card(tenant_id: str, channel_webhook_url: str, card_payload: dict) -> NotificationResult:
     activity.logger.info(f"[{tenant_id}] teams_send_adaptive_card")
     if not channel_webhook_url:
-        activity.logger.error(f"[{tenant_id}] teams_send_adaptive_card missing webhook url")
-        return _result(False, "teams")
+        raise_activity_error(
+            f"[{tenant_id}] teams_send_adaptive_card missing webhook url",
+            error_type="MissingTeamsWebhook",
+            non_retryable=True,
+        )
 
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
@@ -53,13 +66,18 @@ async def teams_send_adaptive_card(tenant_id: str, channel_webhook_url: str, car
                 json=card_payload,
             )
         if response.status_code >= 400:
-            activity.logger.error(
-                f"[{tenant_id}] teams_send_adaptive_card failed status={response.status_code}"
+            raise application_error_from_http_status(
+                tenant_id,
+                "microsoft_teams",
+                "teams_send_adaptive_card",
+                response.status_code,
             )
-            return _result(False, "teams")
         return _result(True, "teams", message_id=response.headers.get("x-ms-request-id"))
+    except ApplicationError:
+        raise
     except Exception as exc:
-        activity.logger.error(
-            f"[{tenant_id}] teams_send_adaptive_card error={type(exc).__name__}"
+        raise_activity_error(
+            f"[{tenant_id}] teams_send_adaptive_card unexpected error={type(exc).__name__}",
+            error_type="TeamsAdaptiveCardUnexpectedError",
+            non_retryable=False,
         )
-        return _result(False, "teams")

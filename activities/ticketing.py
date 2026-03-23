@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from temporalio import activity
 
 from connectors.registry import get_connector
@@ -30,6 +32,10 @@ def _build_ticketing_secrets(tenant_id: str) -> TenantSecrets:
     )
 
 
+async def _build_ticketing_secrets_async(tenant_id: str) -> TenantSecrets:
+    return await asyncio.to_thread(_build_ticketing_secrets, tenant_id)
+
+
 def _build_ticket_result(response: dict, secrets: TenantSecrets, fallback_id: str = "") -> TicketResult:
     ticket_id = response.get("key") or response.get("ticket_id") or fallback_id
     base = (secrets.jira_base_url or "").rstrip("/")
@@ -41,7 +47,7 @@ def _build_ticket_result(response: dict, secrets: TenantSecrets, fallback_id: st
 @activity.defn
 async def ticket_create(tenant_id: str, ticketing_provider: str, ticket_data: TicketData) -> TicketResult:
     activity.logger.info(f"[{tenant_id}] ticket_create: {ticket_data.title}")
-    secrets = _build_ticketing_secrets(tenant_id)
+    secrets = await _build_ticketing_secrets_async(tenant_id)
     connector = get_connector(provider=ticketing_provider, tenant_id=tenant_id, secrets=secrets)
 
     payload = {
@@ -59,7 +65,7 @@ async def ticket_create(tenant_id: str, ticketing_provider: str, ticket_data: Ti
 @activity.defn
 async def ticket_update(tenant_id: str, ticketing_provider: str, ticket_id: str, update_fields: dict) -> TicketResult:
     activity.logger.info(f"[{tenant_id}] ticket_update: {ticket_id}")
-    secrets = _build_ticketing_secrets(tenant_id)
+    secrets = await _build_ticketing_secrets_async(tenant_id)
     connector = get_connector(provider=ticketing_provider, tenant_id=tenant_id, secrets=secrets)
 
     status_map = {
@@ -84,14 +90,15 @@ async def ticket_update(tenant_id: str, ticketing_provider: str, ticket_id: str,
 @activity.defn
 async def ticket_close(tenant_id: str, ticketing_provider: str, ticket_id: str, resolution: str) -> TicketResult:
     activity.logger.info(f"[{tenant_id}] ticket_close: {ticket_id}")
-    secrets = _build_ticketing_secrets(tenant_id)
+    secrets = await _build_ticketing_secrets_async(tenant_id)
     connector = get_connector(provider=ticketing_provider, tenant_id=tenant_id, secrets=secrets)
 
     await connector.execute_action(
-        "update_issue",
+        "close_issue",
         {
             "ticket_id": ticket_id,
-            "fields": {"status": "Done", "resolution": resolution},
+            "transition_name": "Done",
+            "resolution": resolution,
         },
     )
     return _build_ticket_result({"ticket_id": ticket_id, "status": "closed"}, secrets, fallback_id=ticket_id)
@@ -100,7 +107,7 @@ async def ticket_close(tenant_id: str, ticketing_provider: str, ticket_id: str, 
 @activity.defn
 async def ticket_get_details(tenant_id: str, ticketing_provider: str, ticket_id: str) -> dict:
     activity.logger.info(f"[{tenant_id}] ticket_get_details: {ticket_id}")
-    secrets = _build_ticketing_secrets(tenant_id)
+    secrets = await _build_ticketing_secrets_async(tenant_id)
     connector = get_connector(provider=ticketing_provider, tenant_id=tenant_id, secrets=secrets)
     details = await connector.execute_action("get_issue", {"ticket_id": ticket_id})
 

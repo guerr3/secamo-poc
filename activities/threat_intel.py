@@ -1,21 +1,19 @@
 from __future__ import annotations
 
+import asyncio
 from urllib.parse import quote
 
 import httpx
 from temporalio import activity
 
+from activities._activity_errors import application_error_from_http_status
 from shared.models import ThreatIntelResult
 from shared.ssm_client import get_secret
 
 
 def _handle_http_error(tenant_id: str, provider: str, status: int, action: str) -> None:
-    if status in (401, 403):
-        raise RuntimeError(f"[{tenant_id}] Auth failed for {provider}: {status}")
-    if status == 429:
-        raise RuntimeError(f"[{tenant_id}] {provider} rate limited during {action}: {status}")
-    if status >= 500:
-        raise RuntimeError(f"[{tenant_id}] {provider} server error during {action}: {status}")
+    if status >= 400:
+        raise application_error_from_http_status(tenant_id, provider, action, status)
 
 
 @activity.defn
@@ -30,7 +28,9 @@ async def threat_intel_lookup(tenant_id: str, indicator: str) -> ThreatIntelResu
             details="empty indicator",
         )
 
-    api_key = get_secret(tenant_id, "threatintel/virustotal_api_key") or get_secret(tenant_id, "threatintel/api_key")
+    api_key = await asyncio.to_thread(get_secret, tenant_id, "threatintel/virustotal_api_key")
+    if not api_key:
+        api_key = await asyncio.to_thread(get_secret, tenant_id, "threatintel/api_key")
     if not api_key:
         return ThreatIntelResult(
             indicator=indicator,
@@ -58,7 +58,12 @@ async def threat_intel_lookup(tenant_id: str, indicator: str) -> ThreatIntelResu
 
     _handle_http_error(tenant_id, "virustotal", response.status_code, "threat_intel_lookup")
     if response.status_code != 200:
-        raise RuntimeError(f"[{tenant_id}] threat_intel_lookup failed: {response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "virustotal",
+            "threat_intel_lookup",
+            response.status_code,
+        )
 
     attrs = response.json().get("data", {}).get("attributes", {})
     stats = attrs.get("last_analysis_stats", {})

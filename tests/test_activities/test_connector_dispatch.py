@@ -58,6 +58,29 @@ async def test_connector_execute_action_reported_failure_raises_non_retryable(mo
 
 
 @pytest.mark.asyncio
+async def test_connector_execute_action_reported_failure_can_be_retryable(mocker, secrets):
+    connector = mocker.AsyncMock()
+    connector.execute_action.return_value = {
+        "success": False,
+        "reason": "provider unavailable",
+        "retryable": True,
+    }
+    mocker.patch("activities.connector_dispatch.get_connector", return_value=connector)
+
+    with pytest.raises(ApplicationError) as exc:
+        await connector_execute_action(
+            tenant_id="tenant-1",
+            provider="jira",
+            action="create_ticket",
+            payload={"title": "x"},
+            secrets=secrets,
+        )
+
+    assert exc.value.non_retryable is False
+    assert exc.value.type == "ConnectorActionReportedFailure"
+
+
+@pytest.mark.asyncio
 async def test_connector_execute_action_unknown_provider_non_retryable(mocker, secrets):
     mocker.patch(
         "activities.connector_dispatch.get_connector",

@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from temporalio import activity
 
+from activities._activity_errors import raise_activity_error
 from shared.config import AUDIT_TABLE_NAME
 
 
@@ -35,8 +36,11 @@ async def create_audit_log(
 ) -> bool:
     activity.logger.info(f"[{tenant_id}] create_audit_log workflow={workflow_id}")
     if not AUDIT_TABLE_NAME:
-        activity.logger.error(f"[{tenant_id}] AUDIT_TABLE_NAME not configured")
-        return False
+        raise_activity_error(
+            f"[{tenant_id}] AUDIT_TABLE_NAME not configured",
+            error_type="MissingAuditTableConfig",
+            non_retryable=True,
+        )
 
     now = datetime.now(timezone.utc)
     ttl = int((now + timedelta(days=90)).timestamp())
@@ -56,5 +60,8 @@ async def create_audit_log(
         )
         return True
     except Exception as exc:
-        activity.logger.error(f"[{tenant_id}] create_audit_log failed: {type(exc).__name__}")
-        return False
+        raise_activity_error(
+            f"[{tenant_id}] create_audit_log failed: {type(exc).__name__}",
+            error_type="AuditWriteFailed",
+            non_retryable=False,
+        )

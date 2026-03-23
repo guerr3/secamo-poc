@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from typing import Any
@@ -104,8 +105,9 @@ async def get_all_active_tenants() -> list[dict]:
                 if last_key is not None:
                     scan_kwargs["ExclusiveStartKey"] = last_key
 
-                response = table.scan(**scan_kwargs)
+                response = await asyncio.to_thread(lambda: table.scan(**scan_kwargs))
                 items.extend(response.get("Items", []))
+                activity.heartbeat({"stage": "tenant_scan", "items": len(items)})
                 last_key = response.get("LastEvaluatedKey")
                 if not last_key:
                     break
@@ -133,7 +135,7 @@ async def get_all_active_tenants() -> list[dict]:
         except Exception as exc:
             activity.logger.warning("Tenant scan via DynamoDB failed: %s", exc)
 
-    return _discover_tenants_from_ssm()
+    return await asyncio.to_thread(_discover_tenants_from_ssm)
 
 
 @activity.defn
@@ -258,7 +260,7 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
     path = f"/secamo/tenants/{tenant_id}/config/"
 
     try:
-        ssm_parameters = _ssm_get_parameters_by_path(path, with_decryption=False)
+        ssm_parameters = await asyncio.to_thread(_ssm_get_parameters_by_path, path, False)
         parameters = {p["Name"].split("/")[-1]: p["Value"] for p in ssm_parameters}
     except Exception as e:
         activity.logger.warning(
@@ -313,7 +315,7 @@ async def get_tenant_secrets(tenant_id: str, secret_type: str) -> TenantSecrets:
     path = f"/secamo/tenants/{tenant_id}/{secret_type}/"
     
     try:
-        ssm_parameters = _ssm_get_parameters_by_path(path, with_decryption=True)
+        ssm_parameters = await asyncio.to_thread(_ssm_get_parameters_by_path, path, True)
     except Exception as e:
         activity.logger.error(f"Fout bij ophalen SSM parameters voor {tenant_id}: {e}")
         raise ApplicationError(

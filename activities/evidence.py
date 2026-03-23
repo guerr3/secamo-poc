@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 import boto3
 from temporalio import activity
 
+from activities._activity_errors import raise_activity_error
 from shared.config import EVIDENCE_BUCKET_NAME
 from shared.models import EvidenceBundle
 
@@ -35,13 +36,10 @@ async def collect_evidence_bundle(
 ) -> EvidenceBundle:
     activity.logger.info(f"[{tenant_id}] collect_evidence_bundle alert={alert_id}")
     if not EVIDENCE_BUCKET_NAME:
-        activity.logger.error(f"[{tenant_id}] EVIDENCE_BUCKET_NAME not configured")
-        return EvidenceBundle(
-            workflow_id=workflow_id,
-            tenant_id=tenant_id,
-            alert_id=alert_id,
-            items=items,
-            bundle_url="",
+        raise_activity_error(
+            f"[{tenant_id}] EVIDENCE_BUCKET_NAME not configured",
+            error_type="MissingEvidenceBucketConfig",
+            non_retryable=True,
         )
 
     key = f"evidence/{tenant_id}/{alert_id}/{workflow_id}.json"
@@ -63,8 +61,11 @@ async def collect_evidence_bundle(
         )
         bundle_url = f"s3://{EVIDENCE_BUCKET_NAME}/{key}"
     except Exception as exc:
-        activity.logger.error(f"[{tenant_id}] collect_evidence_bundle failed: {type(exc).__name__}")
-        bundle_url = ""
+        raise_activity_error(
+            f"[{tenant_id}] collect_evidence_bundle failed: {type(exc).__name__}",
+            error_type="EvidenceWriteFailed",
+            non_retryable=False,
+        )
 
     return EvidenceBundle(
         workflow_id=workflow_id,

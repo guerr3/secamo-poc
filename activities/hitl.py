@@ -1,8 +1,9 @@
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import os
-import secrets
 import time
 from urllib.parse import urlencode
 
@@ -10,7 +11,9 @@ import boto3
 import httpx
 from botocore.exceptions import ClientError
 from temporalio import activity
+from temporalio.exceptions import ApplicationError
 
+from activities._activity_errors import application_error_from_http_status, raise_activity_error
 from shared.config import SECAMO_SENDER_EMAIL
 from shared.graph_client import get_graph_token
 from shared.models import HiTLRequest, TenantSecrets
@@ -70,25 +73,36 @@ def _put_token_record(request: HiTLRequest, token: str) -> None:
     )
 
 
+def _deterministic_token(request: HiTLRequest) -> str:
+    """Build a stable token per activity execution identity for retry safety."""
+    info = activity.info()
+    raw = (
+        f"{request.workflow_id}:{request.tenant_id}:"
+        f"{info.workflow_run_id}:{info.activity_id}"
+    ).encode("utf-8")
+    digest = hashlib.sha256(raw).digest()
+    # 43 chars URL-safe token from 32-byte digest (without padding).
+    return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
+
+
 async def _dispatch_email(request: HiTLRequest, graph_secrets: TenantSecrets) -> str:
-    token = ""
-    for _ in range(3):
-        token = secrets.token_urlsafe(32)
-        try:
-            _put_token_record(request, token)
-            break
-        except ClientError as exc:
-            code = exc.response.get("Error", {}).get("Code", "")
-            if code != "ConditionalCheckFailedException":
-                raise
-    else:
-        raise RuntimeError("Unable to generate a unique HiTL token")
+    token = _deterministic_token(request)
+    try:
+        _put_token_record(request, token)
+    except ClientError as exc:
+        code = exc.response.get("Error", {}).get("Code", "")
+        if code != "ConditionalCheckFailedException":
+            raise
 
     parameter_name = f"/{_name_prefix()}/hitl/endpoint_base_url"
     endpoint = _ssm.get_parameter(Name=parameter_name, WithDecryption=False)
     base_url = endpoint.get("Parameter", {}).get("Value", "").strip()
     if not base_url:
-        raise ValueError(f"Empty HiTL endpoint base URL in SSM parameter: {parameter_name}")
+        raise_activity_error(
+            f"Empty HiTL endpoint base URL in SSM parameter: {parameter_name}",
+            error_type="MissingHitlEndpointConfig",
+            non_retryable=True,
+        )
 
     action_urls = {
         action: _join_query_url(base_url, token, action)
@@ -121,7 +135,12 @@ async def _dispatch_email(request: HiTLRequest, graph_secrets: TenantSecrets) ->
         )
 
     if response.status_code >= 400:
-        raise RuntimeError(f"Graph email_send failed with status={response.status_code}")
+        raise application_error_from_http_status(
+            request.tenant_id,
+            "microsoft_graph",
+            "hitl_dispatch_email",
+            response.status_code,
+        )
 
     activity.logger.info(
         "[%s] HiTL email dispatched token=%s... recipient=%s",
@@ -161,13 +180,25 @@ async def _dispatch_jira(request: HiTLRequest, jira_secrets: TenantSecrets | Non
                 }
             },
         )
-        labels_response.raise_for_status()
+        if labels_response.status_code >= 400:
+            raise application_error_from_http_status(
+                request.tenant_id,
+                "jira",
+                "hitl_dispatch_jira_add_label",
+                labels_response.status_code,
+            )
 
         transition_response = await client.post(
             f"{base_url}/rest/api/3/issue/{request.ticket_key}/transitions",
             json={"transition": {"id": transition_id}},
         )
-        transition_response.raise_for_status()
+        if transition_response.status_code >= 400:
+            raise application_error_from_http_status(
+                request.tenant_id,
+                "jira",
+                "hitl_dispatch_jira_transition",
+                transition_response.status_code,
+            )
 
     activity.logger.info(
         "[%s] Jira HiTL dispatch completed ticket=%s transition_id=%s",
@@ -200,6 +231,7 @@ async def request_hitl_approval(
     }
 
     for channel in request.channels:
+        activity.heartbeat({"channel": channel, "dispatch_results": dispatch_results})
         handler = dispatch_map.get(channel)
         if handler is None:
             activity.logger.warning("[%s] HiTL channel '%s' is not supported", tenant_id, channel)
@@ -209,6 +241,14 @@ async def request_hitl_approval(
         try:
             await handler()
             dispatch_results[channel] = "ok"
+        except ApplicationError as exc:
+            dispatch_results[channel] = f"error:{exc.type}"
+            activity.logger.error(
+                "[%s] HiTL channel '%s' dispatch failed error=%s",
+                tenant_id,
+                channel,
+                exc.type,
+            )
         except Exception as exc:
             dispatch_results[channel] = f"error:{type(exc).__name__}"
             activity.logger.error(
@@ -217,5 +257,14 @@ async def request_hitl_approval(
                 channel,
                 type(exc).__name__,
             )
+
+    successful_channels = sum(1 for status in dispatch_results.values() if status == "ok")
+    failed_channels = [channel for channel, status in dispatch_results.items() if status.startswith("error:")]
+    if successful_channels == 0 and failed_channels:
+        raise_activity_error(
+            f"[{tenant_id}] HiTL dispatch failed for channels={','.join(failed_channels)}",
+            error_type="HiTLDispatchFailed",
+            non_retryable=False,
+        )
 
     return json.dumps(dispatch_results)

@@ -41,9 +41,17 @@ async def test_ticket_update(mocker):
 async def test_ticket_close(mocker):
     mocker.patch("activities.ticketing.get_secret_bundle", return_value={"jira_base_url": "https://jira.example.com", "jira_email": "a@b", "jira_api_token": "t"})
     connector = mocker.AsyncMock()
-    connector.execute_action.return_value = {"updated": True}
+    connector.execute_action.return_value = {"closed": True}
     mocker.patch("activities.ticketing.get_connector", return_value=connector)
     res = await ticket_close("t1", "jira", "SOC-1", "resolved")
+    connector.execute_action.assert_awaited_once_with(
+        "close_issue",
+        {
+            "ticket_id": "SOC-1",
+            "transition_name": "Done",
+            "resolution": "resolved",
+        },
+    )
     assert res.status == "closed"
 
 

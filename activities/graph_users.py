@@ -8,6 +8,7 @@ from urllib.parse import quote
 import httpx
 from temporalio import activity
 
+from activities._activity_errors import application_error_from_http_status
 from shared.graph_client import get_graph_token
 from shared.models import GraphUser, TenantSecrets
 
@@ -19,12 +20,23 @@ def _auth_headers(token: str) -> dict[str, str]:
 
 
 def _handle_http_error(tenant_id: str, provider: str, status: int, action: str) -> None:
-    if status in (401, 403):
-        raise RuntimeError(f"[{tenant_id}] Auth failed for {provider}: {status}")
-    if status == 429:
-        raise RuntimeError(f"[{tenant_id}] {provider} rate limited during {action}: {status}")
-    if status >= 500:
-        raise RuntimeError(f"[{tenant_id}] {provider} server error during {action}: {status}")
+    if status >= 400:
+        raise application_error_from_http_status(tenant_id, provider, action, status)
+
+
+def _is_user_exists_conflict(status_code: int, body: dict) -> bool:
+    if status_code == 409:
+        return True
+    if status_code != 400:
+        return False
+
+    error = body.get("error") if isinstance(body, dict) else None
+    code = str((error or {}).get("code", "")).lower()
+    message = str((error or {}).get("message", "")).lower()
+    return "already" in message and "exist" in message or code in {
+        "request_resourceexists",
+        "resourceexists",
+    }
 
 
 def _generate_password(length: int = 16) -> str:
@@ -45,7 +57,12 @@ async def graph_get_user(tenant_id: str, email: str, secrets: TenantSecrets) -> 
         return None
     _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_get_user")
     if response.status_code != 200:
-        raise RuntimeError(f"[{tenant_id}] graph_get_user failed: {response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_get_user",
+            response.status_code,
+        )
 
     body = response.json()
     return GraphUser(
@@ -85,11 +102,26 @@ async def graph_create_user(tenant_id: str, user_data: dict[str, Any], secrets: 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(url, headers=_auth_headers(token), json=payload)
 
+    try:
+        response_body = response.json()
+    except Exception:
+        response_body = {}
+    if _is_user_exists_conflict(response.status_code, response_body):
+        # Idempotent behavior: retries should resolve to the existing user record.
+        existing_user = await graph_get_user(tenant_id, user_email, secrets)
+        if existing_user is not None:
+            return existing_user
+
     _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_create_user")
     if response.status_code not in (200, 201):
-        raise RuntimeError(f"[{tenant_id}] graph_create_user failed: {response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_create_user",
+            response.status_code,
+        )
 
-    body = response.json()
+    body = response_body
     return GraphUser(
         user_id=body.get("id", ""),
         email=body.get("mail") or body.get("userPrincipalName") or user_email,
@@ -110,7 +142,12 @@ async def graph_update_user(tenant_id: str, user_id: str, updates: dict, secrets
         return False
     _handle_http_error(tenant_id, "microsoft_graph", patch_response.status_code, "graph_update_user")
     if patch_response.status_code not in (200, 204):
-        raise RuntimeError(f"[{tenant_id}] graph_update_user failed: {patch_response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_update_user",
+            patch_response.status_code,
+        )
 
     return True
 
@@ -128,7 +165,12 @@ async def graph_delete_user(tenant_id: str, user_id: str, secrets: TenantSecrets
         return False
     _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_delete_user")
     if response.status_code != 204:
-        raise RuntimeError(f"[{tenant_id}] graph_delete_user failed: {response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_delete_user",
+            response.status_code,
+        )
     return True
 
 
@@ -143,7 +185,12 @@ async def graph_revoke_sessions(tenant_id: str, user_id: str, secrets: TenantSec
 
     _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_revoke_sessions")
     if response.status_code not in (200, 204):
-        raise RuntimeError(f"[{tenant_id}] graph_revoke_sessions failed: {response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_revoke_sessions",
+            response.status_code,
+        )
     return True
 
 
@@ -162,7 +209,12 @@ async def graph_assign_license(tenant_id: str, user_id: str, sku_id: str, secret
 
     _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_assign_license")
     if response.status_code not in (200, 201):
-        raise RuntimeError(f"[{tenant_id}] graph_assign_license failed: {response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_assign_license",
+            response.status_code,
+        )
     return True
 
 
@@ -187,5 +239,10 @@ async def graph_reset_password(tenant_id: str, user_id: str, temp_password: str,
         return False
     _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_reset_password")
     if response.status_code not in (200, 204):
-        raise RuntimeError(f"[{tenant_id}] graph_reset_password failed: {response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_reset_password",
+            response.status_code,
+        )
     return True

@@ -5,6 +5,7 @@ from urllib.parse import quote
 import httpx
 from temporalio import activity
 
+from activities._activity_errors import application_error_from_http_status
 from shared.graph_client import get_defender_token, get_graph_token
 from shared.models import ConnectorActionResult, DeviceDetail, TenantSecrets
 
@@ -17,12 +18,8 @@ def _auth_headers(token: str) -> dict[str, str]:
 
 
 def _handle_http_error(tenant_id: str, provider: str, status: int, action: str) -> None:
-    if status in (401, 403):
-        raise RuntimeError(f"[{tenant_id}] Auth failed for {provider}: {status}")
-    if status == 429:
-        raise RuntimeError(f"[{tenant_id}] {provider} rate limited during {action}: {status}")
-    if status >= 500:
-        raise RuntimeError(f"[{tenant_id}] {provider} server error during {action}: {status}")
+    if status >= 400:
+        raise application_error_from_http_status(tenant_id, provider, action, status)
 
 
 @activity.defn
@@ -78,7 +75,12 @@ async def graph_get_device_details(tenant_id: str, device_id: str, secrets: Tena
         return None
     _handle_http_error(tenant_id, "microsoft_defender", response.status_code, "graph_get_device_details")
     if response.status_code != 200:
-        raise RuntimeError(f"[{tenant_id}] graph_get_device_details failed: {response.status_code}")
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_defender",
+            "graph_get_device_details",
+            response.status_code,
+        )
 
     body = response.json()
     return DeviceDetail(
@@ -136,12 +138,11 @@ async def graph_run_antivirus_scan(
 
     _handle_http_error(tenant_id, "microsoft_defender", response.status_code, "graph_run_antivirus_scan")
     if response.status_code != 201:
-        return ConnectorActionResult(
-            provider="microsoft_defender",
-            action="run_antivirus_scan",
-            success=False,
-            details=f"scan request failed status={response.status_code}",
-            data={"device_id": device_id, "scan_type": normalized_scan},
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_defender",
+            "graph_run_antivirus_scan",
+            response.status_code,
         )
 
     return ConnectorActionResult(
@@ -170,6 +171,11 @@ async def graph_list_noncompliant_devices(tenant_id: str, secrets: TenantSecrets
 
     if response.status_code != 200:
         _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_list_noncompliant_devices")
-        return []
+        raise application_error_from_http_status(
+            tenant_id,
+            "microsoft_graph",
+            "graph_list_noncompliant_devices",
+            response.status_code,
+        )
 
     return response.json().get("value", [])

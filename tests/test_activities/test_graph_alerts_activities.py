@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from temporalio.exceptions import ApplicationError
 
 from activities.graph_alerts import graph_enrich_alert, graph_get_alerts
 from activities.graph_devices import graph_isolate_device
@@ -75,8 +76,8 @@ async def test_graph_get_alerts_happy_and_error(mocker, secrets):
     assert len(alerts) == 1
 
     mocker.patch("activities.graph_alerts.httpx.AsyncClient", return_value=_Client([_Resp(404)]))
-    alerts404 = await graph_get_alerts("t1", "user@example.com", secrets)
-    assert alerts404 == []
+    with pytest.raises(ApplicationError):
+        await graph_get_alerts("t1", "user@example.com", secrets)
 
 
 @pytest.mark.asyncio

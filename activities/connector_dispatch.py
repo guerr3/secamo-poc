@@ -80,10 +80,11 @@ async def connector_execute_action(
             details = str(data.get("details") or data.get("reason") or details)
 
         if not success:
+            retryable = bool(isinstance(data, dict) and data.get("retryable") is True)
             raise ApplicationError(
                 f"connector action '{action}' reported failure for provider '{provider}': {details}",
                 type="ConnectorActionReportedFailure",
-                non_retryable=True,
+                non_retryable=not retryable,
             )
 
         return ConnectorActionResult(

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 import os
 from datetime import datetime, timedelta, timezone
 
 import boto3
 from boto3.dynamodb.conditions import Attr
 from temporalio import activity
-from temporalio.exceptions import ApplicationError
 
+from activities._activity_errors import application_error_from_http_status, raise_activity_error
 from shared.graph_client import get_graph_client
 from shared.models import GraphSubscriptionConfig, GraphSubscriptionState, TenantSecrets
 
@@ -71,6 +72,28 @@ def _normalize_state(data: dict) -> GraphSubscriptionState:
     )
 
 
+def _raise_graph_error(
+    tenant_id: str,
+    action: str,
+    status_code: int,
+    retry_after: str | None = None,
+) -> None:
+    retry_after_seconds: int | None = None
+    if retry_after:
+        try:
+            retry_after_seconds = int(retry_after)
+        except ValueError:
+            retry_after_seconds = None
+    raise application_error_from_http_status(
+        tenant_id,
+        "microsoft_graph",
+        action,
+        status_code,
+        error_type_prefix="GraphSubscriptionError",
+        retry_after_seconds=retry_after_seconds,
+    )
+
+
 @activity.defn
 async def create_graph_subscription(
     tenant_id: str,
@@ -95,10 +118,11 @@ async def create_graph_subscription(
         response = await client.post(f"{GRAPH_BASE}/subscriptions", json=body)
 
     if response.status_code not in {200, 201}:
-        raise ApplicationError(
-            f"Graph subscription create failed status={response.status_code}",
-            type="GraphSubscriptionCreateError",
-            non_retryable=False,
+        _raise_graph_error(
+            tenant_id,
+            "create_graph_subscription",
+            response.status_code,
+            response.headers.get("Retry-After"),
         )
 
     payload = response.json()
@@ -132,10 +156,11 @@ async def renew_graph_subscription(
         )
 
     if response.status_code != 200:
-        raise ApplicationError(
-            f"Graph subscription renew failed status={response.status_code}",
-            type="GraphSubscriptionRenewError",
-            non_retryable=False,
+        _raise_graph_error(
+            tenant_id,
+            "renew_graph_subscription",
+            response.status_code,
+            response.headers.get("Retry-After"),
         )
 
     payload = response.json()
@@ -160,23 +185,25 @@ async def delete_graph_subscription(tenant_id: str, subscription_id: str, secret
         response = await client.delete(f"{GRAPH_BASE}/subscriptions/{subscription_id}")
 
     if response.status_code not in {200, 202, 204, 404}:
-        raise ApplicationError(
-            f"Graph subscription delete failed status={response.status_code}",
-            type="GraphSubscriptionDeleteError",
-            non_retryable=False,
+        _raise_graph_error(
+            tenant_id,
+            "delete_graph_subscription",
+            response.status_code,
+            response.headers.get("Retry-After"),
         )
 
     if GRAPH_SUBSCRIPTIONS_TABLE:
         try:
             table = _get_dynamodb_resource().Table(GRAPH_SUBSCRIPTIONS_TABLE)
-            table.delete_item(Key={"subscription_id": subscription_id})
+            await asyncio.to_thread(table.delete_item, Key={"subscription_id": subscription_id})
         except Exception as exc:
             activity.logger.warning("Failed to delete subscription metadata from DynamoDB: %s", exc)
     else:
         base = f"/secamo/tenants/{tenant_id}/subscriptions/{subscription_id}/"
         for key in ["id", "resource", "expires_at", "change_types", "notification_url", "client_state"]:
+            activity.heartbeat({"stage": "delete_subscription_metadata", "key": key})
             try:
-                _get_ssm_client().delete_parameter(Name=f"{base}{key}")
+                await asyncio.to_thread(_get_ssm_client().delete_parameter, Name=f"{base}{key}")
             except _get_ssm_client().exceptions.ParameterNotFound:
                 continue
             except Exception as exc:
@@ -192,10 +219,11 @@ async def list_graph_subscriptions(tenant_id: str, secrets: TenantSecrets) -> li
         response = await client.get(f"{GRAPH_BASE}/subscriptions")
 
     if response.status_code != 200:
-        raise ApplicationError(
-            f"Graph subscription list failed status={response.status_code}",
-            type="GraphSubscriptionListError",
-            non_retryable=False,
+        _raise_graph_error(
+            tenant_id,
+            "list_graph_subscriptions",
+            response.status_code,
+            response.headers.get("Retry-After"),
         )
 
     states: list[GraphSubscriptionState] = []
@@ -233,7 +261,7 @@ async def store_subscription_metadata(state: GraphSubscriptionState) -> dict[str
 
     if GRAPH_SUBSCRIPTIONS_TABLE:
         table = _get_dynamodb_resource().Table(GRAPH_SUBSCRIPTIONS_TABLE)
-        table.put_item(Item=payload)
+        await asyncio.to_thread(table.put_item, Item=payload)
         return payload
 
     base = f"/secamo/tenants/{state.tenant_id}/subscriptions/{state.subscription_id}/"
@@ -241,8 +269,20 @@ async def store_subscription_metadata(state: GraphSubscriptionState) -> dict[str
         if key == "tenant_id" or key == "subscription_id":
             continue
         as_string = ",".join(value) if isinstance(value, list) else str(value)
-        _get_ssm_client().put_parameter(Name=f"{base}{key}", Value=as_string, Type="String", Overwrite=True)
-    _get_ssm_client().put_parameter(Name=f"{base}id", Value=state.subscription_id, Type="String", Overwrite=True)
+        await asyncio.to_thread(
+            _get_ssm_client().put_parameter,
+            Name=f"{base}{key}",
+            Value=as_string,
+            Type="String",
+            Overwrite=True,
+        )
+    await asyncio.to_thread(
+        _get_ssm_client().put_parameter,
+        Name=f"{base}id",
+        Value=state.subscription_id,
+        Type="String",
+        Overwrite=True,
+    )
 
     return payload
 
@@ -252,14 +292,20 @@ async def load_subscription_metadata(tenant_id: str) -> list[GraphSubscriptionSt
     """Load all persisted subscriptions for a tenant."""
     if GRAPH_SUBSCRIPTIONS_TABLE:
         table = _get_dynamodb_resource().Table(GRAPH_SUBSCRIPTIONS_TABLE)
-        response = table.scan(FilterExpression=Attr("tenant_id").eq(tenant_id))
+        response = await asyncio.to_thread(table.scan, FilterExpression=Attr("tenant_id").eq(tenant_id))
         return [_normalize_state(item) for item in response.get("Items", [])]
 
     path = f"/secamo/tenants/{tenant_id}/subscriptions/"
-    response = _get_ssm_client().get_parameters_by_path(Path=path, WithDecryption=False, Recursive=True)
+    response = await asyncio.to_thread(
+        _get_ssm_client().get_parameters_by_path,
+        Path=path,
+        WithDecryption=False,
+        Recursive=True,
+    )
 
     grouped: dict[str, dict] = {}
     for parameter in response.get("Parameters", []):
+        activity.heartbeat({"stage": "load_subscription_metadata", "processed": len(grouped)})
         name = str(parameter.get("Name") or "")
         parts = [p for p in name.split("/") if p]
         if len(parts) < 6:
@@ -290,7 +336,7 @@ async def lookup_subscription_metadata(subscription_id: str) -> GraphSubscriptio
     """Resolve a subscription ID to tenant metadata for routing."""
     if GRAPH_SUBSCRIPTIONS_TABLE:
         table = _get_dynamodb_resource().Table(GRAPH_SUBSCRIPTIONS_TABLE)
-        response = table.get_item(Key={"subscription_id": subscription_id})
+        response = await asyncio.to_thread(table.get_item, Key={"subscription_id": subscription_id})
         item = response.get("Item")
         return _normalize_state(item) if item else None
 
