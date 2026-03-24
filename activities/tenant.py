@@ -6,6 +6,7 @@ from typing import Any
 import boto3
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
+from connectors.jira_provisioner import JiraProvisioner
 from shared.models import (
     GraphSubscriptionConfig,
     PollingProviderConfig,
@@ -250,6 +251,20 @@ def _parse_graph_subscriptions(raw_value: str | None) -> list[GraphSubscriptionC
     return providers
 
 
+async def _maybe_provision_jira_jsm_tenant(tenant_id: str, secret_type: str, secrets: TenantSecrets) -> TenantSecrets:
+    if secret_type != "ticketing":
+        return secrets
+
+    if (secrets.project_type or "standard").strip().lower() != "jsm":
+        return secrets
+
+    if not secrets.jira_base_url or not secrets.jira_email or not secrets.jira_api_token:
+        return secrets
+
+    provisioner = JiraProvisioner()
+    return await provisioner.provision_jsm_tenant(tenant_id, secrets)
+
+
 @activity.defn
 async def get_tenant_config(tenant_id: str) -> TenantConfig:
     """
@@ -333,6 +348,8 @@ async def get_tenant_secrets(tenant_id: str, secret_type: str) -> TenantSecrets:
             "jira_email": parameters.get("jira_email"),
             "jira_api_token": parameters.get("jira_api_token") or parameters.get("api_token"),
             "project_key": parameters.get("project_key"),
+            "project_type": parameters.get("project_type", "standard"),
+            "jsm_service_desk_id": parameters.get("jsm_service_desk_id"),
             "virustotal_api_key": parameters.get("virustotal_api_key") or parameters.get("api_key"),
             "abuseipdb_api_key": parameters.get("abuseipdb_api_key") or parameters.get("api_key"),
         }
@@ -352,17 +369,17 @@ async def get_tenant_secrets(tenant_id: str, secret_type: str) -> TenantSecrets:
                 non_retryable=True,
             )
 
-        return TenantSecrets(
+        return await _maybe_provision_jira_jsm_tenant(tenant_id, secret_type, TenantSecrets(
             client_id=str(client_id),
             client_secret=str(client_secret),
             tenant_azure_id=str(tenant_azure_id),
             **_build_optional(),
-        )
+        ))
 
     # Connector-oriented secret types can be partially populated.
-    return TenantSecrets(
+    return await _maybe_provision_jira_jsm_tenant(tenant_id, secret_type, TenantSecrets(
         client_id=parameters.get("client_id", ""),
         client_secret=parameters.get("client_secret", ""),
         tenant_azure_id=parameters.get("tenant_azure_id", ""),
         **_build_optional(),
-    )
+    ))

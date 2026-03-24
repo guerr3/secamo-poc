@@ -15,10 +15,26 @@ from shared.models import GraphSubscriptionConfig, GraphSubscriptionState, Tenan
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 MIN_SUBSCRIPTION_MINUTES = 45
 DEFAULT_MAX_SUBSCRIPTION_MINUTES = 4230
+RICH_NOTIFICATION_MAX_MINUTES = 1440
 
 GRAPH_SUBSCRIPTIONS_TABLE = os.environ.get("GRAPH_SUBSCRIPTIONS_TABLE", "").strip()
+GRAPH_LIFECYCLE_NOTIFICATION_URL = os.environ.get("GRAPH_LIFECYCLE_NOTIFICATION_URL", "").strip()
 ssm_client = None
 dynamodb = None
+
+
+def _max_subscription_minutes(resource: str, include_resource_data: bool) -> int:
+    if include_resource_data:
+        return RICH_NOTIFICATION_MAX_MINUTES
+
+    lowered = resource.lower()
+    # Common resources that support up to 72h.
+    if any(token in lowered for token in ["/messages", "/events", "/contacts", "/teams", "/chats"]):
+        return 4320
+    # Security alerts support 30-day subscriptions.
+    if "security/alerts" in lowered:
+        return 43200
+    return DEFAULT_MAX_SUBSCRIPTION_MINUTES
 
 
 def _get_ssm_client():
@@ -51,9 +67,9 @@ def _parse_dt(value: str | datetime | None, fallback: datetime) -> datetime:
     return fallback
 
 
-def _compute_expiration(hours: int) -> datetime:
+def _compute_expiration(hours: int, *, resource: str, include_resource_data: bool) -> datetime:
     requested_minutes = max(MIN_SUBSCRIPTION_MINUTES, int(hours * 60))
-    bounded_minutes = min(requested_minutes, DEFAULT_MAX_SUBSCRIPTION_MINUTES)
+    bounded_minutes = min(requested_minutes, _max_subscription_minutes(resource, include_resource_data))
     return _utc_now() + timedelta(minutes=bounded_minutes)
 
 
@@ -103,7 +119,11 @@ async def create_graph_subscription(
     client_state: str,
 ) -> GraphSubscriptionState:
     """Create a Graph webhook subscription for a tenant and resource."""
-    expiration = _compute_expiration(subscription.expiration_hours)
+    expiration = _compute_expiration(
+        subscription.expiration_hours,
+        resource=subscription.resource,
+        include_resource_data=subscription.include_resource_data,
+    )
     body: dict[str, object] = {
         "changeType": ",".join(subscription.change_types),
         "notificationUrl": notification_url,
@@ -112,7 +132,21 @@ async def create_graph_subscription(
         "clientState": client_state,
     }
     if subscription.include_resource_data:
-        body["includeResourceData"] = True
+        cert = (subscription.encryption_certificate or "").strip()
+        cert_id = (subscription.encryption_certificate_id or "").strip()
+        if cert and cert_id:
+            body["includeResourceData"] = True
+            body["encryptionCertificate"] = cert
+            body["encryptionCertificateId"] = cert_id
+        else:
+            activity.logger.warning(
+                "[%s] include_resource_data requested for %s but encryption metadata is missing; falling back to basic notifications",
+                tenant_id,
+                subscription.resource,
+            )
+    lifecycle_url = (subscription.lifecycle_notification_url or GRAPH_LIFECYCLE_NOTIFICATION_URL).strip()
+    if lifecycle_url:
+        body["lifecycleNotificationUrl"] = lifecycle_url
 
     async with get_graph_client(secrets) as client:
         response = await client.post(f"{GRAPH_BASE}/subscriptions", json=body)
@@ -147,7 +181,13 @@ async def renew_graph_subscription(
     secrets: TenantSecrets,
 ) -> GraphSubscriptionState:
     """Renew an existing Graph webhook subscription."""
-    expiration = _compute_expiration(expiration_hours)
+    existing = await lookup_subscription_metadata(subscription_id)
+    resource = existing.resource if existing else ""
+    expiration = _compute_expiration(
+        expiration_hours,
+        resource=resource,
+        include_resource_data=False,
+    )
 
     async with get_graph_client(secrets) as client:
         response = await client.patch(
@@ -164,7 +204,6 @@ async def renew_graph_subscription(
         )
 
     payload = response.json()
-    existing = await lookup_subscription_metadata(subscription_id)
     state = GraphSubscriptionState(
         subscription_id=subscription_id,
         tenant_id=tenant_id,

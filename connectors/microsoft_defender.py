@@ -22,13 +22,14 @@ class MicrosoftGraphConnector(BaseConnector):
 
     _MAX_ATTEMPTS = 3
 
-    _RESOURCE_CONFIG: dict[str, dict[str, str]] = {
+    _RESOURCE_CONFIG: dict[str, dict[str, Any]] = {
         "defender_alerts": {
             "path": "/security/alerts_v2",
             "event_type": "defender.alert",
             "occurred_field": "createdDateTime",
             "filter_field": "createdDateTime",
             "provider_event_type": "alert",
+            "supports_orderby": False,
         },
         "entra_risky_users": {
             "path": "/identityProtection/riskyUsers",
@@ -36,6 +37,8 @@ class MicrosoftGraphConnector(BaseConnector):
             "occurred_field": "riskLastUpdatedDateTime",
             "filter_field": "riskLastUpdatedDateTime",
             "provider_event_type": "risky_user",
+            "supports_orderby": False,
+            "max_top": 500,
         },
         "entra_signin_logs": {
             "path": "/auditLogs/signIns",
@@ -43,6 +46,7 @@ class MicrosoftGraphConnector(BaseConnector):
             "occurred_field": "createdDateTime",
             "filter_field": "createdDateTime",
             "provider_event_type": "impossible_travel",
+            "supports_orderby": False,
         },
         "intune_noncompliant_devices": {
             "path": "/deviceManagement/managedDevices",
@@ -51,6 +55,7 @@ class MicrosoftGraphConnector(BaseConnector):
             "filter_field": "lastSyncDateTime",
             "base_filter": "complianceState eq 'noncompliant'",
             "provider_event_type": "noncompliant_device",
+            "supports_orderby": False,
         },
         "entra_audit_logs": {
             "path": "/auditLogs/directoryAudits",
@@ -58,6 +63,7 @@ class MicrosoftGraphConnector(BaseConnector):
             "occurred_field": "activityDateTime",
             "filter_field": "activityDateTime",
             "provider_event_type": "audit_log",
+            "supports_orderby": False,
         },
     }
 
@@ -150,6 +156,10 @@ class MicrosoftGraphConnector(BaseConnector):
     def _format_odata_datetime(value: datetime) -> str:
         return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
+    @staticmethod
+    def _escape_odata_literal(value: str) -> str:
+        return value.replace("'", "''")
+
     def _map_event(self, item: dict[str, Any], resource_type: str, occurred_field: str, event_type: str, provider_event_type: str) -> CanonicalEvent:
         occurred_at = self._parse_iso_datetime(item.get(occurred_field))
         external_id = str(item.get("id") or item.get("alertId") or "")
@@ -192,6 +202,9 @@ class MicrosoftGraphConnector(BaseConnector):
             raise ConnectorUnsupportedActionError(
                 f"Unsupported resource_type '{resource_type}' for provider '{self.provider}'"
             )
+        max_top = resource_config.get("max_top")
+        if isinstance(max_top, int):
+            top = min(top, max_top)
 
         since_raw = query.get("since")
         since_dt = self._parse_iso_datetime(str(since_raw)) if since_raw else None
@@ -208,29 +221,40 @@ class MicrosoftGraphConnector(BaseConnector):
         params = {
             "$top": str(top),
             "$filter": combined_filter,
-            "$orderby": f"{filter_field} asc",
         }
+        if bool(resource_config.get("supports_orderby")):
+            params["$orderby"] = f"{filter_field} asc"
 
         headers = {"Authorization": f"Bearer {token}"}
-        response = await self._request_with_retry(
-            "GET",
-            url,
-            headers=headers,
-            params=params,
-        )
-        payload = response.json()
-
         events: list[CanonicalEvent] = []
-        for item in payload.get("value", []):
-            events.append(
-                self._map_event(
-                    item=item,
-                    resource_type=resource_type,
-                    occurred_field=resource_config["occurred_field"],
-                    event_type=resource_config["event_type"],
-                    provider_event_type=resource_config["provider_event_type"],
-                )
+        next_url: str | None = url
+        next_params: dict[str, str] | None = params
+        visited_urls: set[str] = set()
+        while next_url:
+            if next_url in visited_urls:
+                break
+            visited_urls.add(next_url)
+
+            response = await self._request_with_retry(
+                "GET",
+                next_url,
+                headers=headers,
+                params=next_params,
             )
+            payload = response.json()
+
+            for item in payload.get("value", []):
+                events.append(
+                    self._map_event(
+                        item=item,
+                        resource_type=resource_type,
+                        occurred_field=resource_config["occurred_field"],
+                        event_type=resource_config["event_type"],
+                        provider_event_type=resource_config["provider_event_type"],
+                    )
+                )
+            next_url = payload.get("@odata.nextLink")
+            next_params = None
         return events
 
     async def execute_action(self, action: str, payload: dict) -> dict:
@@ -246,9 +270,10 @@ class MicrosoftGraphConnector(BaseConnector):
             token = await get_graph_token(self.secrets)
             headers = {"Authorization": f"Bearer {token}"}
             user_email = payload["user_email"]
-            filt = quote(f"userStates/any(u:u/userPrincipalName eq '{user_email}')")
-            url = f"https://graph.microsoft.com/v1.0/security/alerts_v2?$filter={filt}"
-            response = await self._request_with_retry("GET", url, headers=headers)
+            escaped_email = self._escape_odata_literal(user_email)
+            filt = f"userStates/any(u:u/userPrincipalName eq '{escaped_email}')"
+            url = "https://graph.microsoft.com/v1.0/security/alerts_v2"
+            response = await self._request_with_retry("GET", url, headers=headers, params={"$filter": filt})
             body = response.json()
             return {"alerts": body.get("value", [])}
 

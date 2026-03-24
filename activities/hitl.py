@@ -6,6 +6,7 @@ import json
 import os
 import time
 from urllib.parse import urlencode
+from urllib.parse import quote
 
 import boto3
 import httpx
@@ -126,7 +127,7 @@ async def _dispatch_email(request: HiTLRequest, graph_secrets: TenantSecrets) ->
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(
-            f"https://graph.microsoft.com/v1.0/users/{SECAMO_SENDER_EMAIL}/sendMail",
+            f"https://graph.microsoft.com/v1.0/users/{quote(SECAMO_SENDER_EMAIL)}/sendMail",
             headers={
                 "Authorization": f"Bearer {graph_token}",
                 "Content-Type": "application/json",
@@ -135,11 +136,19 @@ async def _dispatch_email(request: HiTLRequest, graph_secrets: TenantSecrets) ->
         )
 
     if response.status_code >= 400:
+        retry_after_seconds: int | None = None
+        retry_after = response.headers.get("Retry-After")
+        if retry_after:
+            try:
+                retry_after_seconds = int(retry_after)
+            except ValueError:
+                retry_after_seconds = None
         raise application_error_from_http_status(
             request.tenant_id,
             "microsoft_graph",
             "hitl_dispatch_email",
             response.status_code,
+            retry_after_seconds=retry_after_seconds,
         )
 
     activity.logger.info(

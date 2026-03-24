@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 
 import httpx
@@ -16,6 +17,39 @@ SECURITY_BASE = "https://graph.microsoft.com/v1.0/security"
 
 def _auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+
+def _alert_matches_user_email(alert_item: dict, user_email: str) -> bool:
+    target = user_email.lower()
+    for state in alert_item.get("userStates") or []:
+        if str(state.get("userPrincipalName") or "").lower() == target:
+            return True
+    return False
+
+
+async def _paged_get(
+    client: httpx.AsyncClient,
+    url: str,
+    headers: dict[str, str],
+    *,
+    params: dict[str, str] | None = None,
+    max_pages: int = 5,
+) -> list[dict]:
+    items: list[dict] = []
+    next_url: str | None = url
+    next_params = params
+    pages = 0
+
+    while next_url and pages < max_pages:
+        response = await client.get(next_url, headers=headers, params=next_params)
+        if response.status_code != 200:
+            return items
+        body = response.json()
+        items.extend(body.get("value", []))
+        next_url = body.get("@odata.nextLink")
+        next_params = None
+        pages += 1
+    return items
 
 
 @activity.defn
@@ -117,11 +151,14 @@ async def graph_enrich_alert(tenant_id: str, alert: AlertData, secrets: TenantSe
 async def graph_get_alerts(tenant_id: str, user_email: str, secrets: TenantSecrets) -> list[dict]:
     activity.logger.info(f"[{tenant_id}] graph_get_alerts: {user_email}")
     graph_token = await get_graph_token(secrets)
-    filter_q = quote(f"userStates/any(u:u/userPrincipalName eq '{user_email}')")
     async with httpx.AsyncClient(timeout=30.0) as client:
+        # alerts_v2 doesn't document userStates as a filterable property; fetch
+        # a recent window and apply user-state matching client-side.
+        since = (datetime.now(timezone.utc) - timedelta(days=14)).isoformat().replace("+00:00", "Z")
         response = await client.get(
-            f"{SECURITY_BASE}/alerts_v2?$filter={filter_q}&$top=10",
+            f"{SECURITY_BASE}/alerts_v2",
             headers=_auth_headers(graph_token),
+            params={"$filter": f"createdDateTime gt {since}", "$top": "50"},
         )
 
     if response.status_code != 200:
@@ -132,4 +169,23 @@ async def graph_get_alerts(tenant_id: str, user_email: str, secrets: TenantSecre
             response.status_code,
         )
 
-    return response.json().get("value", [])[:10]
+    initial_items = response.json().get("value", [])
+    if len(initial_items) < 10 and response.json().get("@odata.nextLink"):
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            extra_items = await _paged_get(
+                client,
+                str(response.json().get("@odata.nextLink")),
+                _auth_headers(graph_token),
+                params=None,
+                max_pages=3,
+            )
+        items = initial_items + extra_items
+    else:
+        items = initial_items
+
+    has_user_states = any(item.get("userStates") for item in items)
+    if not has_user_states:
+        return items[:10]
+
+    filtered = [item for item in items if _alert_matches_user_email(item, user_email)]
+    return filtered[:10]

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from urllib.parse import quote
 
 import httpx
 from temporalio import activity
@@ -55,7 +56,7 @@ async def email_send(tenant_id: str, to: str, subject: str, body: str) -> Notifi
         }
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                f"https://graph.microsoft.com/v1.0/users/{sender}/sendMail",
+                f"https://graph.microsoft.com/v1.0/users/{quote(sender)}/sendMail",
                 headers={
                     "Authorization": f"Bearer {token}",
                     "Content-Type": "application/json",
@@ -64,11 +65,19 @@ async def email_send(tenant_id: str, to: str, subject: str, body: str) -> Notifi
             )
 
         if response.status_code >= 400:
+            retry_after_seconds: int | None = None
+            retry_after = response.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    retry_after_seconds = int(retry_after)
+                except ValueError:
+                    retry_after_seconds = None
             raise application_error_from_http_status(
                 tenant_id,
                 "microsoft_graph",
                 "email_send",
                 response.status_code,
+                retry_after_seconds=retry_after_seconds,
             )
         return _result(True, "email", message_id=response.headers.get("x-ms-request-id"))
     except ApplicationError:

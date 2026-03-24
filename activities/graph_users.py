@@ -19,9 +19,25 @@ def _auth_headers(token: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
 
 
-def _handle_http_error(tenant_id: str, provider: str, status: int, action: str) -> None:
-    if status >= 400:
-        raise application_error_from_http_status(tenant_id, provider, action, status)
+def _retry_after_seconds(response: httpx.Response) -> int | None:
+    retry_after = response.headers.get("Retry-After")
+    if not retry_after:
+        return None
+    try:
+        return int(retry_after)
+    except ValueError:
+        return None
+
+
+def _handle_http_error(tenant_id: str, provider: str, response: httpx.Response, action: str) -> None:
+    if response.status_code >= 400:
+        raise application_error_from_http_status(
+            tenant_id,
+            provider,
+            action,
+            response.status_code,
+            retry_after_seconds=_retry_after_seconds(response),
+        )
 
 
 def _is_user_exists_conflict(status_code: int, body: dict) -> bool:
@@ -55,13 +71,14 @@ async def graph_get_user(tenant_id: str, email: str, secrets: TenantSecrets) -> 
 
     if response.status_code == 404:
         return None
-    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_get_user")
+    _handle_http_error(tenant_id, "microsoft_graph", response, "graph_get_user")
     if response.status_code != 200:
         raise application_error_from_http_status(
             tenant_id,
             "microsoft_graph",
             "graph_get_user",
             response.status_code,
+            retry_after_seconds=_retry_after_seconds(response),
         )
 
     body = response.json()
@@ -112,13 +129,14 @@ async def graph_create_user(tenant_id: str, user_data: dict[str, Any], secrets: 
         if existing_user is not None:
             return existing_user
 
-    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_create_user")
-    if response.status_code not in (200, 201):
+    _handle_http_error(tenant_id, "microsoft_graph", response, "graph_create_user")
+    if response.status_code not in (200, 201, 202):
         raise application_error_from_http_status(
             tenant_id,
             "microsoft_graph",
             "graph_create_user",
             response.status_code,
+            retry_after_seconds=_retry_after_seconds(response),
         )
 
     body = response_body
@@ -140,13 +158,14 @@ async def graph_update_user(tenant_id: str, user_id: str, updates: dict, secrets
         patch_response = await client.patch(patch_url, headers=_auth_headers(token), json=updates)
     if patch_response.status_code == 404:
         return False
-    _handle_http_error(tenant_id, "microsoft_graph", patch_response.status_code, "graph_update_user")
-    if patch_response.status_code not in (200, 204):
+    _handle_http_error(tenant_id, "microsoft_graph", patch_response, "graph_update_user")
+    if patch_response.status_code not in (200, 202, 204):
         raise application_error_from_http_status(
             tenant_id,
             "microsoft_graph",
             "graph_update_user",
             patch_response.status_code,
+            retry_after_seconds=_retry_after_seconds(patch_response),
         )
 
     return True
@@ -163,13 +182,14 @@ async def graph_delete_user(tenant_id: str, user_id: str, secrets: TenantSecrets
 
     if response.status_code == 404:
         return False
-    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_delete_user")
-    if response.status_code != 204:
+    _handle_http_error(tenant_id, "microsoft_graph", response, "graph_delete_user")
+    if response.status_code not in (200, 202, 204):
         raise application_error_from_http_status(
             tenant_id,
             "microsoft_graph",
             "graph_delete_user",
             response.status_code,
+            retry_after_seconds=_retry_after_seconds(response),
         )
     return True
 
@@ -183,13 +203,14 @@ async def graph_revoke_sessions(tenant_id: str, user_id: str, secrets: TenantSec
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(url, headers=_auth_headers(token))
 
-    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_revoke_sessions")
-    if response.status_code not in (200, 204):
+    _handle_http_error(tenant_id, "microsoft_graph", response, "graph_revoke_sessions")
+    if response.status_code not in (200, 202, 204):
         raise application_error_from_http_status(
             tenant_id,
             "microsoft_graph",
             "graph_revoke_sessions",
             response.status_code,
+            retry_after_seconds=_retry_after_seconds(response),
         )
     return True
 
@@ -207,13 +228,14 @@ async def graph_assign_license(tenant_id: str, user_id: str, sku_id: str, secret
     async with httpx.AsyncClient(timeout=30.0) as client:
         response = await client.post(url, headers=_auth_headers(token), json=payload)
 
-    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_assign_license")
-    if response.status_code not in (200, 201):
+    _handle_http_error(tenant_id, "microsoft_graph", response, "graph_assign_license")
+    if response.status_code not in (200, 201, 202, 204):
         raise application_error_from_http_status(
             tenant_id,
             "microsoft_graph",
             "graph_assign_license",
             response.status_code,
+            retry_after_seconds=_retry_after_seconds(response),
         )
     return True
 
@@ -237,12 +259,13 @@ async def graph_reset_password(tenant_id: str, user_id: str, temp_password: str,
 
     if response.status_code == 404:
         return False
-    _handle_http_error(tenant_id, "microsoft_graph", response.status_code, "graph_reset_password")
-    if response.status_code not in (200, 204):
+    _handle_http_error(tenant_id, "microsoft_graph", response, "graph_reset_password")
+    if response.status_code not in (200, 202, 204):
         raise application_error_from_http_status(
             tenant_id,
             "microsoft_graph",
             "graph_reset_password",
             response.status_code,
+            retry_after_seconds=_retry_after_seconds(response),
         )
     return True

@@ -29,6 +29,8 @@ def _build_ticketing_secrets(tenant_id: str) -> TenantSecrets:
         jira_email=raw.get("jira_email"),
         jira_api_token=raw.get("jira_api_token") or raw.get("api_token"),
         project_key=raw.get("project_key"),
+        project_type=(raw.get("project_type") or "standard").strip().lower(),
+        jsm_service_desk_id=raw.get("jsm_service_desk_id"),
     )
 
 

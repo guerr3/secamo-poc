@@ -27,6 +27,8 @@ class TenantSecrets(BaseModel):
     jira_email: Optional[str] = None
     jira_api_token: Optional[str] = Field(default=None, repr=False)
     project_key: Optional[str] = None
+    project_type: Literal["jsm", "standard"] = "standard"
+    jsm_service_desk_id: Optional[str] = None
     virustotal_api_key: Optional[str] = Field(default=None, repr=False)
     abuseipdb_api_key: Optional[str] = Field(default=None, repr=False)
 
@@ -39,6 +41,9 @@ class GraphSubscriptionConfig(BaseModel):
     change_types: list[str] = Field(default_factory=lambda: ["created", "updated"])
     include_resource_data: bool = False
     expiration_hours: int = 24
+    encryption_certificate: Optional[str] = Field(default=None, repr=False)
+    encryption_certificate_id: Optional[str] = None
+    lifecycle_notification_url: Optional[str] = None
 
 
 class GraphSubscriptionState(BaseModel):

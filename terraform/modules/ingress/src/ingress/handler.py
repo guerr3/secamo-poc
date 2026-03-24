@@ -308,7 +308,11 @@ async def handle_hitl_respond(event: IngressEvent) -> dict:
 
 async def handle_hitl_jira(event: IngressEvent) -> dict:
     body = event.body or {}
-    tenant_id = body.get("tenant_id") or "test-tenant"
+    tenant_id = (
+        body.get("tenant_id")
+        or (event.query_params or {}).get("tenant_id")
+        or "test-tenant"
+    )
 
     signature = _find_header(event.headers, "x-hub-signature-256")
     if not signature:
@@ -397,23 +401,7 @@ async def handle_internal(event: IngressEvent) -> dict:
     return response.accepted(result)
 
 
-async def handle_event(event: IngressEvent) -> dict:
-    """Generic provider-event ingress route for workflow starts."""
-    tenant_id = str((event.path_params or {}).get("tenant_id", "")).strip()
-    if not tenant_id:
-        return response.error(400, "tenant_id path parameter is required")
-
-    provider = str(event.body.get("provider", "")).strip().lower()
-    if not provider:
-        return response.error(400, "provider is required in request body")
-
-    validator = _SIGNATURE_VALIDATORS.get(provider)
-    if validator is None:
-        logger.warning("No signature validator configured for provider=%s; allowing request", provider)
-    elif not validator(event, tenant_id):
-        return response.error(401, "Invalid provider signature")
-
-    event_type = str(event.body.get("event_type", "alert")).strip().lower() or "alert"
+async def _dispatch_provider_event(event: IngressEvent, *, provider: str, event_type: str, tenant_id: str) -> dict:
     routing = PROVIDER_EVENT_ROUTING.get((provider, event_type))
     if routing is None:
         return response.error(
@@ -459,11 +447,65 @@ async def handle_event(event: IngressEvent) -> dict:
     )
 
 
+async def handle_event(event: IngressEvent) -> dict:
+    """Generic provider-event ingress route for workflow starts."""
+    tenant_id = str((event.path_params or {}).get("tenant_id", "")).strip()
+    if not tenant_id:
+        return response.error(400, "tenant_id path parameter is required")
+
+    provider = str(event.body.get("provider", "")).strip().lower()
+    if not provider:
+        return response.error(400, "provider is required in request body")
+
+    validator = _SIGNATURE_VALIDATORS.get(provider)
+    if validator is None:
+        logger.warning("No signature validator configured for provider=%s; allowing request", provider)
+    elif not validator(event, tenant_id):
+        return response.error(401, "Invalid provider signature")
+
+    event_type = str(event.body.get("event_type", "alert")).strip().lower() or "alert"
+    return await _dispatch_provider_event(
+        event,
+        provider=provider,
+        event_type=event_type,
+        tenant_id=tenant_id,
+    )
+
+
+async def handle_graph_notification(event: IngressEvent) -> dict:
+    tenant_id = str((event.path_params or {}).get("tenant_id", "")).strip()
+    if not tenant_id:
+        return response.error(400, "tenant_id path parameter is required")
+
+    validation_token = str((event.query_params or {}).get("validationToken", "")).strip()
+    if validation_token:
+        return {
+            "statusCode": 200,
+            "headers": {"Content-Type": "text/plain"},
+            "body": validation_token,
+        }
+
+    if not _validate_microsoft_defender_signature(event, tenant_id):
+        return response.error(401, "Invalid provider signature")
+
+    if not isinstance(event.body, dict):
+        return response.error(400, "Request body must be a JSON object")
+
+    body = dict(event.body)
+    event_type = str(body.get("event_type", "alert")).strip().lower() or "alert"
+    body["provider"] = "microsoft_defender"
+    body["event_type"] = event_type
+    event.body = body
+
+    return await handle_event(event)
+
+
 # ── Lambda Entrypoint ────────────────────────────────────────
 
 handler = async_handler({
     "/api/v1/ingress/event/{tenant_id}": handle_event,
     "/api/v1/ingress/internal": handle_internal,
+    "/api/v1/graph/notifications/{tenant_id}": handle_graph_notification,
     "/api/v1/hitl/respond": handle_hitl_respond,
     "/api/v1/hitl/jira": handle_hitl_jira,
 })
