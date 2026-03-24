@@ -61,6 +61,17 @@ rm -rf "$TEMPORAL_DIR"
 mkdir -p "$TEMPORAL_DIR"
 cp -a "$REPO_DIR/terraform/temporal-compose/." "$TEMPORAL_DIR/"
 
+if [ ! -f "$TEMPORAL_DIR/.env" ]; then
+  echo "temporal-compose/.env missing in repo clone; generating baseline defaults..."
+  cat > "$TEMPORAL_DIR/.env" <<'EOF'
+COMPOSE_PROJECT_NAME=temporal
+TEMPORAL_VERSION=1.29.1
+TEMPORAL_ADMINTOOLS_VERSION=1.29.1-tctl-1.18.4-cli-1.5.0
+TEMPORAL_UI_VERSION=2.34.0
+POSTGRESQL_VERSION=16
+EOF
+fi
+
 set_env_var() {
   key="$1"
   value="$2"
@@ -74,6 +85,7 @@ set_env_var() {
 
 # Compose-level environment values consumed by docker-compose.yml
 set_env_var "TEMPORAL_NAMESPACE" "${temporal_namespace}" "$TEMPORAL_DIR/.env"
+set_env_var "temporal_namespace" "${temporal_namespace}" "$TEMPORAL_DIR/.env"
 set_env_var "ENVIRONMENT" "${environment}" "$TEMPORAL_DIR/.env"
 set_env_var "AWS_REGION" "${region}" "$TEMPORAL_DIR/.env"
 set_env_var "EVIDENCE_BUCKET_NAME" "${evidence_bucket}" "$TEMPORAL_DIR/.env"
