@@ -20,6 +20,19 @@ data "archive_file" "layer" {
   excludes    = ["build.sh"]
 }
 
+locals {
+  required_shared_subpackages = [
+    "approval",
+    "auth",
+    "ingress",
+    "models",
+    "normalization",
+    "providers",
+    "routing",
+    "temporal",
+  ]
+}
+
 resource "aws_lambda_layer_version" "ingress" {
   filename                 = data.archive_file.layer.output_path
   layer_name               = "${var.name_prefix}-ingress-layer"
@@ -28,6 +41,15 @@ resource "aws_lambda_layer_version" "ingress" {
   compatible_architectures = ["arm64"]
 
   source_code_hash = data.archive_file.layer.output_base64sha256
+
+  lifecycle {
+    precondition {
+      condition = alltrue([
+        for pkg in local.required_shared_subpackages : fileexists("${path.module}/layers/ingress/python/shared/${pkg}/__init__.py")
+      ])
+      error_message = "Ingress layer is missing one or more required shared subpackages. Run terraform/modules/ingress/layers/ingress/build.sh (or build.ps1) before terraform apply."
+    }
+  }
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -60,11 +82,11 @@ resource "aws_lambda_function" "proxy" {
 
   environment {
     variables = {
-      TEMPORAL_HOST      = var.temporal_host
-      TEMPORAL_NAMESPACE = var.temporal_namespace
-      HITL_TOKEN_TABLE   = var.hitl_token_table
+      TEMPORAL_HOST          = var.temporal_host
+      TEMPORAL_NAMESPACE     = var.temporal_namespace
+      HITL_TOKEN_TABLE       = var.hitl_token_table
       HITL_TOKEN_TTL_SECONDS = tostring(var.hitl_token_ttl_seconds)
-      LOG_LEVEL          = "INFO"
+      LOG_LEVEL              = "INFO"
     }
   }
 

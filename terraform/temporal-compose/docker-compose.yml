@@ -56,7 +56,7 @@ services:
     networks:
       - temporal-network
     ports:
-      - '7233:7233'
+      - "7233:7233"
     volumes:
       - ./dynamicconfig:/etc/temporal/config/dynamicconfig
     healthcheck:
@@ -75,7 +75,7 @@ services:
         condition: service_healthy
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
-      - DEFAULT_NAMESPACE=default
+      - DEFAULT_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
     networks:
       - temporal-network
     volumes:
@@ -111,7 +111,11 @@ services:
       - /opt/secamo-poc/.env
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
-      - TEMPORAL_NAMESPACE=${temporal_namespace}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+      - ENVIRONMENT=${ENVIRONMENT:-temporal-test}
+      - AWS_REGION=${AWS_REGION:-eu-west-1}
+      - EVIDENCE_BUCKET_NAME=${EVIDENCE_BUCKET_NAME:-}
+      - AUDIT_TABLE_NAME=${AUDIT_TABLE_NAME:-}
     networks:
       - temporal-network
     restart: unless-stopped
@@ -130,12 +134,20 @@ services:
       - /opt/secamo-poc/.env
     environment:
       - TEMPORAL_ADDRESS=temporal:7233
-      - TEMPORAL_NAMESPACE=${temporal_namespace}
+      - TEMPORAL_NAMESPACE=${TEMPORAL_NAMESPACE:-default}
+      - ENVIRONMENT=${ENVIRONMENT:-temporal-test}
+      - AWS_REGION=${AWS_REGION:-eu-west-1}
       - GRAPH_INGRESS_HOST=0.0.0.0
       - GRAPH_INGRESS_PORT=8081
     entrypoint: ["python", "-m", "graph_ingress.launcher"]
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8081/healthz', timeout=3)"]
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8081/healthz', timeout=3)",
+        ]
       interval: 30s
       timeout: 5s
       start_period: 10s

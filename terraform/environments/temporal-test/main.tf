@@ -10,6 +10,13 @@ locals {
   name_prefix = "secamo-temporal-test"
 }
 
+module "storage" {
+  source = "../../modules/storage"
+
+  name_prefix          = local.name_prefix
+  evidence_bucket_name = var.evidence_bucket_name
+}
+
 # ══════════════════════════════════════════════════════════════
 # DATA SOURCES
 # ══════════════════════════════════════════════════════════════
@@ -220,6 +227,43 @@ resource "aws_iam_role_policy" "temporal_ssm_params" {
   })
 }
 
+resource "aws_iam_role_policy" "temporal_storage" {
+  name = "${local.name_prefix}-storage"
+  role = aws_iam_role.temporal.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          module.storage.evidence_bucket_arn,
+          "${module.storage.evidence_bucket_arn}/*"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "dynamodb:PutItem",
+          "dynamodb:GetItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
+        ]
+        Resource = [
+          module.storage.audit_table_arn,
+          "${module.storage.audit_table_arn}/index/*"
+        ]
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "temporal" {
   name = "${local.name_prefix}-profile"
   role = aws_iam_role.temporal.name
@@ -240,11 +284,10 @@ resource "aws_instance" "temporal" {
   user_data = templatefile("${path.module}/../../scripts/temporal-startup.sh", {
     temporal_namespace = var.temporal_namespace
     github_repo_url    = var.github_repo_url
-    db_endpoint        = "postgresql"
-    db_name            = "temporal"
-    db_username        = "temporal"
     environment        = "temporal-test"
     region             = data.aws_region.current.name
+    evidence_bucket    = module.storage.evidence_bucket_name
+    audit_table        = module.storage.audit_table_name
   })
 
   user_data_replace_on_change = true
@@ -274,7 +317,8 @@ resource "aws_instance" "temporal" {
   depends_on = [
     aws_route_table_association.public,
     aws_iam_role_policy_attachment.ssm,
-    aws_iam_role_policy.temporal_ssm_params
+    aws_iam_role_policy.temporal_ssm_params,
+    aws_iam_role_policy.temporal_storage
   ]
 }
 
@@ -562,8 +606,8 @@ resource "aws_iam_role_policy" "authorizer_ssm" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "ssm:GetParameter",
           "ssm:GetParameters",
           "ssm:GetParametersByPath"
@@ -571,8 +615,8 @@ resource "aws_iam_role_policy" "authorizer_ssm" {
         Resource = "arn:aws:ssm:*:*:parameter/secamo/tenants/*"
       },
       {
-        Effect   = "Allow"
-        Action   = [
+        Effect = "Allow"
+        Action = [
           "kms:Decrypt"
         ]
         Resource = "*"

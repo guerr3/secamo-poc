@@ -61,3 +61,9 @@ variable "microsoft_allowed_cidrs" {
   type        = list(string)
   default     = ["20.190.128.0/18", "40.126.0.0/18"]
 }
+
+variable "evidence_bucket_name" {
+  description = "Optional override for the evidence S3 bucket name"
+  type        = string
+  default     = ""
+}

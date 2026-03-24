@@ -3,9 +3,9 @@
 Build script for the secamo-ingress Lambda Layer (Windows/PowerShell)
 
 .DESCRIPTION
-Downloads and extracts the required Python packages (temporalio, pydantic) for the 
-AWS Lambda Linux/ARM64 runtime directly to the layer directory, without 
-requiring Docker. Also copies the shared models package into the layer.
+Downloads and extracts the required Python packages (temporalio, pydantic) for the
+AWS Lambda Linux/ARM64 runtime directly to the layer directory, without
+requiring Docker. Also copies shared runtime subpackages into the layer.
 
 .EXAMPLE
 .\build.ps1
@@ -34,10 +34,34 @@ pip install `
 
 # Copy shared package into the layer so the proxy Lambda can import it
 Write-Host "Copying shared package into layer..." -ForegroundColor Gray
-$SharedSrc = Join-Path $RepoRoot "shared"
 $SharedDst = Join-Path $LayerDir "shared"
 if (Test-Path $SharedDst) { Remove-Item -Recurse -Force $SharedDst }
-Copy-Item -Recurse -Path $SharedSrc -Destination $SharedDst
+New-Item -ItemType Directory -Path $SharedDst | Out-Null
+
+# Keep explicit subpackage list so newly added shared modules are not missed.
+$SharedSubdirs = @(
+    "approval",
+    "auth",
+    "ingress",
+    "models",
+    "normalization",
+    "providers",
+    "routing",
+    "temporal"
+)
+
+Get-ChildItem -Path (Join-Path $RepoRoot "shared") -Filter "*.py" -File |
+    Copy-Item -Destination $SharedDst
+
+foreach ($Subdir in $SharedSubdirs) {
+    $Src = Join-Path $RepoRoot (Join-Path "shared" $Subdir)
+    $Dst = Join-Path $SharedDst $Subdir
+    if (Test-Path $Src) {
+        Copy-Item -Recurse -Path $Src -Destination $Dst
+    } else {
+        Write-Warning "shared/$Subdir not found in repository"
+    }
+}
 
 # Clean up unnecessary files to reduce layer size
 Write-Host "Cleaning up unnecessary files..." -ForegroundColor Gray

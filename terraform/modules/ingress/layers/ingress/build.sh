@@ -4,7 +4,7 @@
 # ──────────────────────────────────────────────────────────────
 #
 # Installs Python dependencies into the layer directory alongside
-# the ingress_sdk package, and copies the shared models package.
+# the ingress_sdk package, and copies shared runtime subpackages.
 #
 # Usage:
 #   chmod +x build.sh
@@ -37,8 +37,31 @@ pip install \
 
 # Copy shared package into the layer so the proxy Lambda can import it
 echo "Copying shared package into layer..."
-rm -rf "${LAYER_DIR}/shared"
-cp -r "${REPO_ROOT}/shared" "${LAYER_DIR}/shared"
+SHARED_DST="${LAYER_DIR}/shared"
+rm -rf "${SHARED_DST}"
+mkdir -p "${SHARED_DST}"
+
+# Keep explicit subpackage list so newly added shared modules are not missed.
+SHARED_SUBDIRS=(
+  "approval"
+  "auth"
+  "ingress"
+  "models"
+  "normalization"
+  "providers"
+  "routing"
+  "temporal"
+)
+
+find "${REPO_ROOT}/shared" -maxdepth 1 -type f -name "*.py" -exec cp {} "${SHARED_DST}/" \;
+
+for subdir in "${SHARED_SUBDIRS[@]}"; do
+  if [ -d "${REPO_ROOT}/shared/${subdir}" ]; then
+    cp -r "${REPO_ROOT}/shared/${subdir}" "${SHARED_DST}/${subdir}"
+  else
+    echo "WARNING: shared/${subdir} not found in repository"
+  fi
+done
 
 # Clean up unnecessary files to reduce layer size
 find "${LAYER_DIR}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

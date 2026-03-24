@@ -41,3 +41,13 @@ output "hitl_token_table" {
   description = "DynamoDB table name for HiTL approval tokens"
   value       = aws_dynamodb_table.hitl_tokens.name
 }
+
+output "evidence_bucket_name" {
+  description = "S3 bucket used by evidence activities"
+  value       = module.storage.evidence_bucket_name
+}
+
+output "audit_table_name" {
+  description = "DynamoDB table used by audit activities"
+  value       = module.storage.audit_table_name
+}
