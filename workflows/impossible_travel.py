@@ -158,6 +158,7 @@ class ImpossibleTravelWorkflow:
 
         hitl_request = HiTLRequest(
             workflow_id=workflow.info().workflow_id,
+            run_id="",
             tenant_id=event.tenant_id,
             title=f"Impossible Travel approval required for {user_display}",
             description=(

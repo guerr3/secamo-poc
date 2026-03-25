@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import base64
 import hashlib
-import json
 import os
 import time
 from urllib.parse import urlencode
@@ -15,9 +15,20 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from activities._activity_errors import application_error_from_http_status, raise_activity_error
+from activities.tenant import get_tenant_config
 from shared.config import SECAMO_SENDER_EMAIL
 from shared.graph_client import get_graph_token
-from shared.models import HiTLRequest, TenantSecrets
+from shared.models import (
+    ChatOpsAction,
+    ChatOpsMessage,
+    HitlCallbackBinding,
+    HitlChannelDispatchResult,
+    HitlDispatchResult,
+    HiTLRequest,
+    TenantSecrets,
+)
+from shared.providers.factory import get_chatops_provider
+from shared.ssm_client import get_secret_bundle
 from activities.hitl_renderers import _render_approval_email
 
 
@@ -67,7 +78,7 @@ def _put_token_record(request: HiTLRequest, token: str) -> None:
             "reviewer_email": {"S": request.reviewer_email},
             "allowed_actions": {"SS": sorted(set(request.allowed_actions))},
             "used": {"BOOL": False},
-            "channel": {"S": "email"},
+            "channel": {"S": "hitl"},
             "expires_at": {"N": str(expires_at)},
         },
         ConditionExpression="attribute_not_exists(token)",
@@ -86,7 +97,34 @@ def _deterministic_token(request: HiTLRequest) -> str:
     return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
 
-async def _dispatch_email(request: HiTLRequest, graph_secrets: TenantSecrets) -> str:
+def _secret_type_from_credentials_path(path_template: str) -> str:
+    """Extract SSM secret_type from a configured credentials path template."""
+    normalized = path_template.replace("{tenant_id}", "tenant-placeholder").strip("/")
+    parts = [part for part in normalized.split("/") if part]
+    if not parts:
+        return "chatops"
+    return parts[-1]
+
+
+async def _load_secret_bundle_async(tenant_id: str, secret_type: str) -> dict[str, str]:
+    """Load tenant secret bundle via thread offloading for boto3-backed calls."""
+    return await asyncio.to_thread(get_secret_bundle, tenant_id, secret_type)
+
+
+def _dispatch_ok(channel: str, message_id: str | None = None) -> HitlChannelDispatchResult:
+    return HitlChannelDispatchResult(channel=channel, success=True, message_id=message_id)
+
+
+def _dispatch_error(channel: str, error_type: str, error_message: str) -> HitlChannelDispatchResult:
+    return HitlChannelDispatchResult(
+        channel=channel,
+        success=False,
+        error_type=error_type,
+        error_message=error_message,
+    )
+
+
+def _build_callback_binding(request: HiTLRequest) -> HitlCallbackBinding:
     token = _deterministic_token(request)
     try:
         _put_token_record(request, token)
@@ -97,17 +135,31 @@ async def _dispatch_email(request: HiTLRequest, graph_secrets: TenantSecrets) ->
 
     parameter_name = f"/{_name_prefix()}/hitl/endpoint_base_url"
     endpoint = _ssm.get_parameter(Name=parameter_name, WithDecryption=False)
-    base_url = endpoint.get("Parameter", {}).get("Value", "").strip()
-    if not base_url:
+    callback_endpoint = endpoint.get("Parameter", {}).get("Value", "").strip()
+    if not callback_endpoint:
         raise_activity_error(
             f"Empty HiTL endpoint base URL in SSM parameter: {parameter_name}",
             error_type="MissingHitlEndpointConfig",
             non_retryable=True,
         )
 
+    return HitlCallbackBinding(
+        token=token,
+        callback_endpoint=callback_endpoint,
+        workflow_id=request.workflow_id,
+        run_id=request.run_id,
+        allowed_actions=tuple(request.allowed_actions),
+    )
+
+
+async def _dispatch_email(
+    request: HiTLRequest,
+    graph_secrets: TenantSecrets,
+    binding: HitlCallbackBinding,
+) -> HitlChannelDispatchResult:
     action_urls = {
-        action: _join_query_url(base_url, token, action)
-        for action in request.allowed_actions
+        action: _join_query_url(binding.callback_endpoint, binding.token, action)
+        for action in binding.allowed_actions
     }
 
     email_html = _render_approval_email(request, action_urls)
@@ -154,68 +206,60 @@ async def _dispatch_email(request: HiTLRequest, graph_secrets: TenantSecrets) ->
     activity.logger.info(
         "[%s] HiTL email dispatched token=%s... recipient=%s",
         request.tenant_id,
-        token[:8],
+        binding.token[:8],
         request.reviewer_email,
     )
-    return token
+    return _dispatch_ok("email", message_id=response.headers.get("x-ms-request-id"))
 
 
-async def _dispatch_jira(request: HiTLRequest, jira_secrets: TenantSecrets | None) -> str:
-    if not request.ticket_key:
-        activity.logger.warning("[%s] Jira dispatch skipped: request.ticket_key is not set", request.tenant_id)
-        return "skipped:no_ticket_key"
+async def _dispatch_teams(
+    request: HiTLRequest,
+    binding: HitlCallbackBinding,
+) -> HitlChannelDispatchResult:
+    cfg = await get_tenant_config(request.tenant_id)
+    if not cfg.chatops_config.enabled:
+        return _dispatch_error("teams", "ChatOpsDisabled", "ChatOps is disabled for tenant")
 
-    if jira_secrets is None:
-        activity.logger.warning("[%s] Jira dispatch skipped: jira_secrets missing", request.tenant_id)
-        return "skipped:no_jira_secrets"
+    secret_type = _secret_type_from_credentials_path(cfg.chatops_config.credentials_path)
+    secrets = await _load_secret_bundle_async(request.tenant_id, secret_type)
+    if not secrets:
+        return _dispatch_error("teams", "MissingTenantSecrets", "No ChatOps secrets found")
 
-    if not jira_secrets.jira_base_url or not jira_secrets.jira_email or not jira_secrets.jira_api_token:
-        activity.logger.warning("[%s] Jira dispatch skipped: incomplete Jira secrets", request.tenant_id)
-        return "skipped:incomplete_jira_secrets"
+    provider = await get_chatops_provider(request.tenant_id, secrets)
 
-    base_url = jira_secrets.jira_base_url.rstrip("/")
-    auth = (jira_secrets.jira_email, jira_secrets.jira_api_token)
-    transition_id = str(request.metadata.get("jsm_approval_transition_id", "31"))
-    workflow_label = f"secamo-wf:{request.workflow_id}"
+    resolved_channel = cfg.chatops_config.default_channel
+    if not resolved_channel and cfg.chatops_config.default_channels:
+        resolved_channel = cfg.chatops_config.default_channels[0]
+    if not resolved_channel:
+        return _dispatch_error("teams", "MissingChatOpsChannel", "No ChatOps target channel configured")
 
-    async with httpx.AsyncClient(timeout=30.0, auth=auth) as client:
-        labels_response = await client.put(
-            f"{base_url}/rest/api/3/issue/{request.ticket_key}",
-            json={
-                "update": {
-                    "labels": [
-                        {"add": workflow_label},
-                    ]
-                }
+    actions = [
+        ChatOpsAction(
+            action_id=action,
+            label=action.replace("_", " ").title(),
+            payload={
+                "token": binding.token,
+                "action": action,
+                "workflow_id": binding.workflow_id,
+                "run_id": binding.run_id,
             },
         )
-        if labels_response.status_code >= 400:
-            raise application_error_from_http_status(
-                request.tenant_id,
-                "jira",
-                "hitl_dispatch_jira_add_label",
-                labels_response.status_code,
-            )
+        for action in binding.allowed_actions
+    ]
 
-        transition_response = await client.post(
-            f"{base_url}/rest/api/3/issue/{request.ticket_key}/transitions",
-            json={"transition": {"id": transition_id}},
-        )
-        if transition_response.status_code >= 400:
-            raise application_error_from_http_status(
-                request.tenant_id,
-                "jira",
-                "hitl_dispatch_jira_transition",
-                transition_response.status_code,
-            )
-
-    activity.logger.info(
-        "[%s] Jira HiTL dispatch completed ticket=%s transition_id=%s",
-        request.tenant_id,
-        request.ticket_key,
-        transition_id,
+    message = ChatOpsMessage(
+        title=request.title,
+        body=request.description,
+        actions=actions,
+        metadata={
+            "workflow_id": binding.workflow_id,
+            "run_id": binding.run_id,
+            "ticket_key": request.ticket_key or "",
+        },
     )
-    return request.ticket_key
+
+    message_id = await provider.send_message(target_channel=resolved_channel, message=message)
+    return _dispatch_ok("teams", message_id=message_id)
 
 
 @activity.defn
@@ -224,7 +268,9 @@ async def request_hitl_approval(
     request: HiTLRequest,
     graph_secrets: TenantSecrets,
     jira_secrets: TenantSecrets | None = None,
-) -> str:
+) -> HitlDispatchResult:
+    _ = jira_secrets
+
     activity.logger.info(
         "[%s] request_hitl_approval workflow_id=%s channels=%s",
         tenant_id,
@@ -232,48 +278,55 @@ async def request_hitl_approval(
         request.channels,
     )
 
-    dispatch_results: dict[str, str] = {}
+    binding = _build_callback_binding(request)
+    channel_results: list[HitlChannelDispatchResult] = []
 
-    dispatch_map = {
-        "email": lambda: _dispatch_email(request, graph_secrets),
-        "jira": lambda: _dispatch_jira(request, jira_secrets),
-    }
+    async def _dispatch_channel(channel: str) -> HitlChannelDispatchResult:
+        normalized = channel.strip().lower()
+        if normalized == "email":
+            return await _dispatch_email(request, graph_secrets, binding)
+        if normalized == "teams":
+            return await _dispatch_teams(request, binding)
+        return _dispatch_error(channel, "UnsupportedChannel", f"HiTL channel '{channel}' is not supported")
 
     for channel in request.channels:
-        activity.heartbeat({"channel": channel, "dispatch_results": dispatch_results})
-        handler = dispatch_map.get(channel)
-        if handler is None:
-            activity.logger.warning("[%s] HiTL channel '%s' is not supported", tenant_id, channel)
-            dispatch_results[channel] = "skipped:unsupported"
-            continue
+        heartbeat_payload = {
+            "channel": channel,
+            "results": [result.model_dump(mode="json") for result in channel_results],
+        }
+        activity.heartbeat(heartbeat_payload)
 
         try:
-            await handler()
-            dispatch_results[channel] = "ok"
+            result = await _dispatch_channel(channel)
+            channel_results.append(result)
+            if not result.success:
+                activity.logger.warning(
+                    "[%s] HiTL channel '%s' dispatch failed error=%s",
+                    tenant_id,
+                    channel,
+                    result.error_type,
+                )
         except ApplicationError as exc:
-            dispatch_results[channel] = f"error:{exc.type}"
-            activity.logger.error(
-                "[%s] HiTL channel '%s' dispatch failed error=%s",
-                tenant_id,
-                channel,
-                exc.type,
+            channel_results.append(
+                _dispatch_error(channel, exc.type or "ApplicationError", str(exc)),
             )
         except Exception as exc:
-            dispatch_results[channel] = f"error:{type(exc).__name__}"
-            activity.logger.error(
-                "[%s] HiTL channel '%s' dispatch failed error=%s",
-                tenant_id,
-                channel,
-                type(exc).__name__,
-            )
+            channel_results.append(_dispatch_error(channel, type(exc).__name__, str(exc)))
 
-    successful_channels = sum(1 for status in dispatch_results.values() if status == "ok")
-    failed_channels = [channel for channel, status in dispatch_results.items() if status.startswith("error:")]
-    if successful_channels == 0 and failed_channels:
+    successful_channels = [result.channel for result in channel_results if result.success]
+    failed_channels = [result.channel for result in channel_results if not result.success]
+    if not successful_channels:
         raise_activity_error(
             f"[{tenant_id}] HiTL dispatch failed for channels={','.join(failed_channels)}",
             error_type="HiTLDispatchFailed",
             non_retryable=False,
         )
 
-    return json.dumps(dispatch_results)
+    return HitlDispatchResult(
+        workflow_id=binding.workflow_id,
+        run_id=binding.run_id,
+        token_preview=f"{binding.token[:8]}...",
+        channel_results=channel_results,
+        any_channel_succeeded=bool(successful_channels),
+        failed_channels=failed_channels,
+    )

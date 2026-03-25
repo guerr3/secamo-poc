@@ -126,6 +126,60 @@ def _parse_action_from_text(raw_text: str) -> str:
     return "dismiss"
 
 
+def _extract_hitl_callback_fields(event: IngressEvent) -> tuple[str, str, str, str, str]:
+    """Extract callback token/action/identity fields from GET query or POST body.
+
+    Returns:
+        token, action, callback_workflow_id, callback_reviewer, callback_comments
+    """
+    query = event.query_params or {}
+    body = event.body if isinstance(event.body, dict) else {}
+    nested = body.get("data") if isinstance(body.get("data"), dict) else {}
+
+    token = str(
+        nested.get("token")
+        or body.get("token")
+        or query.get("token")
+        or ""
+    ).strip()
+
+    action = str(
+        nested.get("action")
+        or nested.get("action_taken")
+        or nested.get("action_id")
+        or body.get("action")
+        or body.get("action_taken")
+        or body.get("action_id")
+        or query.get("action")
+        or ""
+    ).strip()
+
+    callback_workflow_id = str(
+        nested.get("workflow_id")
+        or body.get("workflow_id")
+        or query.get("workflow_id")
+        or ""
+    ).strip()
+
+    callback_reviewer = str(
+        nested.get("reviewer")
+        or nested.get("actor")
+        or nested.get("user")
+        or body.get("reviewer")
+        or body.get("actor")
+        or body.get("user")
+        or ""
+    ).strip()
+
+    callback_comments = str(
+        nested.get("comments")
+        or body.get("comments")
+        or ""
+    ).strip()
+
+    return token, action, callback_workflow_id, callback_reviewer, callback_comments
+
+
 def _ssm_get_parameter_value(name: str) -> str:
     try:
         response = _ssm.get_parameter(Name=name, WithDecryption=True)
@@ -228,8 +282,8 @@ PROVIDER_EVENT_ROUTING = {
 # ── Route: /api/v1/hitl/respond ─────────────────────────────
 
 async def handle_hitl_respond(event: IngressEvent) -> dict:
-    token = (event.query_params or {}).get("token")
-    action = (event.query_params or {}).get("action")
+    token, action, callback_workflow_id, callback_reviewer, callback_comments = _extract_hitl_callback_fields(event)
+
     if not token or not action:
         return _html_response(
             400,
@@ -292,11 +346,27 @@ async def handle_hitl_respond(event: IngressEvent) -> dict:
             "<html><body><h3>Internal error</h3><p>Workflow mapping missing for token.</p></body></html>",
         )
 
+    if callback_workflow_id and callback_workflow_id != workflow_id:
+        logger.warning(
+            "HiTL respond rejected token=%s workflow_id_mismatch callback=%s token_record=%s",
+            token_preview,
+            callback_workflow_id,
+            workflow_id,
+        )
+        return _html_response(
+            403,
+            "<html><body><h3>Forbidden</h3><p>Workflow identity mismatch for this approval token.</p></body></html>",
+        )
+
+    reviewer = f"email:{reviewer_email}"
+    if callback_reviewer:
+        reviewer = callback_reviewer if ":" in callback_reviewer else f"teams:{callback_reviewer}"
+
     payload = {
         "approved": str(action) != "dismiss",
-        "reviewer": f"email:{reviewer_email}",
+        "reviewer": reviewer,
         "action": str(action),
-        "comments": "Approved via signed email link",
+        "comments": callback_comments or "Approved via signed email link",
     }
 
     await temporal.signal_workflow(

@@ -303,18 +303,53 @@ class ApprovalDecision(BaseModel):
 
 class HiTLRequest(BaseModel):
     """Generic workflow request contract for Human-in-the-Loop approvals."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     workflow_id: str
+    run_id: str = ""
     tenant_id: str
     title: str
     description: str
     allowed_actions: list[str]
     reviewer_email: str
     ticket_key: Optional[str] = None
-    channels: list[str] = Field(default_factory=lambda: ["email", "jira"])
+    channels: list[str] = Field(default_factory=lambda: ["email", "teams"])
     timeout_hours: int = 8
     metadata: dict = Field(default_factory=dict)
+
+
+class HitlCallbackBinding(BaseModel):
+    """Token and callback endpoint binding shared by all HITL channels."""
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    token: str
+    callback_endpoint: str
+    workflow_id: str
+    run_id: str = ""
+    allowed_actions: tuple[str, ...] = ()
+
+
+class HitlChannelDispatchResult(BaseModel):
+    """Per-channel outbound delivery result for HITL requests."""
+    model_config = ConfigDict(from_attributes=True)
+
+    channel: str
+    success: bool
+    message_id: str | None = None
+    error_type: str | None = None
+    error_message: str | None = None
+
+
+class HitlDispatchResult(BaseModel):
+    """Typed aggregate result returned by request_hitl_approval activity."""
+    model_config = ConfigDict(from_attributes=True)
+
+    workflow_id: str
+    run_id: str = ""
+    token_preview: str
+    channel_results: list[HitlChannelDispatchResult] = Field(default_factory=list)
+    any_channel_succeeded: bool
+    failed_channels: list[str] = Field(default_factory=list)
 
 
 class EvidenceBundle(BaseModel):
@@ -371,7 +406,7 @@ class TicketCreationRequest(BaseModel):
 
 
 class HiTLApprovalRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     tenant_id: str
     hitl_request: HiTLRequest
