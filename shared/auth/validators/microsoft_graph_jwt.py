@@ -7,6 +7,7 @@ This module must not contain webhook routing logic or workflow execution behavio
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 import jwt
@@ -23,14 +24,25 @@ class MicrosoftGraphJwtValidator:
         *,
         validator_name: str = "microsoft_graph_jwt",
         tenant_id_relative_path: str = "graph/tenant_azure_id",
-        audience: str = "https://management.azure.com/",
+        audience: str | list[str] | None = None,
         jwks_ttl_seconds: int = 3600,
     ) -> None:
         self._resolver = resolver
         self._validator_name = validator_name
         self._tenant_id_relative_path = tenant_id_relative_path
-        self._audience = audience
+        self._audience = audience if audience is not None else self._default_audience()
         self._jwks_ttl_seconds = jwks_ttl_seconds
+
+    @staticmethod
+    def _default_audience() -> str | list[str]:
+        configured = [
+            value.strip()
+            for value in os.environ.get("GRAPH_NOTIFICATION_APP_IDS", "").split(",")
+            if value.strip()
+        ]
+        if configured:
+            return configured
+        return "https://management.azure.com/"
 
     @staticmethod
     def _find_header(headers: dict[str, str], name: str) -> str:

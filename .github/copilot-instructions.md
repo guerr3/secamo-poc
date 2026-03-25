@@ -8,7 +8,7 @@ Primary stack:
 
 - Python 3.11
 - Temporal Python SDK (`temporalio`)
-- FastAPI ingress service
+- AWS API Gateway + Lambda ingress proxy
 - AWS (SSM, DynamoDB, S3) via `boto3`
 - Pydantic v2 contracts
 

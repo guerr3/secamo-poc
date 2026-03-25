@@ -294,11 +294,11 @@ aws sts get-caller-identity
 
 ```powershell
 # Optie A: Gebruik het juiste profiel expliciet
-$env:AWS_PROFILE = "760659115776_PowerUser-IAMFullAccess"
+$env:AWS_PROFILE = "<jouw-aws-profiel>"
 aws sts get-caller-identity
 
 # Optie B: Login via SSO (als geconfigureerd)
-aws sso login --profile 760659115776_PowerUser-IAMFullAccess
+aws sso login --profile <jouw-aws-profiel>
 ```
 
 > ⚠️ **Session tokens verlopen!** Als je een `InvalidClientTokenId` error krijgt, moet je je session token vernieuwen via AWS SSO / Identity Center.
@@ -306,12 +306,12 @@ aws sso login --profile 760659115776_PowerUser-IAMFullAccess
 **Verifieer dat het werkt:**
 
 ```powershell
-aws sts get-caller-identity --profile 760659115776_PowerUser-IAMFullAccess
+aws sts get-caller-identity --profile <jouw-aws-profiel>
 # Verwacht output:
 # {
 #     "UserId": "...",
-#     "Account": "760659115776",
-#     "Arn": "arn:aws:sts::760659115776:assumed-role/..."
+#     "Account": "<jouw-account-id>",
+#     "Arn": "arn:aws:sts::<jouw-account-id>:assumed-role/..."
 # }
 ```
 
@@ -321,29 +321,29 @@ Terraform slaat zijn state op in S3. Deze bucket moet **vóór** `terraform init
 
 ```powershell
 # Stel je profiel in
-$env:AWS_PROFILE = "760659115776_PowerUser-IAMFullAccess"
+$env:AWS_PROFILE = "<jouw-aws-profiel>"
 
 # Maak de S3 bucket
 aws s3api create-bucket `
-  --bucket "secamo-poc-tfstate-760659115776" `
+  --bucket "secamo-poc-tfstate-<jouw-account-id>" `
   --region eu-west-1 `
   --create-bucket-configuration LocationConstraint=eu-west-1
 
 # Activeer versioning (beschermt tegen corrupte state)
 aws s3api put-bucket-versioning `
-  --bucket "secamo-poc-tfstate-760659115776" `
+  --bucket "secamo-poc-tfstate-<jouw-account-id>" `
   --versioning-configuration Status=Enabled
 
 # Activeer encryption
 aws s3api put-bucket-encryption `
-  --bucket "secamo-poc-tfstate-760659115776" `
+  --bucket "secamo-poc-tfstate-<jouw-account-id>" `
   --server-side-encryption-configuration '{
     "Rules": [{"ApplyServerSideEncryptionByDefault": {"SSEAlgorithm": "aws:kms"}, "BucketKeyEnabled": true}]
   }'
 
 # Blokkeer publieke toegang
 aws s3api put-public-access-block `
-  --bucket "secamo-poc-tfstate-760659115776" `
+  --bucket "secamo-poc-tfstate-<jouw-account-id>" `
   --public-access-block-configuration '{
     "BlockPublicAcls": true,
     "IgnorePublicAcls": true,
@@ -373,7 +373,7 @@ Het bucket-naam in `backend.tf` moet overeenkomen met wat je zojuist hebt aangem
 # terraform/environments/poc/backend.tf
 terraform {
   backend "s3" {
-    bucket         = "secamo-poc-tfstate-760659115776"   # ← jouw bucket naam
+    bucket         = "secamo-poc-tfstate-<jouw-account-id>"   # ← jouw bucket naam
     key            = "environments/poc/terraform.tfstate"
     region         = "eu-west-1"
     encrypt        = true
@@ -387,7 +387,7 @@ terraform {
 De ingress-module verwacht een zip-bestand als Lambda deployment package. Maak een minimale placeholder:
 
 ```powershell
-cd c:\Users\ghost\Documents\codebases\secamo-poc\terraform\modules\ingress
+cd <repo-root>\terraform\modules\ingress
 
 # Maak een minimale Python handler
 @"
@@ -409,7 +409,7 @@ Remove-Item handler.py
 
 ```powershell
 # Zorg dat Terraform het juiste AWS profiel gebruikt
-$env:AWS_PROFILE = "760659115776_PowerUser-IAMFullAccess"
+$env:AWS_PROFILE = "<jouw-aws-profiel>"
 
 # OF stel de regio expliciet in
 $env:AWS_DEFAULT_REGION = "eu-west-1"
@@ -432,7 +432,7 @@ $env:AWS_DEFAULT_REGION = "eu-west-1"
 ### Altijd vanuit de environment directory
 
 ```powershell
-cd c:\Users\ghost\Documents\codebases\secamo-poc\terraform\environments\poc
+cd <repo-root>\terraform\environments\poc
 ```
 
 ### `terraform init` — Initialisatie
@@ -583,14 +583,10 @@ terraform import module.vpc.aws_vpc.main vpc-0abc123def
 
 ```powershell
 # Fix: Stel het profiel in
-$env:AWS_PROFILE = "760659115776_PowerUser-IAMFullAccess"
-AWS_PROFILE=PowerUser-IAMFullAccess-760659115776
-$env:AWS_PROFILE = "PowerUser-IAMFullAccess-760659115776"
+$env:AWS_PROFILE = "<jouw-aws-profiel>"
 # Als session token verlopen is, vernieuw via SSO:
-aws sso login --profile PowerUser-IAMFullAccess-760659115776
+aws sso login --profile <jouw-aws-profiel>
 ```
-
-PowerUser-IAMFullAccess-760659115776
 
 ### `Error: Failed to get existing workspaces: S3 bucket does not exist`
 
@@ -659,8 +655,8 @@ terraform validate
 
 ```powershell
 # ── Setup ────────────────────────────────────────────────────
-$env:AWS_PROFILE = "760659115776_PowerUser-IAMFullAccess"
-cd c:\Users\ghost\Documents\codebases\secamo-poc\terraform\environments\poc
+$env:AWS_PROFILE = "<jouw-aws-profiel>"
+cd <repo-root>\terraform\environments\poc
 
 # ── Standaard workflow ───────────────────────────────────────
 terraform init                        # Eenmalig / na backend change

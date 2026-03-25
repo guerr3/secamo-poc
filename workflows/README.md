@@ -2,7 +2,9 @@
 
 > This folder defines parent Temporal workflows that orchestrate IAM and SOC automation, subscription reconciliation, and polling loops.
 
-## Files
+## What This Does
+
+### Files
 
 | File                            | Purpose                                                                                                         | Used By                                                                    |
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
@@ -14,11 +16,25 @@
 | `polling_manager.py`            | Long-running poller that fetches provider events and starts routed child workflows.                             | Started from onboarding flow for configured polling providers.             |
 | `child/README.md`               | Child workflow layer documentation.                                                                             | Parent workflows and maintainers.                                          |
 
-## How It Fits
+This layer is the deterministic orchestration center between ingress events and side-effecting activity calls. Parent workflows start child workflows in `workflows/child/` to keep SOC/IAM flows reusable and composable. Queue registration and worker lifecycle are configured in `workers/run_worker.py`.
 
-This layer is the deterministic orchestration center between ingress events from [../terraform/modules/ingress/src/ingress/handler.py](../terraform/modules/ingress/src/ingress/handler.py) and side-effecting activity calls in [../activities/README.md](../activities/README.md). Parent workflows start child workflows in [child/README.md](child/README.md) to split larger SOC/IAM flows into reusable stages. Queue registration and worker lifecycle are configured in [../workers/README.md](../workers/README.md).
+## How To Run
 
-## Notes / Extension Points
+Workflows run via workers:
+
+```bash
+python -m workers.run_worker
+```
+
+## How To Verify
+
+Run workflow-related tests and integration-safe unit coverage:
+
+```bash
+python -m pytest -q
+```
+
+## Troubleshooting
 
 - Use child workflows for new multi-step branches instead of inflating parent run methods.
 - `iam_onboarding.py` currently includes a TODO path with a hardcoded temporary password; replace with secure generation before production use.

@@ -16,12 +16,10 @@ This module must not contain workflow business logic or activity implementations
 
 import hashlib
 import hmac
-import json
 import logging
 import os
 import time
 from uuid import uuid4
-from urllib.request import urlopen
 
 import boto3
 import jwt
@@ -35,6 +33,7 @@ from shared.models import CanonicalEvent, GraphNotificationEnvelope, IamIngressR
 from shared.normalization.normalizers import canonical_event_to_workflow_intent
 from shared.routing import build_default_route_registry
 from shared.temporal.dispatcher import RouteFanoutDispatcher, WorkflowStarter
+from shared.auth import AuthValidationRequest, CachedSecretResolver, build_default_validator_registry
 from mappers import normalize_event_body
 
 
@@ -48,6 +47,8 @@ GRAPH_NOTIFICATION_APP_IDS = {
     value.strip() for value in os.environ.get("GRAPH_NOTIFICATION_APP_IDS", "").split(",") if value.strip()
 }
 _graph_jwks_client = jwt.PyJWKClient(GRAPH_COMMON_JWKS_URL)
+_auth_resolver = CachedSecretResolver()
+_auth_registry = build_default_validator_registry(_auth_resolver)
 
 
 class _IngressSdkWorkflowStarter(WorkflowStarter):
@@ -180,92 +181,35 @@ def _extract_hitl_callback_fields(event: IngressEvent) -> tuple[str, str, str, s
     return token, action, callback_workflow_id, callback_reviewer, callback_comments
 
 
-def _ssm_get_parameter_value(name: str) -> str:
-    try:
-        response = _ssm.get_parameter(Name=name, WithDecryption=True)
-        return str(response.get("Parameter", {}).get("Value", ""))
-    except ClientError:
+def _authorizer_tenant_id(event: IngressEvent) -> str:
+    tenant_id = str(getattr(event, "tenant_id", "") or "").strip()
+    if not tenant_id or tenant_id.lower() == "unknown":
         return ""
+    return tenant_id
 
 
-def _validate_hmac_sha256(*, signature: str, secret: str, raw_body: str) -> bool:
-    if not signature or not secret:
-        return False
-    expected = hmac.new(
-        secret.encode("utf-8"),
-        (raw_body or "").encode("utf-8"),
-        hashlib.sha256,
-    ).hexdigest()
-    supplied = str(signature).strip()
-    if supplied.lower().startswith("sha256="):
-        supplied = supplied.split("=", 1)[1]
-    return hmac.compare_digest(supplied, expected)
-
-
-def _validate_microsoft_defender_signature(event: IngressEvent, tenant_id: str) -> bool:
-    auth_header = _find_header(event.headers, "authorization")
-    if not auth_header.lower().startswith("bearer "):
-        return False
-
-    token = auth_header[7:].strip()
-    if not token:
-        return False
-
-    tenant_azure_id = _ssm_get_parameter_value(f"/secamo/tenants/{tenant_id}/graph/tenant_azure_id")
-    if not tenant_azure_id:
-        return False
-
-    jwks_url = f"https://login.microsoftonline.com/{tenant_azure_id}/discovery/v2.0/keys"
-    try:
-        with urlopen(jwks_url, timeout=5) as jwks_resp:
-            if jwks_resp.status != 200:
-                return False
-            json.loads(jwks_resp.read().decode("utf-8"))
-
-        jwk_client = jwt.PyJWKClient(jwks_url)
-        signing_key = jwk_client.get_signing_key_from_jwt(token).key
-        claims = jwt.decode(
-            token,
-            signing_key,
-            algorithms=["RS256"],
-            audience="https://management.azure.com/",
-            options={"require": ["exp", "iat", "iss", "aud"]},
+async def _validate_provider_authentication(*, event: IngressEvent, tenant_id: str, provider: str, channel: str = "webhook") -> bool:
+    validation = await _auth_registry.validate(
+        AuthValidationRequest(
+            tenant_id=tenant_id,
+            provider=provider,
+            channel=channel,
+            headers={str(k): str(v) for k, v in (event.headers or {}).items()},
+            raw_body=event.raw_body or "",
         )
-    except Exception:
-        return False
+    )
+    if validation.authenticated:
+        return True
 
-    issuer = str(claims.get("iss", ""))
-    allowed_issuers = {
-        f"https://login.microsoftonline.com/{tenant_azure_id}/v2.0",
-        f"https://sts.windows.net/{tenant_azure_id}/",
-    }
-    return issuer in allowed_issuers
-
-
-def _validate_crowdstrike_signature(event: IngressEvent, tenant_id: str) -> bool:
-    signature = _find_header(event.headers, "x-cs-signature")
-    secret = _ssm_get_parameter_value(f"/secamo/tenants/{tenant_id}/webhooks/crowdstrike_secret")
-    return _validate_hmac_sha256(signature=signature, secret=secret, raw_body=event.raw_body or "")
-
-
-def _validate_sentinelone_signature(event: IngressEvent, tenant_id: str) -> bool:
-    signature = _find_header(event.headers, "x-sentinel-one-signature")
-    secret = _ssm_get_parameter_value(f"/secamo/tenants/{tenant_id}/webhooks/sentinelone_secret")
-    return _validate_hmac_sha256(signature=signature, secret=secret, raw_body=event.raw_body or "")
-
-
-def _validate_jira_ingress_signature(event: IngressEvent, tenant_id: str) -> bool:
-    signature = _find_header(event.headers, "x-hub-signature-256")
-    secret = _ssm_get_parameter_value(f"/secamo/tenants/{tenant_id}/webhooks/jira_secret")
-    return _validate_hmac_sha256(signature=signature, secret=secret, raw_body=event.raw_body or "")
-
-
-_SIGNATURE_VALIDATORS = {
-    "microsoft_defender": _validate_microsoft_defender_signature,
-    "crowdstrike": _validate_crowdstrike_signature,
-    "sentinelone": _validate_sentinelone_signature,
-    "jira": _validate_jira_ingress_signature,
-}
+    logger.warning(
+        "Provider authentication failed tenant_id=%s provider=%s channel=%s reason=%s details=%s",
+        tenant_id,
+        provider,
+        channel,
+        validation.reason,
+        validation.details,
+    )
+    return False
 
 
 PROVIDER_EVENT_ROUTING = {
@@ -386,11 +330,9 @@ async def handle_hitl_respond(event: IngressEvent) -> dict:
 
 async def handle_hitl_jira(event: IngressEvent) -> dict:
     body = event.body or {}
-    tenant_id = (
-        body.get("tenant_id")
-        or (event.query_params or {}).get("tenant_id")
-        or "test-tenant"
-    )
+    tenant_id = _authorizer_tenant_id(event)
+    if not tenant_id:
+        return response.error(401, "Missing verified tenant context")
 
     signature = _find_header(event.headers, "x-hub-signature-256")
     if not signature:
@@ -595,18 +537,15 @@ async def _dispatch_provider_event(*, raw_body: dict, provider: str, event_type:
 
 async def handle_event(event: IngressEvent) -> dict:
     """Generic provider-event ingress route for workflow starts."""
-    tenant_id = str((event.path_params or {}).get("tenant_id", "")).strip()
+    tenant_id = _authorizer_tenant_id(event)
     if not tenant_id:
-        return response.error(400, "tenant_id path parameter is required")
+        return response.error(401, "Missing verified tenant context")
 
     provider = str(event.body.get("provider", "")).strip().lower()
     if not provider:
         return response.error(400, "provider is required in request body")
 
-    validator = _SIGNATURE_VALIDATORS.get(provider)
-    if validator is None:
-        logger.warning("No signature validator configured for provider=%s; allowing request", provider)
-    elif not validator(event, tenant_id):
+    if not await _validate_provider_authentication(event=event, tenant_id=tenant_id, provider=provider, channel="webhook"):
         return response.error(401, "Invalid provider signature")
 
     event_type = str(event.body.get("event_type", "alert")).strip().lower() or "alert"
@@ -619,9 +558,9 @@ async def handle_event(event: IngressEvent) -> dict:
 
 
 async def handle_graph_notification(event: IngressEvent) -> dict:
-    tenant_id = str((event.path_params or {}).get("tenant_id", "")).strip()
+    tenant_id = _authorizer_tenant_id(event)
     if not tenant_id:
-        return response.error(400, "tenant_id path parameter is required")
+        return response.error(401, "Missing verified tenant context")
 
     validation_token = str((event.query_params or {}).get("validationToken", "")).strip()
     if validation_token:
@@ -631,7 +570,12 @@ async def handle_graph_notification(event: IngressEvent) -> dict:
             "body": validation_token,
         }
 
-    if not _validate_microsoft_defender_signature(event, tenant_id):
+    if not await _validate_provider_authentication(
+        event=event,
+        tenant_id=tenant_id,
+        provider="microsoft_defender",
+        channel="webhook",
+    ):
         return response.error(401, "Invalid provider signature")
 
     if not isinstance(event.body, dict):

@@ -1,50 +1,15 @@
 import os
-import time
 import logging
-import hmac
 import boto3
-from typing import Dict, Any, Tuple, Optional
+from typing import Dict, Any, Optional
 
 # Configure logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
 logger = logging.getLogger(__name__)
 logger.setLevel(LOG_LEVEL)
 
-# Initialize SSM Client inside the global scope to reuse the connection pool across warm starts
-ssm_client = boto3.client("ssm")
-
-# Simple TTL Cache for SSM parameters
-# Structure: { "parameter_name": {"value": "secret_string", "expires_at": timestamp_in_seconds} }
-SSM_CACHE: Dict[str, Dict[str, Any]] = {}
-CACHE_TTL_SECONDS = int(os.environ.get("CACHE_TTL_SECONDS", "300"))
-
-def get_ssm_parameter(param_name: str) -> Optional[str]:
-    """Fetch an SSM parameter securely, returning from the local TTL cache if valid."""
-    current_time = time.time()
-    
-    # Check cache first
-    cached_item = SSM_CACHE.get(param_name)
-    if cached_item and current_time < cached_item.get("expires_at", 0):
-        logger.debug("Cache hit for parameter: %s", param_name)
-        return cached_item["value"]
-    
-    try:
-        logger.info("Fetching SSM parameter from AWS: %s", param_name)
-        response = ssm_client.get_parameter(Name=param_name, WithDecryption=True)
-        secret_value = response["Parameter"]["Value"]
-        
-        # Update cache
-        SSM_CACHE[param_name] = {
-            "value": secret_value,
-            "expires_at": current_time + CACHE_TTL_SECONDS
-        }
-        return secret_value
-    except ssm_client.exceptions.ParameterNotFound:
-        logger.error("SSM Parameter not found: %s", param_name)
-        return None
-    except Exception as e:
-        logger.error("Failed to fetch SSM parameter %s: %s", param_name, str(e))
-        return None
+TENANT_TABLE_NAME = os.environ.get("TENANT_TABLE_NAME", "").strip()
+_dynamo = boto3.client("dynamodb")
 
 def generate_policy(principal_id: str, effect: str, resource: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Helper function to generate an IAM policy for the API Gateway Custom Authorizer."""
@@ -66,13 +31,70 @@ def generate_policy(principal_id: str, effect: str, resource: str, context: Opti
     
     return policy
 
-def extract_headers(event: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
-    """Extract tenant and bearer token headers for internal ingress auth."""
+def extract_tenant_header(event: Dict[str, Any]) -> Optional[str]:
+    """Extract tenant identifier from request headers."""
     headers = {k.lower(): v for k, v in event.get("headers", {}).items() if v}
-    tenant_id = headers.get("x-tenant-id")
-    auth_token = headers.get("authorization")
-    
-    return tenant_id, auth_token
+    return headers.get("x-tenant-id")
+
+
+def _attribute_to_str(item: Dict[str, Dict[str, str]], name: str) -> str:
+    attr = item.get(name) or {}
+    if "S" in attr:
+        return str(attr["S"])
+    if "N" in attr:
+        return str(attr["N"])
+    if "BOOL" in attr:
+        return "true" if bool(attr["BOOL"]) else "false"
+    return ""
+
+
+def _attribute_to_bool(item: Dict[str, Dict[str, str]], name: str) -> Optional[bool]:
+    attr = item.get(name) or {}
+    if "BOOL" in attr:
+        return bool(attr["BOOL"])
+    if "S" in attr:
+        return str(attr["S"]).strip().lower() in {"1", "true", "yes", "on", "active", "enabled"}
+    if "N" in attr:
+        return str(attr["N"]).strip() == "1"
+    return None
+
+
+def _tenant_is_active(item: Dict[str, Dict[str, str]]) -> bool:
+    explicit_active = _attribute_to_bool(item, "active")
+    if explicit_active is not None:
+        return explicit_active
+
+    explicit_is_active = _attribute_to_bool(item, "is_active")
+    if explicit_is_active is not None:
+        return explicit_is_active
+
+    status = _attribute_to_str(item, "status").strip().lower()
+    if status:
+        return status in {"active", "enabled", "true", "1"}
+
+    # Default to inactive when no explicit activation markers are present.
+    return False
+
+
+def _lookup_tenant_item(tenant_id: str) -> Optional[Dict[str, Dict[str, str]]]:
+    if not TENANT_TABLE_NAME:
+        logger.error("TENANT_TABLE_NAME is not configured")
+        return None
+
+    try:
+        response = _dynamo.get_item(
+            TableName=TENANT_TABLE_NAME,
+            Key={"tenant_id": {"S": tenant_id}},
+            ConsistentRead=True,
+        )
+    except Exception as exc:
+        logger.error("Tenant lookup failed tenant_id=%s error=%s", tenant_id, str(exc))
+        return None
+
+    item = response.get("Item")
+    if not isinstance(item, dict):
+        return None
+    return item
 
 def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
     """
@@ -85,35 +107,18 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         logger.error("Missing methodArn in event")
         raise Exception("Unauthorized")
 
-    # Extract headers
-    tenant_id, auth_token = extract_headers(event)
-
-    if not tenant_id or not auth_token:
-        logger.warning("Missing required headers (x-tenant-id or authorization)")
+    tenant_id = (extract_tenant_header(event) or "").strip()
+    if not tenant_id:
+        logger.warning("Missing required x-tenant-id header")
         return generate_policy("anonymous", "Deny", method_arn)
 
-    tenant_id = tenant_id.strip()
-    auth_token = auth_token.strip()
-
-    # In case the token starts with "Bearer ", strip it.
-    if auth_token.lower().startswith("bearer "):
-        auth_token = auth_token[7:].strip()
-
-    if not tenant_id or not auth_token:
-        logger.warning("Empty tenant_id or auth_token provided")
-        return generate_policy("anonymous", "Deny", method_arn)
-
-    # Fetch configured webhook secret from SSM
-    ssm_param_name = f"/secamo/tenants/{tenant_id}/api/webhook_secret"
-    expected_secret = get_ssm_parameter(ssm_param_name)
-
-    if not expected_secret:
-        logger.warning("Webhook secret not found or accessible for tenant: %s", tenant_id)
+    tenant_item = _lookup_tenant_item(tenant_id)
+    if tenant_item is None:
+        logger.warning("Tenant lookup returned no record tenant_id=%s", tenant_id)
         return generate_policy(tenant_id, "Deny", method_arn)
 
-    # Validate using secure string comparison (timing-safe)
-    if not hmac.compare_digest(auth_token.encode("utf-8"), expected_secret.encode("utf-8")):
-        logger.warning("Invalid authorization token for tenant: %s", tenant_id)
+    if not _tenant_is_active(tenant_item):
+        logger.warning("Tenant is not active tenant_id=%s", tenant_id)
         return generate_policy(tenant_id, "Deny", method_arn)
 
     logger.info("Successfully authenticated tenant: %s", tenant_id)

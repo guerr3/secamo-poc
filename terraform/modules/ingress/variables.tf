@@ -29,6 +29,11 @@ variable "authorizer_role_arn" {
   type        = string
 }
 
+variable "tenant_table_name" {
+  description = "DynamoDB tenants table"
+  type        = string
+}
+
 # ── VPC Configuration (for Proxy Lambda) ────────────────────
 
 variable "private_subnet_ids" {

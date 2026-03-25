@@ -2,7 +2,9 @@
 
 > This folder contains shared runtime configuration, model contracts, ingress/auth/normalization/routing/temporal boundaries, and tenant-aware provider factories used across ingress, activities, workflows, and tests.
 
-## Files
+## What This Does
+
+### Files
 
 | File                                  | Purpose                                                                                                        | Used By                                                     |
 | ------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------- |
@@ -36,7 +38,7 @@
 | `models/common.py`                    | Shared enums/helpers used by domain and canonical models.                                                      | Model layer internals.                                      |
 | `models/domain.py`                    | Core domain models for tenant config/secrets, ticketing, risk, HITL, incidents, and workflow requests/results. | Activities and workflows.                                   |
 | `models/ingress.py`                   | Raw ingress envelope and Graph notification envelope schemas.                                                  | Ingress Lambda handlers and workflow router.                |
-| `models/mappers.py`                   | Legacy + shared canonical/security transformation helpers still used during migration.                         | Ingress and workflow compatibility paths, tests.            |
+| `models/mappers.py`                   | Shared canonical/security transformation and compatibility helper functions.                                   | Ingress and workflow compatibility paths, tests.            |
 | `models/provider_events.py`           | Provider-specific event wrappers (Defender, Jira, Teams callback).                                             | Mapper pipeline.                                            |
 | `models/triage.py`                    | AI triage request/result models and provider protocol contract.                                                | AI triage activity and provider implementations.            |
 | `providers/__init__.py`               | Provider package exports.                                                                                      | Activity and ingress provider loading.                      |
@@ -47,11 +49,25 @@
 | `providers/chatops/ms_teams.py`       | Teams adaptive-card sender + signature validation + callback parsing.                                          | ChatOps activity and webhook callback endpoint.             |
 | `providers/chatops/slack.py`          | Slack message sender (webhook or bot token), signature validation, callback parsing.                           | ChatOps activity and webhook callback endpoint.             |
 
-## How It Fits
+Everything in this folder is a shared dependency layer for `activities/`, `workflows/`, and ingress runtime paths under `terraform/modules/ingress/src/`. Ingress adapters authenticate input, normalize to `WorkflowIntent`, resolve `WorkflowRoute` entries, and dispatch through transport-agnostic Temporal boundaries. Queue constants and runtime defaults in `config.py` are consumed by workers.
 
-Everything in this folder is a dependency layer for [../activities/README.md](../activities/README.md), [../workflows/README.md](../workflows/README.md), and [../terraform/modules/ingress/src/ingress/handler.py](../terraform/modules/ingress/src/ingress/handler.py). Ingress and graph adapters authenticate input, normalize to `WorkflowIntent`, resolve `WorkflowRoute` entries, and dispatch via transport-agnostic temporal boundaries. Provider factory code continues to select concrete AI/ChatOps implementations at runtime from tenant configuration. Queue constants and runtime defaults in `config.py` are consumed by [../workers/README.md](../workers/README.md).
+## How To Run
 
-## Notes / Extension Points
+This module has no standalone process and is used by workers/ingress paths:
+
+```bash
+python -m workers.run_worker
+```
+
+## How To Verify
+
+Run shared-layer tests and related unit coverage:
+
+```bash
+python -m pytest -q tests/test_models.py tests/test_graph_client.py tests/test_ingress_mappers.py
+```
+
+## Troubleshooting
 
 - `providers/factory.py` has explicit unimplemented paths for `aws_bedrock` and `local` AI provider types (`NotImplementedError`), so these provider types are currently `[STUB]` at runtime.
 - Provider and tenant config values are loaded from SSM under `/secamo/tenants/{tenant_id}/config/*` and secret paths under `/secamo/tenants/{tenant_id}/{secret_type}/*`.

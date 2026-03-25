@@ -438,7 +438,7 @@ Providers marked `[STUB]` implement `BaseConnector` but return non-success place
 
 1. **Create the workflow file**, e.g. `workflows/my_workflow.py`, with `@workflow.defn` on the class.
 2. **Register it in `workers/run_worker.py`** by adding it to the `load_workflows()` function under the appropriate queue.
-3. **Add a route** in `shared/models/mappers.py` if the workflow is triggered by a Graph notification resource type.
+3. **Add or update route mappings** in `shared/routing/defaults.py` (and keep normalization/mapping helpers in `shared/models/mappers.py` aligned when relevant).
 4. **Write tests** under `tests/` using Temporal's testing sandbox (`temporalio.testing`).
 5. Update `README.md` Supported Workflows table.
 

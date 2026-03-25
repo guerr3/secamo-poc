@@ -1,69 +1,50 @@
 # Walkthrough — Temporal Self-Hosted on Single EC2
 
-## What Was Built
+This walkthrough is the operator guide for the `terraform/environments/temporal-test` environment.
 
-A standalone Terraform environment (`temporal-test`) that deploys a single EC2 instance running the full Temporal stack via docker-compose, **without touching the existing `poc` architecture**.
+## Purpose
 
-### Architecture
+`temporal-test` provisions a single EC2 host that runs a Docker Compose-based Temporal stack for quick validation and demos, isolated from the modular PoC environment.
 
-```
-┌─────────────────────────────────────────────────┐
-│  EC2 (t3.medium) — Amazon Linux 2023            │
-│                                                 │
-│  ┌──────────────┐  ┌────────────────────────┐   │
-│  │ PostgreSQL   │  │ Temporal Server 1.29.1 │   │
-│  │ v16          │←─│ gRPC :7233             │   │
-│  └──────────────┘  └────────────────────────┘   │
-│                    ┌────────────────────────┐   │
-│                    │ Temporal UI 2.34.0     │   │
-│                    │ HTTP :8080             │   │
-│                    └────────────────────────┘   │
-│  All containers on Docker bridge network        │
-└─────────────────────────────────────────────────┘
-          │ Public subnet, SG: your IP only
-```
+## Key Files
 
-### Files Created
+| Path                                                                                                   | Description                                                               |
+| ------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| [terraform/environments/temporal-test/main.tf](terraform/environments/temporal-test/main.tf)           | VPC, subnet, IAM, security group, and EC2 resources for this environment. |
+| [terraform/environments/temporal-test/variables.tf](terraform/environments/temporal-test/variables.tf) | Inputs such as `my_ip`, instance settings, and optional keypair.          |
+| [terraform/environments/temporal-test/outputs.tf](terraform/environments/temporal-test/outputs.tf)     | Runtime outputs (public IP, endpoints, helper commands).                  |
+| [terraform/environments/temporal-test/backend.tf](terraform/environments/temporal-test/backend.tf)     | Remote-state backend configuration.                                       |
+| [terraform/scripts/temporal-startup.sh](terraform/scripts/temporal-startup.sh)                         | EC2 bootstrap script that installs Docker and starts stack services.      |
+| [terraform/temporal-compose/docker-compose.yml](terraform/temporal-compose/docker-compose.yml)         | Compose definition used by startup path.                                  |
 
-| Path | Description |
-|------|-------------|
-| [main.tf](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/environments/temporal-test/main.tf) | VPC, SG, IAM, EC2 — all inline |
-| [variables.tf](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/environments/temporal-test/variables.tf) | `my_ip` (required), `instance_type`, `key_pair_name` |
-| [outputs.tf](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/environments/temporal-test/outputs.tf) | Public IP, UI URL, gRPC endpoint, SSH/SSM cmd |
-| [providers.tf](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/environments/temporal-test/providers.tf) | AWS provider in eu-west-1 |
-| [backend.tf](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/environments/temporal-test/backend.tf) | S3 remote state (separate key) |
-| [temporal-startup.sh](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/scripts/temporal-startup.sh) | EC2 user-data: installs Docker, writes compose files, starts stack |
-| [docker-compose.yml](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/temporal-compose/docker-compose.yml) | PostgreSQL-only Temporal stack (reference copy) |
-| [.env](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/temporal-compose/.env) | Image version pins |
-| [setup-postgres.sh](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/temporal-compose/scripts/setup-postgres.sh) | DB schema initialization |
-| [create-namespace.sh](file:///c:/Users/ghost/Documents/codebases/secamo-poc/terraform/temporal-compose/scripts/create-namespace.sh) | Namespace creation after health check |
-
-## Verification
-
-✅ `terraform init -backend=false` — passed  
-✅ `terraform validate` — **Success! The configuration is valid.**
-
-## Deploy Instructions
+## Deploy
 
 ```bash
 cd terraform/environments/temporal-test
 
-# Initialize (with real backend)
+# Optional local-only validation
+terraform init -backend=false
+terraform validate
+
+# Real deployment
 terraform init
-
-# Plan — pass your public IP
 terraform plan -var="my_ip=$(curl -s ifconfig.me)/32"
-
-# Apply
 terraform apply -var="my_ip=$(curl -s ifconfig.me)/32"
 ```
 
-After ~3-5 minutes the outputs show:
-- **temporal_ui_url** → open in browser to see the Temporal Web UI
-- **temporal_grpc_endpoint** → use as `--address` in Temporal CLI or SDK client connection
+## Verify
+
+After apply, use outputs to open the Temporal UI and test connectivity to the gRPC endpoint.
+
+Suggested checks:
+
+1. Open the emitted UI URL in browser.
+2. Confirm namespace visibility via Temporal UI or CLI.
+3. Confirm worker/runtime connectivity from your local client config.
 
 ## Destroy
 
 ```bash
+cd terraform/environments/temporal-test
 terraform destroy -var="my_ip=$(curl -s ifconfig.me)/32"
 ```

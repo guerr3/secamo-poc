@@ -2,13 +2,15 @@
 
 > This folder provisions AWS infrastructure and bootstrap scripts for both the modular PoC environment and the single-node temporal-test environment.
 
-## Files
+## What This Does
+
+### Files
 
 | File                                                  | Purpose                                                                                                  | Used By                                            |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
 | `.gitignore`                                          | Ignores Terraform local state/cache artifacts.                                                           | Local Terraform workflows.                         |
-| `GUIDE.md`                                            | Legacy long-form Terraform guide for this repository.                                                    | Human operators.                                   |
-| `walkthrough.md`                                      | Legacy architecture/cost walkthrough for PoC deployment.                                                 | Human operators.                                   |
+| `GUIDE.md`                                            | Detailed Terraform operator guide (concepts, setup, workflow, troubleshooting).                          | Human operators.                                   |
+| `walkthrough.md`                                      | Quick-start Terraform workflow reference for PoC and temporal-test environments.                         | Human operators.                                   |
 | `encryption.json`                                     | JSON policy snippet for S3 KMS encryption settings.                                                      | Storage hardening references.                      |
 | `public-access.json`                                  | JSON policy snippet for S3 public access block settings.                                                 | Storage hardening references.                      |
 | `environments/poc/backend.tf`                         | Remote state backend config (S3 + DynamoDB lock).                                                        | `terraform init` in PoC environment.               |
@@ -22,7 +24,7 @@
 | `environments/temporal-test/main.tf`                  | Inline temporal-test stack (VPC/network/SG/IAM/EC2/bootstrap wiring).                                    | Temporal-test provisioning.                        |
 | `environments/temporal-test/outputs.tf`               | Temporal-test outputs (public IP, UI URL, gRPC endpoint, commands).                                      | Post-deploy operations.                            |
 | `environments/temporal-test/ssm-policy.json`          | IAM policy document for Session Manager operations.                                                      | Temporal-test IAM role policy.                     |
-| `environments/temporal-test/walkthrough.md`           | Legacy temporal-test deployment walkthrough.                                                             | Human operators.                                   |
+| `environments/temporal-test/walkthrough.md`           | Environment-specific deployment and verification guide for temporal-test.                                | Human operators.                                   |
 | `modules/vpc/main.tf`                                 | VPC, subnets, IGW, route tables, and fck-nat instance resources.                                         | PoC root module call.                              |
 | `modules/vpc/variables.tf`                            | Input schema for VPC module.                                                                             | PoC root module call.                              |
 | `modules/vpc/outputs.tf`                              | VPC identifiers/subnets/NAT output values.                                                               | Downstream modules.                                |
@@ -52,11 +54,44 @@
 | `temporal-compose/scripts/setup-postgres.sh`          | Creates Temporal and visibility DB/schema objects in Postgres.                                           | Compose admin-tools init container.                |
 | `temporal-compose/scripts/create-namespace.sh`        | Waits for Temporal availability and creates/describes namespace.                                         | Compose namespace init container.                  |
 
-## How It Fits
+Infrastructure defined here provides the execution environment consumed by workers, ingress runtime handlers, and activity dependencies. The PoC environment uses reusable modules for network/security/compute/database/storage/ingress, while temporal-test is a compact single-instance deployment for fast validation. Runtime code expects SSM, DynamoDB, and S3 resources created by these templates.
 
-Infrastructure defined here provides the execution environment consumed by code in [../workers/README.md](../workers/README.md), [../terraform/modules/ingress/src/ingress/handler.py](../terraform/modules/ingress/src/ingress/handler.py), and [../activities/README.md](../activities/README.md). The PoC environment uses reusable modules for network/security/compute/database/storage/ingress, while temporal-test is a compact single-instance deployment for fast validation. Runtime code expects SSM, DynamoDB, and S3 resources created by these templates.
+### Documentation Map
 
-## Notes / Extension Points
+- Use `GUIDE.md` as the primary deep-dive reference.
+- Use `walkthrough.md` for a concise runbook-oriented path.
+- Use `environments/temporal-test/walkthrough.md` for temporal-test-specific operations.
+
+## How To Run
+
+Run Terraform from an environment directory:
+
+```bash
+cd terraform/environments/poc
+terraform init
+terraform plan
+terraform apply
+```
+
+Or for temporal-test:
+
+```bash
+cd terraform/environments/temporal-test
+terraform init
+terraform plan
+terraform apply
+```
+
+## How To Verify
+
+Validate formatting and configuration syntax:
+
+```bash
+terraform fmt -check
+terraform validate
+```
+
+## Troubleshooting
 
 - `scripts/worker-startup.sh` still has the worker container launch section commented out, so PoC bootstrap is not fully automated yet.
 - Security module SSM parameters are scaffolded with placeholder values and intended to be overwritten through secure operational workflows.
