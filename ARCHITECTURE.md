@@ -28,31 +28,31 @@
 
 **Core automation use cases:**
 
-| Use Case | Description |
-|----------|-------------|
-| IAM Lifecycle | Automatically create, update, disable, and delete Microsoft Entra ID (Azure AD) users when HR/IAM events arrive. |
-| Defender Alert Triage | Enrich Defender security alerts with user/device context, compute a risk score, and optionally use AI for triage recommendations. |
-| Impossible Travel Detection | Detect risky sign-ins, do threat intel lookups, request human analyst approval, and apply the analyst's decision (isolate device, disable user, or dismiss). |
-| Graph Subscription Management | Continuously reconcile Microsoft Graph change notification subscriptions across all tenants. |
-| Polling-based Integration | Periodically poll EDR providers (e.g., Defender, CrowdStrike) for new events when webhooks are unavailable. |
+| Use Case                      | Description                                                                                                                                                  |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| IAM Lifecycle                 | Automatically create, update, disable, and delete Microsoft Entra ID (Azure AD) users when HR/IAM events arrive.                                             |
+| Defender Alert Triage         | Enrich Defender security alerts with user/device context, compute a risk score, and optionally use AI for triage recommendations.                            |
+| Impossible Travel Detection   | Detect risky sign-ins, do threat intel lookups, request human analyst approval, and apply the analyst's decision (isolate device, disable user, or dismiss). |
+| Graph Subscription Management | Continuously reconcile Microsoft Graph change notification subscriptions across all tenants.                                                                 |
+| Polling-based Integration     | Periodically poll EDR providers (e.g., Defender, CrowdStrike) for new events when webhooks are unavailable.                                                  |
 
 ---
 
 ## 2. Key Technologies
 
-| Technology | Version | Role |
-|------------|---------|------|
-| **Python** | 3.11 | Primary runtime language |
-| **Temporal** (`temporalio`) | ≥ 1.9.0 | Durable workflow orchestration engine — provides retries, state persistence, signals, and HITL timers |
-| **Pydantic** | v2 | All data models and input/output contracts between layers |
-| **FastAPI** + **Uvicorn** | ≥ 0.115 / ≥ 0.34 | HTTP ingress service for Microsoft Graph webhooks and ChatOps callbacks |
-| **Microsoft Graph SDK** (`msgraph-sdk`) | ≥ 1.2 | Graph and Defender API calls |
-| **azure-identity** | ≥ 1.15 | OAuth2 token acquisition for Microsoft Graph (client credentials flow) |
-| **boto3** | ≥ 1.34 | AWS SDK — SSM Parameter Store (secrets), DynamoDB (audit, subscriptions, HITL tokens), S3 (evidence) |
-| **httpx** | ≥ 0.27 | Async HTTP client for connector integrations (Jira, etc.) |
-| **pytest** + **pytest-asyncio** | ≥ 8.0 | Unit testing framework with async support |
-| **Terraform** | — | Infrastructure-as-Code for AWS resources and Temporal deployment |
-| **Docker / Compose** | — | Local development stack bundling Temporal Server, worker, and ingress |
+| Technology                              | Version | Role                                                                                                  |
+| --------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------- |
+| **Python**                              | 3.11    | Primary runtime language                                                                              |
+| **Temporal** (`temporalio`)             | ≥ 1.9.0 | Durable workflow orchestration engine — provides retries, state persistence, signals, and HITL timers |
+| **Pydantic**                            | v2      | All data models and input/output contracts between layers                                             |
+| **AWS API Gateway + Lambda**            | —       | HTTP ingress boundary for provider webhooks, Graph notifications, and HITL callbacks                  |
+| **Microsoft Graph SDK** (`msgraph-sdk`) | ≥ 1.2   | Graph and Defender API calls                                                                          |
+| **azure-identity**                      | ≥ 1.15  | OAuth2 token acquisition for Microsoft Graph (client credentials flow)                                |
+| **boto3**                               | ≥ 1.34  | AWS SDK — SSM Parameter Store (secrets), DynamoDB (audit, subscriptions, HITL tokens), S3 (evidence)  |
+| **httpx**                               | ≥ 0.27  | Async HTTP client for connector integrations (Jira, etc.)                                             |
+| **pytest** + **pytest-asyncio**         | ≥ 8.0   | Unit testing framework with async support                                                             |
+| **Terraform**                           | —       | Infrastructure-as-Code for AWS resources and Temporal deployment                                      |
+| **Docker / Compose**                    | —       | Local development stack bundling Temporal Server, worker, and ingress                                 |
 
 ### Why Temporal?
 
@@ -70,7 +70,7 @@ Temporal is the central design choice. It provides:
 
 ```
 secamo-poc/
-├── graph_ingress/       # [L2] FastAPI HTTP service — receives Graph webhooks and ChatOps callbacks
+├── terraform/modules/ingress/src/ingress/  # [L2] Lambda proxy ingress handlers
 ├── workflows/           # [L3] Temporal workflow definitions (parent + child)
 │   └── child/           #       Reusable child workflow stages
 ├── activities/          # [L4] Temporal activities — all external side effects live here
@@ -101,11 +101,11 @@ External Event / Webhook
                                 │ authenticated HTTP request
                                 ▼
 ┌───────────────────────────────────────────────────────────────────┐
-│ L2 — Ingress Service (FastAPI)                                    │
-│      graph_ingress/app.py — receives Graph notifications          │
-│      graph_ingress/validator.py — resolves tenant from clientState│
-│      graph_ingress/dispatcher.py — starts Temporal workflow       │
-│      graph_ingress/chatops_webhook.py — signals running workflows │
+│ L2 — Ingress Lambda Proxy (`terraform/modules/ingress/src/ingress`)│
+│      handler.py — receives API Gateway proxy events                │
+│      validates provider signatures / Graph tokens                  │
+│      normalizes payloads and dispatches routed workflow starts     │
+│      handles signed HITL callback routes                           │
 └───────────────────────────────┬───────────────────────────────────┘
                                 │ Temporal SDK call
                                 ▼
@@ -139,20 +139,25 @@ External Event / Webhook
 
 #### L1 — API Gateway + Lambda Authorizer (`terraform/modules/ingress/`)
 
-The Lambda authorizer (`src/authorizer/handler.py`) validates each inbound HTTP request against a per-tenant HMAC secret stored in SSM. If validation succeeds, the authorizer forwards the request to the Lambda proxy (`src/ingress/handler.py`), which normalises payloads and forwards them to either the ingress service or handles HITL token callback routing directly.
+The Lambda authorizer (`src/authorizer/handler.py`) validates each inbound HTTP request against a per-tenant HMAC secret stored in SSM. If validation succeeds, the authorizer forwards the request to the Lambda proxy (`src/ingress/handler.py`), which validates provider signatures, normalises payloads, and dispatches routed workflow starts directly.
 
-Note: tenant identity inside the Graph notification payload is carried in the `clientState` field of each notification item (not an HTTP header). The ingress validator (`graph_ingress/validator.py`) extracts the `tenant_id` by parsing the `clientState` value with the format `secamo:{tenant_id}:{token}`. As a fallback, it can look up the subscription's stored tenant mapping in DynamoDB.
+Note: for Graph notifications, tenant identity is represented in the route path (`/api/v1/graph/notifications/{tenant_id}`), while each notification item still carries `clientState` that is checked for the expected `secamo:{tenant_id}:` prefix.
 
 Credential cache TTL is controlled by the `CACHE_TTL_SECONDS` environment variable (default 300 s).
 
-#### L2 — Graph Ingress Service (`graph_ingress/`)
+#### L2 — Ingress Lambda Proxy (`terraform/modules/ingress/src/ingress/handler.py`)
 
-A lightweight FastAPI application with two entry points:
+The ingress Lambda proxy is the HTTP intake boundary for the orchestrator.
 
-- **`POST /graph/notifications`** — receives Microsoft Graph change notifications, validates tenant resolution via `clientState` or DynamoDB subscription metadata, groups notifications by tenant, and asynchronously dispatches `GraphIngressRouterWorkflow` starts via the Temporal client.
-- **`POST /chatops/action`** — receives callback payloads from Teams/Slack buttons, validates provider signatures, and signals the matching running workflow with the analyst's decision.
+Active routes include:
 
-The service also exposes `GET /graph/notifications` to respond to the Graph endpoint validation challenge (mandatory for Graph subscription creation).
+- **`POST /api/v1/ingress/event/{tenant_id}`** — generic provider webhook ingress.
+- **`POST /api/v1/ingress/internal`** — internal IAM ingress path.
+- **`POST /api/v1/graph/notifications/{tenant_id}`** — Graph notifications route; if `validationToken` query parameter exists, immediately returns `200 text/plain` with the token for Graph subscription validation.
+- **`GET /api/v1/hitl/respond`** — signed email token callback for HITL decisions.
+- **`POST /api/v1/hitl/jira`** — Jira webhook callback that signals waiting HITL workflows.
+
+For Graph notifications without `validationToken`, the handler validates the bearer token signature, validates optional Graph `validationTokens`, filters unsupported notification resources, normalizes supported items, and dispatches workflow starts through the shared route fan-out dispatcher.
 
 #### L3 — Temporal Workflows (`workflows/`)
 
@@ -160,25 +165,24 @@ Workflows are **pure orchestration** — no I/O, no `datetime.now()`, no random 
 
 **Parent workflows** (one per security event type):
 
-| Workflow | Queue | Trigger |
-|----------|-------|---------|
-| `IamOnboardingWorkflow` | `iam-graph` | IAM lifecycle events (HR system / polling) |
-| `DefenderAlertEnrichmentWorkflow` | `soc-defender` | Graph Defender alert notifications |
-| `ImpossibleTravelWorkflow` | `soc-defender` | Graph risky sign-in / risky user notifications |
-| `GraphIngressRouterWorkflow` | `soc-defender` | Every Graph notification batch from ingress |
-| `GraphSubscriptionManagerWorkflow` | `soc-defender` | Scheduled/manual subscription reconciliation |
-| `PollingManagerWorkflow` | `poller` | Started by onboarding per polling-enabled provider |
+| Workflow                           | Queue          | Trigger                                            |
+| ---------------------------------- | -------------- | -------------------------------------------------- |
+| `IamOnboardingWorkflow`            | `iam-graph`    | IAM lifecycle events (HR system / polling)         |
+| `DefenderAlertEnrichmentWorkflow`  | `soc-defender` | Graph Defender alert notifications                 |
+| `ImpossibleTravelWorkflow`         | `soc-defender` | Graph risky sign-in / risky user notifications     |
+| `GraphSubscriptionManagerWorkflow` | `soc-defender` | Scheduled/manual subscription reconciliation       |
+| `PollingManagerWorkflow`           | `poller`       | Started by onboarding per polling-enabled provider |
 
 **Child workflows** in `workflows/child/` are reusable stages invoked by one or more parent workflows:
 
-| Child Workflow | Role |
-|----------------|------|
-| `AlertEnrichmentWorkflow` | Connector enrichment + risk scoring |
-| `ThreatIntelEnrichmentWorkflow` | Fan-out threat intel lookups across configured providers |
-| `TicketCreationWorkflow` | Provider-agnostic ticket creation |
-| `HiTLApprovalWorkflow` | Send approval request → wait for signal → apply timeout policy |
-| `IncidentResponseWorkflow` | Execute analyst decision (dismiss / isolate / disable user) + collect evidence |
-| `UserDeprovisioningWorkflow` | Revoke sessions + delete user in Graph |
+| Child Workflow                  | Role                                                                           |
+| ------------------------------- | ------------------------------------------------------------------------------ |
+| `AlertEnrichmentWorkflow`       | Connector enrichment + risk scoring                                            |
+| `ThreatIntelEnrichmentWorkflow` | Fan-out threat intel lookups across configured providers                       |
+| `TicketCreationWorkflow`        | Provider-agnostic ticket creation                                              |
+| `HiTLApprovalWorkflow`          | Send approval request → wait for signal → apply timeout policy                 |
+| `IncidentResponseWorkflow`      | Execute analyst decision (dismiss / isolate / disable user) + collect evidence |
+| `UserDeprovisioningWorkflow`    | Revoke sessions + delete user in Graph                                         |
 
 #### L4 — Activities and Connectors (`activities/`, `connectors/`)
 
@@ -186,22 +190,22 @@ Activities are regular async Python functions decorated with `@activity.defn`. T
 
 Key activity groups:
 
-| Module | Responsibility |
-|--------|----------------|
-| `graph_users.py` | User lifecycle in Microsoft Graph |
-| `graph_alerts.py` | Defender alert reads and enrichment |
-| `graph_devices.py` | Device isolation, scan, compliance |
-| `graph_signin.py` | Sign-in history and identity risk |
-| `graph_subscriptions.py` | Change notification subscription management |
-| `connector_dispatch.py` | Provider-agnostic gateway to connector layer |
-| `tenant.py` | Tenant config and secrets from SSM/DynamoDB |
-| `hitl.py` | Issue HITL tokens and approval links |
-| `ticketing.py` | Create/update/close tickets via connectors |
-| `risk.py` | Compute risk score from alert context |
-| `triage.py` | AI triage via provider abstraction |
-| `evidence.py` | Write evidence bundle to S3 |
-| `audit.py` | Write audit record to DynamoDB |
-| `notify_email.py` / `notify_teams.py` | Send notifications via Graph Mail / Teams |
+| Module                                | Responsibility                               |
+| ------------------------------------- | -------------------------------------------- |
+| `graph_users.py`                      | User lifecycle in Microsoft Graph            |
+| `graph_alerts.py`                     | Defender alert reads and enrichment          |
+| `graph_devices.py`                    | Device isolation, scan, compliance           |
+| `graph_signin.py`                     | Sign-in history and identity risk            |
+| `graph_subscriptions.py`              | Change notification subscription management  |
+| `connector_dispatch.py`               | Provider-agnostic gateway to connector layer |
+| `tenant.py`                           | Tenant config and secrets from SSM/DynamoDB  |
+| `hitl.py`                             | Issue HITL tokens and approval links         |
+| `ticketing.py`                        | Create/update/close tickets via connectors   |
+| `risk.py`                             | Compute risk score from alert context        |
+| `triage.py`                           | AI triage via provider abstraction           |
+| `evidence.py`                         | Write evidence bundle to S3                  |
+| `audit.py`                            | Write audit record to DynamoDB               |
+| `notify_email.py` / `notify_teams.py` | Send notifications via Graph Mail / Teams    |
 
 The **connector layer** (`connectors/`) decouples activities from specific provider SDKs. Activities call `get_connector(provider, tenant_id, secrets)` from `connectors/registry.py`, which returns a `BaseConnector` instance. This means switching from Jira to ServiceNow requires only a config change, not an activity change.
 
@@ -209,11 +213,11 @@ The **connector layer** (`connectors/`) decouples activities from specific provi
 
 All AWS calls are made from activities (never from workflows). The main services used:
 
-| Service | Purpose | Path convention |
-|---------|---------|-----------------|
-| **SSM Parameter Store** | Tenant secrets and config | `/secamo/tenants/{tenant_id}/{secret_type}/{key}` |
-| **DynamoDB** | Audit trail, HITL approval tokens, Graph subscription metadata | Separate tables per concern |
-| **S3** | Evidence bundle storage | Bucket configured via `EVIDENCE_BUCKET_NAME` env var |
+| Service                 | Purpose                                                        | Path convention                                      |
+| ----------------------- | -------------------------------------------------------------- | ---------------------------------------------------- |
+| **SSM Parameter Store** | Tenant secrets and config                                      | `/secamo/tenants/{tenant_id}/{secret_type}/{key}`    |
+| **DynamoDB**            | Audit trail, HITL approval tokens, Graph subscription metadata | Separate tables per concern                          |
+| **S3**                  | Evidence bundle storage                                        | Bucket configured via `EVIDENCE_BUCKET_NAME` env var |
 
 ---
 
@@ -221,12 +225,12 @@ All AWS calls are made from activities (never from workflows). The main services
 
 Temporal task queues partition work across worker types. Each worker process registers a specific set of workflows and activities:
 
-| Queue | Workflows | Activities | Purpose |
-|-------|-----------|------------|---------|
-| `iam-graph` | `IamOnboardingWorkflow`, `UserDeprovisioningWorkflow` | User lifecycle, audit, tenant | Identity/IAM operations |
-| `soc-defender` | All SOC + child workflows + `GraphIngressRouterWorkflow` + `GraphSubscriptionManagerWorkflow` | Graph alerts/devices/signin, ticketing, HITL, evidence, threat intel, triage, notify | Security operations |
-| `audit` | — | `create_audit_log`, `collect_evidence_bundle` | Dedicated audit writes |
-| `poller` | `PollingManagerWorkflow` | Connector dispatch, audit | Polling-based event ingestion |
+| Queue          | Workflows                                                      | Activities                                                                           | Purpose                       |
+| -------------- | -------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------- |
+| `iam-graph`    | `IamOnboardingWorkflow`, `UserDeprovisioningWorkflow`          | User lifecycle, audit, tenant                                                        | Identity/IAM operations       |
+| `soc-defender` | All SOC + child workflows + `GraphSubscriptionManagerWorkflow` | Graph alerts/devices/signin, ticketing, HITL, evidence, threat intel, triage, notify | Security operations           |
+| `audit`        | —                                                              | `create_audit_log`, `collect_evidence_bundle`                                        | Dedicated audit writes        |
+| `poller`       | `PollingManagerWorkflow`                                       | Connector dispatch, audit                                                            | Polling-based event ingestion |
 
 All workers are started together from `workers/run_worker.py`, which imports and registers the appropriate activity and workflow lists for each queue.
 
@@ -268,14 +272,14 @@ shared/models/
 ```
 Raw Graph notification JSON
   → GraphNotificationEnvelope  (ingress.py)
-  → [validator.py] filtered by tenant and resource type
-  → GraphIngressRouterWorkflow starts with notification list
-  → [mappers.resolve_webhook_route()] → WorkflowCommand (start or signal)
+   → [ingress handler] validates signatures/tokens and filters by tenant/resource type
+   → [normalize_event_body()] → SecurityEvent
+   → [canonical_event_to_workflow_intent()] + route fan-out dispatcher
   → CanonicalEvent / SecurityEvent  passed to domain workflows
   → Domain models (TenantConfig, TenantSecrets, GraphUser, etc.) loaded in activities
 ```
 
-The `mappers.py` module is the central routing table. It maps Graph notification resource paths (e.g., `security/alerts_v2`, `identityRiskEvents/riskDetections`) to workflow names, queues, and signal names.
+The ingress handler's provider/event routing table and shared route registry are the central workflow mapping points for webhook-triggered starts.
 
 ---
 
@@ -287,23 +291,20 @@ The following traces a risky sign-in notification through the entire system.
 
 ```
 1. Microsoft Graph detects a risky sign-in and sends a change notification
-   POST → AWS API Gateway /graph/notifications
+   POST → AWS API Gateway /api/v1/graph/notifications/{tenant_id}
 
 2. [L1] Lambda Authorizer
    - Validates HMAC on the outer HTTP request against SSM-stored tenant secret
    - Forwards validated request to the Lambda proxy
 
-3. [L2] FastAPI — graph_ingress/app.py
+3. [L2] Ingress Lambda proxy — terraform/modules/ingress/src/ingress/handler.py
    - Deserialises body into GraphNotificationEnvelope
-   - graph_ingress/validator.py resolves tenant from clientState field (format: "secamo:{tenant_id}:{token}") or DynamoDB subscription metadata fallback
-   - graph_ingress/dispatcher.py starts GraphIngressRouterWorkflow on `soc-defender` queue
+   - Validates Microsoft Defender bearer signature and optional Graph validation tokens
+   - Verifies item `clientState` prefix matches path tenant
+   - Maps resource to event type (`alert` or `impossible_travel`)
+   - Normalizes payload and dispatches directly to routed workflow start(s)
 
-4. [L3] GraphIngressRouterWorkflow (workflows/graph_ingress_router.py)
-   - Calls mappers.resolve_webhook_route() for each notification
-   - Matches "identityRiskEvents/riskDetections" → ImpossibleTravelWorkflow
-   - Starts ImpossibleTravelWorkflow as a child on `soc-defender`
-
-5. [L3] ImpossibleTravelWorkflow (workflows/impossible_travel.py)
+4. [L3] ImpossibleTravelWorkflow (workflows/impossible_travel.py)
    a. activities.tenant.get_tenant_config() + get_tenant_secrets()  →  TenantConfig, TenantSecrets
    b. activities.graph_users.graph_get_user()                       →  GraphUser (display name, etc.)
    c. child: ThreatIntelEnrichmentWorkflow                          →  ThreatIntelResult (is_malicious, score)
@@ -312,9 +313,9 @@ The following traces a risky sign-in notification through the entire system.
    f. child: HiTLApprovalWorkflow                                   →  (waits up to N hours for signal)
       - activities.hitl.issue_hitl_request()                        →  sends email + Teams adaptive card
       - workflow.wait_condition() on approval_signal                 →  blocks, durable Temporal timer
-      - [analyst clicks button in Teams]
-      - POST /chatops/action → graph_ingress/chatops_webhook.py
-      - chatops_webhook signals the waiting workflow with ApprovalDecision
+      - [analyst responds by signed email link or Jira callback]
+      - GET /api/v1/hitl/respond or POST /api/v1/hitl/jira → ingress handler callback routes
+      - ingress handler signals the waiting workflow with ApprovalDecision
    g. child: IncidentResponseWorkflow                               →  applies decision (disable user, etc.)
       - activities.connector_dispatch.connector_execute_action("isolate_device")
       - activities.graph_users.graph_disable_user()
@@ -330,7 +331,7 @@ The following traces a risky sign-in notification through the entire system.
    - Jira API: ticket created and closed
 ```
 
-This flow demonstrates Temporal's key value: if any worker crashes during step 5b through 5h, Temporal replays from the last durable checkpoint on restart. The analyst's approval at step 5f can take hours — the workflow just waits with no held thread.
+This flow demonstrates Temporal's key value: if any worker crashes during step 4b through 4h, Temporal replays from the last durable checkpoint on restart. The analyst's approval at step 4f can take hours — the workflow just waits with no held thread.
 
 ---
 
@@ -367,8 +368,8 @@ The `HiTLApprovalWorkflow` in `workflows/child/hitl_approval.py` demonstrates Te
 
 1. The workflow sends an approval request (email + Teams card with a button).
 2. It then calls `await workflow.wait_condition(lambda: self._decision is not None, timeout=timedelta(hours=N))`.
-3. When the analyst clicks "Approve" or "Reject", the ChatOps webhook POSTs the decision.
-4. `graph_ingress/chatops_webhook.py` signals the workflow with the decision payload.
+3. When the analyst responds, ingress callback routes receive the decision (`/api/v1/hitl/respond` or `/api/v1/hitl/jira`).
+4. `terraform/modules/ingress/src/ingress/handler.py` signals the workflow with the decision payload.
 5. The workflow unblocks, receives the `ApprovalDecision`, and continues to incident response.
 6. If the timer expires with no decision, the workflow applies the tenant's default timeout policy (e.g., escalate or auto-dismiss).
 
@@ -466,17 +467,19 @@ tests/
 ├── test_models.py                    — Pydantic model validation and serialisation
 ├── test_ingress_mappers.py           — Mapper routing table correctness
 ├── test_graph_client.py              — Graph token cache behaviour
-├── test_graph_ingress_validator.py   — Ingress tenant resolution logic
+├── test_ingress_graph_notifications.py — Ingress Graph notification validation + dispatch behavior
 ├── test_graph_webhook_routing.py     — Graph notification to workflow routing
 └── test_activities/                  — Activity-level unit tests with mocked clients
 ```
 
 **Testing conventions:**
+
 - External calls (Graph SDK, boto3, httpx) are always mocked via `pytest-mock` — tests never hit live APIs.
 - Temporal workflow tests use the in-memory `WorkflowEnvironment` provided by `temporalio.testing`.
 - Input and output fixtures use Pydantic models directly, not raw dicts.
 
 Run tests with:
+
 ```bash
 pytest
 ```
@@ -495,14 +498,14 @@ A single EC2 instance that runs the full Temporal + worker + ingress stack via D
 
 A production-grade PoC environment composed from reusable modules:
 
-| Module | Resources |
-|--------|-----------|
-| `modules/vpc` | VPC, subnets (public/private), Internet Gateway, fck-nat instance |
-| `modules/security` | IAM roles, security groups, SSM parameter scaffolding |
-| `modules/compute` | Worker EC2 instance with encrypted EBS |
-| `modules/database` | RDS PostgreSQL (Temporal persistence store) |
-| `modules/ingress` | API Gateway HTTP API + Lambda authorizer + Lambda proxy |
-| `modules/storage` | S3 evidence bucket + DynamoDB audit/subscription/HITL tables |
+| Module             | Resources                                                         |
+| ------------------ | ----------------------------------------------------------------- |
+| `modules/vpc`      | VPC, subnets (public/private), Internet Gateway, fck-nat instance |
+| `modules/security` | IAM roles, security groups, SSM parameter scaffolding             |
+| `modules/compute`  | Worker EC2 instance with encrypted EBS                            |
+| `modules/database` | RDS PostgreSQL (Temporal persistence store)                       |
+| `modules/ingress`  | API Gateway HTTP API + Lambda authorizer + Lambda proxy           |
+| `modules/storage`  | S3 evidence bucket + DynamoDB audit/subscription/HITL tables      |
 
 ### Local development with Docker Compose
 
@@ -513,8 +516,8 @@ docker compose -f terraform/temporal-compose/docker-compose.yml up -d
 # Start worker
 python -m workers.run_worker
 
-# Start ingress
-python -m graph_ingress.launcher
+# Validate ingress behavior via focused tests
+python -m pytest -q tests/test_ingress_graph_notifications.py
 
 # Run tests
 pytest

@@ -20,6 +20,7 @@ import json
 import logging
 import os
 import time
+from uuid import uuid4
 from urllib.request import urlopen
 
 import boto3
@@ -30,7 +31,7 @@ from ingress_sdk import temporal, response
 from ingress_sdk.dispatch import async_handler
 from ingress_sdk.event import IngressEvent
 
-from shared.models import CanonicalEvent, IamIngressRequest, SecurityEvent
+from shared.models import CanonicalEvent, GraphNotificationEnvelope, IamIngressRequest, SecurityEvent
 from shared.normalization.normalizers import canonical_event_to_workflow_intent
 from shared.routing import build_default_route_registry
 from shared.temporal.dispatcher import RouteFanoutDispatcher, WorkflowStarter
@@ -40,6 +41,13 @@ from mappers import normalize_event_body
 _dynamo = boto3.client("dynamodb", region_name="eu-west-1")
 _ssm = boto3.client("ssm", region_name="eu-west-1")
 logger = logging.getLogger("ingress.hitl")
+
+GRAPH_NOTIFICATION_AZP = "0bf30f3b-4a52-48df-9a82-234910c4a086"
+GRAPH_COMMON_JWKS_URL = "https://login.microsoftonline.com/common/discovery/v2.0/keys"
+GRAPH_NOTIFICATION_APP_IDS = {
+    value.strip() for value in os.environ.get("GRAPH_NOTIFICATION_APP_IDS", "").split(",") if value.strip()
+}
+_graph_jwks_client = jwt.PyJWKClient(GRAPH_COMMON_JWKS_URL)
 
 
 class _IngressSdkWorkflowStarter(WorkflowStarter):
@@ -401,7 +409,75 @@ async def handle_internal(event: IngressEvent) -> dict:
     return response.accepted(result)
 
 
-async def _dispatch_provider_event(event: IngressEvent, *, provider: str, event_type: str, tenant_id: str) -> dict:
+def _validate_graph_validation_tokens(tokens: list[str] | None) -> bool:
+    if not tokens:
+        return True
+
+    if not GRAPH_NOTIFICATION_APP_IDS:
+        return False
+
+    for token in tokens:
+        try:
+            signing_key = _graph_jwks_client.get_signing_key_from_jwt(token).key
+            claims = jwt.decode(
+                token,
+                signing_key,
+                algorithms=["RS256"],
+                audience=list(GRAPH_NOTIFICATION_APP_IDS),
+                options={"require": ["exp", "iat", "iss", "aud", "azp"]},
+            )
+        except Exception:
+            return False
+
+        issuer = str(claims.get("iss") or "")
+        if not issuer.startswith("https://login.microsoftonline.com/"):
+            return False
+        if str(claims.get("azp") or "") != GRAPH_NOTIFICATION_AZP:
+            return False
+
+    return True
+
+
+def _graph_event_type_from_resource(resource: str) -> str:
+    value = str(resource or "").strip().lower()
+    if "alerts" in value:
+        return "alert"
+    if "signin" in value or "risky" in value:
+        return "impossible_travel"
+    return ""
+
+
+def _graph_client_state_matches_tenant(client_state: str | None, tenant_id: str) -> bool:
+    if not client_state:
+        return True
+    expected_prefix = f"secamo:{tenant_id}:"
+    return str(client_state).startswith(expected_prefix)
+
+
+def _graph_item_to_provider_payload(item: dict, event_type: str) -> dict:
+    resource_data = item.get("resourceData") if isinstance(item.get("resourceData"), dict) else {}
+    alert_id = str(resource_data.get("id") or item.get("subscriptionId") or str(uuid4()))
+
+    return {
+        "event_type": event_type,
+        "alert": {
+            "id": alert_id,
+            "severity": str(resource_data.get("severity") or "medium").lower(),
+            "title": str(resource_data.get("title") or resource_data.get("riskEventType") or "Graph notification"),
+            "description": str(resource_data.get("description") or resource_data.get("riskDetail") or ""),
+            "deviceId": resource_data.get("deviceId") or resource_data.get("azureAdDeviceId"),
+            "userPrincipalName": resource_data.get("userPrincipalName") or resource_data.get("accountName"),
+            "ipAddress": resource_data.get("ipAddress"),
+            "destinationIp": resource_data.get("destinationIp"),
+        },
+        "resource": item.get("resource"),
+        "change_type": item.get("changeType"),
+        "subscription_id": item.get("subscriptionId"),
+        "client_state": item.get("clientState"),
+    }
+
+
+async def _dispatch_provider_event(*, raw_body: dict, provider: str, event_type: str, tenant_id: str) -> dict:
     routing = PROVIDER_EVENT_ROUTING.get((provider, event_type))
     if routing is None:
         return response.error(
@@ -413,7 +489,7 @@ async def _dispatch_provider_event(event: IngressEvent, *, provider: str, event_
         provider=provider,
         event_type=event_type,
         tenant_id=tenant_id,
-        raw_body=event.body,
+        raw_body=raw_body,
     )
 
     try:
@@ -428,7 +504,7 @@ async def _dispatch_provider_event(event: IngressEvent, *, provider: str, event_
         external_event_id=security_event.event_id,
         subject=(security_event.alert.title if security_event.alert else "ingress event"),
         severity=security_event.severity,
-        payload=dict(event.body),
+        payload=dict(raw_body),
         request_id=security_event.correlation_id,
     )
     workflow_input = security_event.model_dump(mode="json")
@@ -465,7 +541,7 @@ async def handle_event(event: IngressEvent) -> dict:
 
     event_type = str(event.body.get("event_type", "alert")).strip().lower() or "alert"
     return await _dispatch_provider_event(
-        event,
+        raw_body=dict(event.body),
         provider=provider,
         event_type=event_type,
         tenant_id=tenant_id,
@@ -491,13 +567,46 @@ async def handle_graph_notification(event: IngressEvent) -> dict:
     if not isinstance(event.body, dict):
         return response.error(400, "Request body must be a JSON object")
 
-    body = dict(event.body)
-    event_type = str(body.get("event_type", "alert")).strip().lower() or "alert"
-    body["provider"] = "microsoft_defender"
-    body["event_type"] = event_type
-    event.body = body
+    try:
+        envelope = GraphNotificationEnvelope.model_validate(event.body)
+    except Exception as exc:
+        return response.error(400, f"Invalid Graph notification payload: {exc}")
 
-    return await handle_event(event)
+    if not _validate_graph_validation_tokens(envelope.validationTokens):
+        return response.error(401, "Invalid Graph validation tokens")
+
+    dispatched = 0
+    ignored = 0
+    for item in envelope.value:
+        if not _graph_client_state_matches_tenant(item.clientState, tenant_id):
+            ignored += 1
+            continue
+
+        event_type = _graph_event_type_from_resource(item.resource)
+        if not event_type:
+            ignored += 1
+            continue
+
+        provider_payload = _graph_item_to_provider_payload(item.model_dump(mode="json"), event_type)
+        dispatch_result = await _dispatch_provider_event(
+            raw_body=provider_payload,
+            provider="microsoft_defender",
+            event_type=event_type,
+            tenant_id=tenant_id,
+        )
+        if int(dispatch_result.get("statusCode", 500)) >= 400:
+            return dispatch_result
+        dispatched += 1
+
+    return response.accepted(
+        {
+            "tenant_id": tenant_id,
+            "provider": "microsoft_defender",
+            "received": len(envelope.value),
+            "dispatched": dispatched,
+            "ignored": ignored,
+        }
+    )
 
 
 # ── Lambda Entrypoint ────────────────────────────────────────

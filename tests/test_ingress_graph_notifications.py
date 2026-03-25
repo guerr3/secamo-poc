@@ -1,0 +1,120 @@
+from __future__ import annotations
+
+import importlib.util
+import sys
+import types
+from pathlib import Path
+from types import SimpleNamespace
+
+
+def _load_handler_module():
+    ingress_sdk = types.ModuleType("ingress_sdk")
+    temporal_module = types.ModuleType("ingress_sdk.temporal")
+    response_module = types.ModuleType("ingress_sdk.response")
+    dispatch_module = types.ModuleType("ingress_sdk.dispatch")
+    event_module = types.ModuleType("ingress_sdk.event")
+
+    async def _not_used(*_args, **_kwargs):
+        return {}
+
+    temporal_module.start_workflow = _not_used
+    temporal_module.signal_workflow = _not_used
+
+    response_module.error = lambda code, message: {"statusCode": code, "body": message}
+    response_module.accepted = lambda body: {"statusCode": 202, "body": body}
+    response_module.ok = lambda body: {"statusCode": 200, "body": body}
+
+    dispatch_module.async_handler = lambda routes: routes
+    event_module.IngressEvent = object
+
+    ingress_sdk.temporal = temporal_module
+    ingress_sdk.response = response_module
+
+    sys.modules["ingress_sdk"] = ingress_sdk
+    sys.modules["ingress_sdk.temporal"] = temporal_module
+    sys.modules["ingress_sdk.response"] = response_module
+    sys.modules["ingress_sdk.dispatch"] = dispatch_module
+    sys.modules["ingress_sdk.event"] = event_module
+
+    ingress_src = Path("terraform/modules/ingress/src/ingress")
+    if str(ingress_src) not in sys.path:
+        sys.path.insert(0, str(ingress_src))
+
+    handler_path = ingress_src / "handler.py"
+    spec = importlib.util.spec_from_file_location("ingress_handler_module", handler_path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["ingress_handler_module"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+async def test_handle_graph_notification_returns_validation_token() -> None:
+    module = _load_handler_module()
+
+    event = SimpleNamespace(
+        path_params={"tenant_id": "tenant-demo-001"},
+        query_params={"validationToken": "opaque-token-123"},
+        headers={},
+        body={},
+        raw_body="",
+    )
+
+    result = await module.handle_graph_notification(event)
+
+    assert result["statusCode"] == 200
+    assert result["body"] == "opaque-token-123"
+    assert result["headers"]["Content-Type"] == "text/plain"
+
+
+async def test_handle_graph_notification_dispatches_supported_items(monkeypatch) -> None:
+    module = _load_handler_module()
+
+    monkeypatch.setattr(module, "_validate_microsoft_defender_signature", lambda *_args, **_kwargs: True)
+
+    async def _fake_dispatch_provider_event(*, raw_body, provider, event_type, tenant_id):
+        assert provider == "microsoft_defender"
+        assert tenant_id == "tenant-demo-001"
+        assert event_type in {"alert", "impossible_travel"}
+        assert isinstance(raw_body, dict)
+        return {"statusCode": 202, "body": {"ok": True}}
+
+    monkeypatch.setattr(module, "_dispatch_provider_event", _fake_dispatch_provider_event)
+
+    event = SimpleNamespace(
+        path_params={"tenant_id": "tenant-demo-001"},
+        query_params={},
+        headers={"authorization": "Bearer test"},
+        body={
+            "value": [
+                {
+                    "subscriptionId": "sub-1",
+                    "changeType": "created",
+                    "resource": "security/alerts_v2/123",
+                    "clientState": "secamo:tenant-demo-001:alerts",
+                    "resourceData": {
+                        "id": "alert-123",
+                        "severity": "high",
+                        "title": "Suspicious sign-in",
+                        "userPrincipalName": "analyst@example.com",
+                        "ipAddress": "10.0.0.5",
+                    },
+                },
+                {
+                    "subscriptionId": "sub-2",
+                    "changeType": "created",
+                    "resource": "users/abc",
+                    "clientState": "secamo:tenant-demo-001:alerts",
+                    "resourceData": {"id": "unknown"},
+                },
+            ]
+        },
+        raw_body="{}",
+    )
+
+    result = await module.handle_graph_notification(event)
+
+    assert result["statusCode"] == 202
+    assert result["body"]["received"] == 2
+    assert result["body"]["dispatched"] == 1
+    assert result["body"]["ignored"] == 1
