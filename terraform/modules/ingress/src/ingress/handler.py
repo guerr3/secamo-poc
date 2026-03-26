@@ -5,7 +5,7 @@ Routes:
     POST /api/v1/ingress/event/{tenant_id} → Start routed provider workflow
     POST /api/v1/ingress/internal          → Start internal first-party workflow
     GET  /api/v1/hitl/respond    → Consume signed email approval token
-    POST /api/v1/hitl/jira       → Consume Jira webhook approval callback
+    POST /api/v1/hitl/jira/{tenant_id} → Consume Jira webhook approval callback
 
 All infrastructure (Temporal client, event parsing, response formatting,
 async dispatch) is provided by the ingress_sdk Lambda Layer.
@@ -326,7 +326,7 @@ async def handle_hitl_respond(event: IngressEvent) -> dict:
     )
 
 
-# ── Route: /api/v1/hitl/jira ───────────────────────────────
+# ── Route: /api/v1/hitl/jira/{tenant_id} ───────────────────
 
 async def handle_hitl_jira(event: IngressEvent) -> dict:
     body = event.body or {}
@@ -630,5 +630,5 @@ handler = async_handler({
     "/api/v1/ingress/internal": handle_internal,
     "/api/v1/graph/notifications/{tenant_id}": handle_graph_notification,
     "/api/v1/hitl/respond": handle_hitl_respond,
-    "/api/v1/hitl/jira": handle_hitl_jira,
+    "/api/v1/hitl/jira/{tenant_id}": handle_hitl_jira,
 })

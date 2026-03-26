@@ -31,11 +31,6 @@ def generate_policy(principal_id: str, effect: str, resource: str, context: Opti
     
     return policy
 
-def extract_tenant_header(event: Dict[str, Any]) -> Optional[str]:
-    """Extract tenant identifier from request headers."""
-    headers = {k.lower(): v for k, v in event.get("headers", {}).items() if v}
-    return headers.get("x-tenant-id")
-
 
 def _attribute_to_str(item: Dict[str, Dict[str, str]], name: str) -> str:
     attr = item.get(name) or {}
@@ -107,9 +102,10 @@ def handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
         logger.error("Missing methodArn in event")
         raise Exception("Unauthorized")
 
-    tenant_id = (extract_tenant_header(event) or "").strip()
+    path_parameters = event.get("pathParameters") or {}
+    tenant_id = str(path_parameters.get("tenant_id") or "").strip()
     if not tenant_id:
-        logger.warning("Missing required x-tenant-id header")
+        logger.warning("Missing required path parameter tenant_id")
         return generate_policy("anonymous", "Deny", method_arn)
 
     tenant_item = _lookup_tenant_item(tenant_id)
