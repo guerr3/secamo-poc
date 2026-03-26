@@ -53,6 +53,7 @@ async def test_handle_graph_notification_returns_validation_token() -> None:
     module = _load_handler_module()
 
     event = SimpleNamespace(
+        tenant_id="tenant-demo-001",
         path_params={"tenant_id": "tenant-demo-001"},
         query_params={"validationToken": "opaque-token-123"},
         headers={},
@@ -70,7 +71,10 @@ async def test_handle_graph_notification_returns_validation_token() -> None:
 async def test_handle_graph_notification_dispatches_supported_items(monkeypatch) -> None:
     module = _load_handler_module()
 
-    monkeypatch.setattr(module, "_validate_microsoft_defender_signature", lambda *_args, **_kwargs: True)
+    async def _always_valid(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(module, "_validate_provider_authentication", _always_valid)
 
     async def _fake_dispatch_provider_event(*, raw_body, provider, event_type, tenant_id):
         assert provider == "microsoft_defender"
@@ -82,6 +86,7 @@ async def test_handle_graph_notification_dispatches_supported_items(monkeypatch)
     monkeypatch.setattr(module, "_dispatch_provider_event", _fake_dispatch_provider_event)
 
     event = SimpleNamespace(
+        tenant_id="tenant-demo-001",
         path_params={"tenant_id": "tenant-demo-001"},
         query_params={},
         headers={"authorization": "Bearer test"},

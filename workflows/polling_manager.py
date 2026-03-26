@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta, timezone
+from datetime import datetime, timedelta, timezone
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -10,11 +10,72 @@ with workflow.unsafe.imports_passed_through():
 
     from activities.connector_dispatch import connector_fetch_events
     from activities.tenant import get_tenant_config, get_tenant_secrets
-    from shared.models import PollingManagerInput, SecurityEvent, TenantConfig, TenantSecrets, to_security_event
+    from shared.models import PollingManagerInput, TenantConfig, TenantSecrets
+    from shared.models.canonical import Correlation, Envelope, SecamoEventVariantAdapter, StoragePartition, derive_event_id
     from shared.models.mappers import resolve_polling_route
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
+
+
+def _canonical_event_to_envelope(event) -> Envelope:
+    payload_data = {
+        "event_type": event.event_type,
+        "activity_id": 2004 if event.event_type == "defender.alert" else 3002,
+        "activity_name": "polled_event",
+        "alert_id": event.external_event_id or "",
+        "title": event.subject,
+        "description": str((event.payload or {}).get("description") or ""),
+        "severity_id": 40,
+        "severity": str(event.severity or "medium"),
+    }
+
+    if event.event_type == "defender.impossible_travel":
+        payload_data = {
+            "event_type": "defender.impossible_travel",
+            "activity_id": 3002,
+            "activity_name": "polled_event",
+            "user_principal_name": str((event.payload or {}).get("user_email") or "unknown@example.com"),
+            "source_ip": str((event.payload or {}).get("source_ip") or "0.0.0.0"),
+            "destination_ip": (event.payload or {}).get("destination_ip"),
+            "severity_id": 40,
+            "severity": str(event.severity or "medium"),
+        }
+
+    payload = SecamoEventVariantAdapter.validate_python(payload_data)
+    occurred_at = event.occurred_at or datetime.now(timezone.utc)
+    correlation_id = event.request_id or event.external_event_id or "poller"
+
+    return Envelope(
+        event_id=derive_event_id(
+            tenant_id=event.tenant_id,
+            event_type=payload.event_type,
+            occurred_at=occurred_at,
+            correlation_id=correlation_id,
+            provider_event_id=event.external_event_id,
+        ),
+        tenant_id=event.tenant_id,
+        source_provider=event.provider,
+        event_name=payload.event_type,
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=occurred_at,
+        correlation=Correlation(
+            correlation_id=correlation_id,
+            causation_id=correlation_id,
+            request_id=correlation_id,
+            trace_id=correlation_id,
+            storage_partition=StoragePartition(
+                ddb_pk=f"TENANT#{event.tenant_id}",
+                ddb_sk=f"EVENT#{payload.event_type.replace('.', '#')}#{event.external_event_id or 'poll'}",
+                s3_bucket=f"secamo-events-{event.tenant_id}",
+                s3_key_prefix=f"raw/{payload.event_type}/{event.external_event_id or 'poll'}",
+            ),
+        ),
+        payload=payload,
+        metadata={"provider_event_id": event.external_event_id or ""},
+    )
 
 @workflow.defn
 class PollingManagerWorkflow:
@@ -102,14 +163,14 @@ class PollingManagerWorkflow:
                 continue
 
             workflow_name, task_queue = route
-            security_event: SecurityEvent = to_security_event(event)
-            event_id = event.external_event_id or security_event.event_id
+            envelope = _canonical_event_to_envelope(event)
+            event_id = event.external_event_id or envelope.event_id
             child_workflow_id = f"{input.provider}-{input.resource_type}-{input.tenant_id}-{event_id}"
 
             try:
                 await workflow.start_child_workflow(
                     workflow_name,
-                    security_event,
+                    envelope,
                     id=child_workflow_id,
                     task_queue=task_queue,
                     parent_close_policy=workflow.ParentClosePolicy.ABANDON,

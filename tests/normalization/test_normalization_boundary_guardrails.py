@@ -1,6 +1,6 @@
 """Phase-3 guardrails for normalization contract boundaries.
 
-Responsibility: enforce that internal canonical wrappers remain private and public integrations use WorkflowIntent.
+Responsibility: enforce that internal canonical wrappers remain private and legacy WorkflowIntent surfaces are removed.
 This module must not test runtime provider parsing behavior.
 """
 
@@ -29,7 +29,7 @@ def test_non_normalization_modules_do_not_import_internal_canonical() -> None:
         assert "internal_canonical" not in content, f"Unexpected internal canonical import in {module}"
 
 
-def test_public_normalization_surface_exports_workflow_intent_only() -> None:
+def test_public_normalization_surface_exports_no_legacy_intent_contract() -> None:
     content = (REPO_ROOT / "shared" / "normalization" / "__init__.py").read_text(encoding="utf-8")
-    assert "WorkflowIntent" in content
+    assert "WorkflowIntent" not in content
     assert "InternalCanonicalEvent" not in content

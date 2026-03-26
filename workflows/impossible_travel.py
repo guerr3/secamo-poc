@@ -11,7 +11,6 @@ with workflow.unsafe.imports_passed_through():
         HiTLApprovalRequest,
         HiTLRequest,
         IncidentResponseRequest,
-        SecurityEvent,
         TenantConfig,
         TenantSecrets,
         ThreatIntelEnrichmentRequest,
@@ -19,6 +18,7 @@ with workflow.unsafe.imports_passed_through():
         TicketCreationRequest,
         TicketResult,
     )
+    from shared.models.canonical import Envelope, ImpossibleTravelEvent
     from shared.workflow_helpers import bootstrap_tenant
     from activities.tenant import get_tenant_secrets
     from activities.graph_users import graph_get_user
@@ -44,18 +44,17 @@ class ImpossibleTravelWorkflow:
     """
 
     @workflow.run
-    async def run(self, event: SecurityEvent) -> str:
-        if event.alert is None:
-            raise ValueError("WF-05 requires event.alert in SecurityEvent input")
-        if event.user is None or not event.user.user_principal_name:
-            raise ValueError("WF-05 requires event.user.user_principal_name")
+    async def run(self, event: Envelope) -> str:
+        if not isinstance(event.payload, ImpossibleTravelEvent):
+            raise ValueError("WF-05 requires defender.impossible_travel payload in Envelope input")
 
-        source_ip = event.network.source_ip if event.network else None
-        destination_ip = event.network.destination_ip if event.network else None
+        payload = event.payload
+        source_ip = payload.source_ip
+        destination_ip = payload.destination_ip
 
         workflow.logger.info(
             f"WF-05 gestart — tenant={event.tenant_id}, "
-            f"user={event.user.user_principal_name}, alert={event.alert.alert_id}"
+            f"user={payload.user_principal_name}, alert={event.event_id}"
         )
 
         config: TenantConfig
@@ -87,14 +86,14 @@ class ImpossibleTravelWorkflow:
         # 2. Gebruikersgegevens ophalen
         user: GraphUser | None = await workflow.execute_activity(
             graph_get_user,
-            args=[event.tenant_id, event.user.user_principal_name, graph_secrets],
+            args=[event.tenant_id, payload.user_principal_name, graph_secrets],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
 
-        user_display = user.display_name if user else event.user.user_principal_name
+        user_display = user.display_name if user else payload.user_principal_name
 
-        # 3. Threat intel lookup op source IP
+                    "user_email": payload.user_principal_name},
         if config.threat_intel_enabled and ti_secrets:
             threat_intel = await workflow.execute_child_workflow(
                 ThreatIntelEnrichmentWorkflow.run,
@@ -123,7 +122,7 @@ class ImpossibleTravelWorkflow:
                 event.tenant_id,
                 config.edr_provider,
                 "get_user_alerts",
-                {"user_email": event.user.user_principal_name},
+                {"user_email": payload.user_principal_name},
                 graph_secrets,
             ],
             start_to_close_timeout=TIMEOUT,
@@ -146,7 +145,7 @@ class ImpossibleTravelWorkflow:
                     f"Recente alerts: {len(recent_alerts)}\n\n"
                     f"Wacht op analist-beslissing..."
                 ),
-                severity=event.alert.severity,
+                severity=(payload.severity or "high"),
                 source_workflow="WF-05",
                 ticketing_provider=config.ticketing_provider,
                 ticketing_secrets=ticketing_secrets,
@@ -166,13 +165,13 @@ class ImpossibleTravelWorkflow:
                 f"Review the context and select one response action."
             ),
             allowed_actions=["dismiss", "isolate", "disable_user"],
-            reviewer_email=config.soc_analyst_email or event.user.user_principal_name,
+            reviewer_email=config.soc_analyst_email or payload.user_principal_name,
             ticket_key=ticket_key,
             channels=["email", "jira"],
             timeout_hours=config.hitl_timeout_hours,
             metadata={
-                "alert_id": event.alert.alert_id,
-                "severity": event.alert.severity,
+                "alert_id": event.event_id,
+                "severity": payload.severity,
                 "source_ip": source_ip,
                 "destination_ip": destination_ip,
                 "risk_indicator": "malicious" if threat_intel.is_malicious else "clean",
@@ -193,7 +192,7 @@ class ImpossibleTravelWorkflow:
                 ticketing_secrets=ticketing_secrets,
                 edr_provider=config.edr_provider,
                 ticketing_provider=config.ticketing_provider,
-                device_id=event.alert.device_id,
+                device_id=None,
             ),
             id=f"{workflow.info().workflow_id}-hitl",
             task_queue="soc-defender",
@@ -213,8 +212,8 @@ class ImpossibleTravelWorkflow:
                 tenant_id=event.tenant_id,
                 decision=decision,
                 user=user,
-                user_email=event.user.user_principal_name,
-                device_id=event.alert.device_id,
+                user_email=payload.user_principal_name,
+                device_id=None,
                 ticket_id=ticket.ticket_id,
                 config=config,
                 graph_secrets=graph_secrets,
@@ -222,7 +221,7 @@ class ImpossibleTravelWorkflow:
                 edr_provider=config.edr_provider,
                 ticketing_provider=config.ticketing_provider,
                 parent_workflow_id=workflow.info().workflow_id,
-                alert_id=event.alert.alert_id,
+                alert_id=event.event_id,
                 threat_intel=threat_intel,
                 recent_alert_count=len(recent_alerts),
             ),

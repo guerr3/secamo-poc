@@ -1,9 +1,6 @@
-"""Normalization package for intent-oriented ingress contracts.
+"""Normalization package marker.
 
-Responsibility: expose public WorkflowIntent contracts and keep canonical event internals private.
-This package must not expose provider-specific route tables or workflow/activity implementations.
+Normalization is now performed directly at ingress by building strict Envelope payloads.
 """
 
-from .contracts import WorkflowIntent
-
-__all__ = ["WorkflowIntent"]
+__all__: list[str] = []

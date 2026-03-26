@@ -1,16 +1,18 @@
-"""Phase-3 verification for signal and intent contracts.
+"""Phase-3 verification for signal and envelope contracts.
 
-Responsibility: validate discriminated unions, immutable intent models, and signal gateway mapping.
+Responsibility: validate discriminated unions, immutable envelope models, and signal gateway mapping.
 This module must not test provider normalizers or route registries.
 """
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+
 import pytest
 from pydantic import TypeAdapter, ValidationError
 
 from shared.approval.contracts import ApprovalSignal, SignalPayload
-from shared.normalization.contracts import WorkflowIntent
+from shared.models.canonical import Correlation, DefenderDetectionFindingEvent, Envelope, StoragePartition
 from shared.temporal.signal_gateway import SignalGateway
 
 
@@ -51,16 +53,39 @@ def test_signal_union_rejects_unknown_discriminator() -> None:
         adapter.validate_python({"signal_type": "unknown", "actor": "a"})
 
 
-def test_workflow_intent_is_frozen() -> None:
-    intent = WorkflowIntent(
+def test_envelope_is_frozen() -> None:
+    envelope = Envelope(
+        event_id="evt-1",
         tenant_id="tenant-1",
-        provider="jira",
-        event_type="issue_created",
-        intent_type="ingress.alert",
+        source_provider="jira",
+        event_name="defender.alert",
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=datetime.now(timezone.utc),
+        correlation=Correlation(
+            correlation_id="corr-1",
+            causation_id="corr-1",
+            request_id="req-1",
+            trace_id="trace-1",
+            storage_partition=StoragePartition(
+                ddb_pk="TENANT#tenant-1",
+                ddb_sk="EVENT#defender#alert#evt-1",
+                s3_bucket="secamo-events-tenant-1",
+                s3_key_prefix="raw/defender.alert/evt-1",
+            ),
+        ),
+        payload=DefenderDetectionFindingEvent(
+            event_type="defender.alert",
+            activity_id=2004,
+            alert_id="a-1",
+            title="Test alert",
+            severity_id=60,
+        ),
     )
 
     with pytest.raises(ValidationError):
-        intent.provider = "crowdstrike"
+        envelope.tenant_id = "tenant-2"
 
 
 @pytest.mark.asyncio

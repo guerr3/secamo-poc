@@ -7,7 +7,6 @@ with workflow.unsafe.imports_passed_through():
     from shared.models import (
         AlertEnrichmentRequest,
         AlertEnrichmentResult,
-        SecurityEvent,
         TicketResult,
         TenantConfig,
         TenantSecrets,
@@ -15,6 +14,7 @@ with workflow.unsafe.imports_passed_through():
         ThreatIntelResult,
         TicketCreationRequest,
     )
+    from shared.models.canonical import DefenderDetectionFindingEvent, Envelope
     from shared.workflow_helpers import bootstrap_tenant
     from activities.tenant import get_tenant_secrets
     from activities.notify_teams import teams_send_notification
@@ -35,13 +35,23 @@ class DefenderAlertEnrichmentWorkflow:
     """
 
     @workflow.run
-    async def run(self, event: SecurityEvent) -> str:
-        if event.alert is None:
-            raise ValueError("WF-02 requires event.alert in SecurityEvent input")
+    async def run(self, event: Envelope) -> str:
+        if not isinstance(event.payload, DefenderDetectionFindingEvent):
+            raise ValueError("WF-02 requires defender.alert payload in Envelope input")
+
+        payload = event.payload
+        source_ip = None
+        destination_ip = None
+        vendor_source = payload.vendor_extensions.get("source_ip")
+        if vendor_source is not None and isinstance(vendor_source.value, str):
+            source_ip = vendor_source.value
+        vendor_destination = payload.vendor_extensions.get("destination_ip")
+        if vendor_destination is not None and isinstance(vendor_destination.value, str):
+            destination_ip = vendor_destination.value
 
         workflow.logger.info(
             f"WF-02 gestart — tenant={event.tenant_id}, "
-            f"alert={event.alert.alert_id}, severity={event.alert.severity}"
+            f"alert={payload.alert_id}, severity={payload.severity}"
         )
 
         config: TenantConfig
@@ -73,7 +83,7 @@ class DefenderAlertEnrichmentWorkflow:
             )
 
         # 4. Threat intelligence lookup
-        indicator = event.alert.source_ip or event.alert.destination_ip or ""
+        indicator = source_ip or destination_ip or ""
         if config.threat_intel_enabled and ti_secrets:
             threat_intel = await workflow.execute_child_workflow(
                 ThreatIntelEnrichmentWorkflow.run,
@@ -100,7 +110,7 @@ class DefenderAlertEnrichmentWorkflow:
             AlertEnrichmentWorkflow.run,
             AlertEnrichmentRequest(
                 tenant_id=event.tenant_id,
-                alert=event.alert,
+                alert=payload,
                 edr_provider=config.edr_provider,
                 graph_secrets=graph_secrets,
                 threat_intel=threat_intel,
@@ -169,7 +179,7 @@ class DefenderAlertEnrichmentWorkflow:
                         "risk_score": risk.score,
                         "risk_level": risk.level,
                         "ticket_id": ticket.ticket_id,
-                        "requester": event.requester,
+                        "requester": str(event.metadata.get("requester") or "ingress-api"),
                     },
                 ],
                 start_to_close_timeout=TIMEOUT,

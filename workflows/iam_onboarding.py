@@ -9,14 +9,14 @@ with workflow.unsafe.imports_passed_through():
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
     from shared.models import (
-    LifecycleAction,
-    PollingManagerInput,
-    SecurityEvent,
-    TenantConfig,
-    TenantSecrets,
-    GraphUser,
-    UserDeprovisioningRequest,
-)
+        GraphUser,
+        LifecycleAction,
+        PollingManagerInput,
+        TenantConfig,
+        TenantSecrets,
+        UserDeprovisioningRequest,
+    )
+    from shared.models.canonical import Envelope, IamOnboardingEvent
     from shared.workflow_helpers import bootstrap_tenant
     from activities.graph_users import (
         graph_get_user,
@@ -43,14 +43,16 @@ class IamOnboardingWorkflow:
     """
 
     @workflow.run
-    async def run(self, event: SecurityEvent) -> str:
-        if event.user is None or event.user.action is None:
-            raise ValueError("WF-01 requires event.user.action in SecurityEvent input")
-        if not event.user.user_data or not event.user.user_data.get("email"):
-            raise ValueError("WF-01 requires event.user.user_data.email")
+    async def run(self, event: Envelope) -> str:
+        if not isinstance(event.payload, IamOnboardingEvent):
+            raise ValueError("WF-01 requires iam.onboarding payload in Envelope input")
 
-        action = event.user.action
-        user_data = event.user.user_data
+        payload = event.payload
+        user_data = payload.user_data
+        if not user_data or not user_data.get("email"):
+            raise ValueError("WF-01 requires payload.user_data.email")
+
+        action = LifecycleAction(payload.action)
         user_email = str(user_data["email"])
 
         workflow.logger.info(
@@ -202,7 +204,10 @@ class IamOnboardingWorkflow:
                 workflow.info().workflow_id,
                 action.value,
                 result_msg,
-                {"requester": event.requester, "ticket_id": event.ticket_id or ""},
+                {
+                    "requester": str(event.metadata.get("requester") or "ingress-api"),
+                    "ticket_id": str(event.metadata.get("ticket_id") or ""),
+                },
             ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,

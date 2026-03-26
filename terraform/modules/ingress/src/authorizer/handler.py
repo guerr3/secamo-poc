@@ -9,7 +9,14 @@ logger = logging.getLogger(__name__)
 logger.setLevel(LOG_LEVEL)
 
 TENANT_TABLE_NAME = os.environ.get("TENANT_TABLE_NAME", "").strip()
-_dynamo = boto3.client("dynamodb")
+_dynamo = None
+
+
+def _get_dynamo_client():
+    global _dynamo
+    if _dynamo is None:
+        _dynamo = boto3.client("dynamodb")
+    return _dynamo
 
 def generate_policy(principal_id: str, effect: str, resource: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Helper function to generate an IAM policy for the API Gateway Custom Authorizer."""
@@ -77,7 +84,7 @@ def _lookup_tenant_item(tenant_id: str) -> Optional[Dict[str, Dict[str, str]]]:
         return None
 
     try:
-        response = _dynamo.get_item(
+        response = _get_dynamo_client().get_item(
             TableName=TENANT_TABLE_NAME,
             Key={"tenant_id": {"S": tenant_id}},
             ConsistentRead=True,

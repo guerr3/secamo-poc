@@ -1,6 +1,6 @@
 """End-to-end ingress intent fan-out verification.
 
-Responsibility: validate raw envelope to canonical intent normalization and best-effort route dispatch start behavior.
+Responsibility: validate envelope fan-out normalization and best-effort route dispatch start behavior.
 This module must not test provider signature verification or workflow internals.
 """
 
@@ -11,9 +11,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from shared.models import CanonicalEvent, RawIngressEnvelope
-from shared.models.mappers import to_security_event
-from shared.normalization.normalizers import canonical_event_to_workflow_intent
+from shared.models.canonical import Correlation, DefenderDetectionFindingEvent, Envelope, StoragePartition
 from shared.routing.contracts import WorkflowRoute
 from shared.routing.registry import RouteRegistry
 from shared.temporal.dispatcher import RouteFanoutDispatcher
@@ -40,40 +38,37 @@ class _FakeStarter:
 
 
 @pytest.mark.asyncio
-async def test_raw_envelope_to_intent_to_fanout_temporal_start(caplog: pytest.LogCaptureFixture) -> None:
-    envelope = RawIngressEnvelope(
-        request_id="req-1",
+async def test_envelope_to_fanout_temporal_start(caplog: pytest.LogCaptureFixture) -> None:
+    envelope = Envelope(
+        event_id="evt-1",
         tenant_id="tenant-1",
-        provider="microsoft_defender",
-        route="/api/v1/ingress/event/tenant-1",
-        method="POST",
-        headers={},
-        received_at=datetime.now(timezone.utc),
-        raw_body={
-            "alert_id": "a-1",
-            "severity": "high",
-            "title": "Suspicious sign-in",
-            "description": "desc",
-            "user_email": "analyst@example.com",
-            "source_ip": "10.0.0.1",
-            "destination_ip": "10.0.0.2",
-        },
-    )
-
-    canonical_event = CanonicalEvent(
-        event_type="defender.alert",
-        tenant_id=envelope.tenant_id,
-        provider=envelope.provider,
-        external_event_id="a-1",
-        subject="Suspicious sign-in",
-        severity="high",
-        payload=dict(envelope.raw_body),
-        request_id=envelope.request_id,
-    )
-    security_event = to_security_event(canonical_event)
-    intent = canonical_event_to_workflow_intent(
-        canonical_event,
-        workflow_input=security_event.model_dump(mode="json"),
+        source_provider="microsoft_defender",
+        event_name="defender.alert",
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=datetime.now(timezone.utc),
+        correlation=Correlation(
+            correlation_id="corr-1",
+            causation_id="corr-1",
+            request_id="req-1",
+            trace_id="trace-1",
+            storage_partition=StoragePartition(
+                ddb_pk="TENANT#tenant-1",
+                ddb_sk="EVENT#defender#alert#a-1",
+                s3_bucket="secamo-events-tenant-1",
+                s3_key_prefix="raw/defender.alert/a-1",
+            ),
+        ),
+        payload=DefenderDetectionFindingEvent(
+            event_type="defender.alert",
+            activity_id=2004,
+            alert_id="a-1",
+            title="Suspicious sign-in",
+            description="desc",
+            severity_id=60,
+            severity="high",
+        ),
     )
 
     logger = logging.getLogger("tests.e2e.fanout")
@@ -91,7 +86,7 @@ async def test_raw_envelope_to_intent_to_fanout_temporal_start(caplog: pytest.Lo
     fanout = RouteFanoutDispatcher(registry, starter)
 
     with caplog.at_level(logging.ERROR):
-        report = await fanout.dispatch_intent(intent)
+        report = await fanout.dispatch_intent(envelope)
 
     assert report.attempted == 2
     assert report.failed == 1

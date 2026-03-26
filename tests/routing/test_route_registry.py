@@ -7,12 +7,19 @@ This module must not test provider payload normalization internals.
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timezone
 
 import pytest
 
-from shared.normalization.contracts import WorkflowIntent
+from shared.models.canonical import (
+    Correlation,
+    DefenderDetectionFindingEvent,
+    Envelope,
+    ImpossibleTravelEvent,
+    StoragePartition,
+)
 from shared.routing.contracts import WorkflowRoute
-from shared.routing.registry import RouteRegistry
+from shared.routing.registry import RouteRegistry, UnroutableEventError
 
 
 class _DispatchSpy:
@@ -20,19 +27,42 @@ class _DispatchSpy:
         self.failing_workflow = failing_workflow
         self.calls: list[str] = []
 
-    async def dispatch(self, route: WorkflowRoute, intent: WorkflowIntent) -> None:
+    async def dispatch(self, route: WorkflowRoute, envelope: Envelope) -> None:
         self.calls.append(route.workflow_name)
         if self.failing_workflow and route.workflow_name == self.failing_workflow:
             raise RuntimeError("dispatch_failed")
 
 
-def _sample_intent() -> WorkflowIntent:
-    return WorkflowIntent(
+def _sample_envelope() -> Envelope:
+    return Envelope(
+        event_id="evt-1",
         tenant_id="tenant-1",
-        provider="microsoft_defender",
-        event_type="alert",
-        intent_type="security.alert",
-        payload={"alert_id": "a-1"},
+        source_provider="microsoft_defender",
+        event_name="defender.alert",
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=datetime.now(timezone.utc),
+        correlation=Correlation(
+            correlation_id="corr-1",
+            causation_id="corr-1",
+            request_id="req-1",
+            trace_id="trace-1",
+            storage_partition=StoragePartition(
+                ddb_pk="TENANT#tenant-1",
+                ddb_sk="EVENT#defender#alert#a-1",
+                s3_bucket="secamo-events-tenant-1",
+                s3_key_prefix="raw/defender.alert/a-1",
+            ),
+        ),
+        payload=DefenderDetectionFindingEvent(
+            event_type="defender.alert",
+            activity_id=2004,
+            alert_id="a-1",
+            title="Suspicious sign-in",
+            severity_id=60,
+            severity="high",
+        ),
     )
 
 
@@ -40,14 +70,14 @@ def test_route_registry_resolves_multiple_routes() -> None:
     registry = RouteRegistry()
     registry.register(
         "microsoft_defender",
-        "alert",
+        "defender.alert",
         (
             WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),
             WorkflowRoute(workflow_name="IncidentCorrelatorWorkflow", task_queue="soc-defender"),
         ),
     )
 
-    resolved = registry.resolve("microsoft_defender", "alert")
+    resolved = registry.resolve(_sample_envelope())
     assert len(resolved) == 2
     assert resolved[0].workflow_name == "DefenderAlertEnrichmentWorkflow"
     assert resolved[1].workflow_name == "IncidentCorrelatorWorkflow"
@@ -59,7 +89,7 @@ async def test_best_effort_fanout_continues_on_failure(caplog: pytest.LogCapture
     registry = RouteRegistry(logger=logger)
     registry.register(
         "microsoft_defender",
-        "alert",
+        "defender.alert",
         (
             WorkflowRoute(workflow_name="WorkflowA", task_queue="soc-defender"),
             WorkflowRoute(workflow_name="WorkflowB", task_queue="soc-defender"),
@@ -68,10 +98,10 @@ async def test_best_effort_fanout_continues_on_failure(caplog: pytest.LogCapture
     )
 
     dispatcher = _DispatchSpy(failing_workflow="WorkflowB")
-    intent = _sample_intent()
+    envelope = _sample_envelope()
 
     with caplog.at_level(logging.ERROR):
-        report = await registry.dispatch_best_effort(intent, dispatcher)
+        report = await registry.dispatch_best_effort(envelope, dispatcher)
 
     assert dispatcher.calls == ["WorkflowA", "WorkflowB", "WorkflowC"]
     assert report.attempted == 3
@@ -83,22 +113,44 @@ async def test_best_effort_fanout_continues_on_failure(caplog: pytest.LogCapture
     combined_logs = "\n".join(caplog.messages)
     assert "[fan-out error] workflow=WorkflowB tenant=tenant-1 reason=dispatch_failed" in combined_logs
     assert "provider=microsoft_defender" in combined_logs
-    assert "event_type=alert" in combined_logs
+    assert "event_type=defender.alert" in combined_logs
 
 
 @pytest.mark.asyncio
-async def test_unknown_route_key_returns_empty_dispatch_report() -> None:
+async def test_unknown_route_key_raises_unroutable_error() -> None:
     registry = RouteRegistry()
     dispatcher = _DispatchSpy()
-    intent = WorkflowIntent(
+    envelope = Envelope(
+        event_id="evt-2",
         tenant_id="tenant-1",
-        provider="unknown_provider",
-        event_type="unknown_event",
-        intent_type="unknown",
+        source_provider="unknown_provider",
+        event_name="unknown_event",
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=datetime.now(timezone.utc),
+        correlation=Correlation(
+            correlation_id="corr-2",
+            causation_id="corr-2",
+            request_id="req-2",
+            trace_id="trace-2",
+            storage_partition=StoragePartition(
+                ddb_pk="TENANT#tenant-1",
+                ddb_sk="EVENT#unknown#event#evt-2",
+                s3_bucket="secamo-events-tenant-1",
+                s3_key_prefix="raw/unknown_event/evt-2",
+            ),
+        ),
+        payload=ImpossibleTravelEvent(
+            event_type="defender.impossible_travel",
+            activity_id=3002,
+            user_principal_name="unknown@example.com",
+            source_ip="10.0.0.1",
+            severity_id=20,
+        ),
     )
 
-    report = await registry.dispatch_best_effort(intent, dispatcher)
-    assert report.attempted == 0
-    assert report.succeeded == 0
-    assert report.failed == 0
+    with pytest.raises(UnroutableEventError):
+        await registry.dispatch_best_effort(envelope, dispatcher)
+
     assert dispatcher.calls == []

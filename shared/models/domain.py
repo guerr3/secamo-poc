@@ -13,7 +13,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.models.canonical import AlertData, CanonicalEvent
+from shared.models.canonical import DefenderDetectionFindingEvent, Envelope
 
 
 class TenantSecrets(BaseModel):
@@ -269,7 +269,7 @@ class ConnectorFetchResult(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     provider: str
-    events: list[CanonicalEvent] = Field(default_factory=list)
+    events: list[Envelope] = Field(default_factory=list)
     raw_count: int = 0
 
 
@@ -380,7 +380,7 @@ class AlertEnrichmentRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     tenant_id: str
-    alert: AlertData
+    alert: DefenderDetectionFindingEvent
     edr_provider: str
     graph_secrets: TenantSecrets
     threat_intel: ThreatIntelResult | None = None

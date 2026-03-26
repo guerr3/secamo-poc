@@ -19,6 +19,7 @@ import hmac
 import logging
 import os
 import time
+from datetime import datetime, timezone
 from uuid import uuid4
 
 import boto3
@@ -29,16 +30,23 @@ from ingress_sdk import temporal, response
 from ingress_sdk.dispatch import async_handler
 from ingress_sdk.event import IngressEvent
 
-from shared.models import CanonicalEvent, GraphNotificationEnvelope, IamIngressRequest, SecurityEvent
-from shared.normalization.normalizers import canonical_event_to_workflow_intent
+from shared.models import GraphNotificationEnvelope, IamIngressRequest
+from shared.models.canonical import (
+    Correlation,
+    Envelope,
+    SecamoEventVariantAdapter,
+    StoragePartition,
+    VendorExtension,
+    derive_event_id,
+)
 from shared.routing import build_default_route_registry
 from shared.temporal.dispatcher import RouteFanoutDispatcher, WorkflowStarter
 from shared.auth import AuthValidationRequest, CachedSecretResolver, build_default_validator_registry
 from mappers import normalize_event_body
 
 
-_dynamo = boto3.client("dynamodb", region_name="eu-west-1")
-_ssm = boto3.client("ssm", region_name="eu-west-1")
+_dynamo = None
+_ssm = None
 logger = logging.getLogger("ingress.hitl")
 
 GRAPH_NOTIFICATION_AZP = "0bf30f3b-4a52-48df-9a82-234910c4a086"
@@ -47,8 +55,32 @@ GRAPH_NOTIFICATION_APP_IDS = {
     value.strip() for value in os.environ.get("GRAPH_NOTIFICATION_APP_IDS", "").split(",") if value.strip()
 }
 _graph_jwks_client = jwt.PyJWKClient(GRAPH_COMMON_JWKS_URL)
-_auth_resolver = CachedSecretResolver()
-_auth_registry = build_default_validator_registry(_auth_resolver)
+_auth_resolver = None
+_auth_registry = None
+
+
+def _get_dynamo_client():
+    """Return a lazily created DynamoDB client to avoid import-time AWS auth resolution."""
+    global _dynamo
+    if _dynamo is None:
+        _dynamo = boto3.client("dynamodb", region_name="eu-west-1")
+    return _dynamo
+
+
+def _get_ssm_client():
+    """Return a lazily created SSM client to avoid import-time AWS auth resolution."""
+    global _ssm
+    if _ssm is None:
+        _ssm = boto3.client("ssm", region_name="eu-west-1")
+    return _ssm
+
+
+def _get_auth_registry():
+    global _auth_resolver, _auth_registry
+    if _auth_registry is None:
+        _auth_resolver = CachedSecretResolver()
+        _auth_registry = build_default_validator_registry(_auth_resolver)
+    return _auth_registry
 
 
 class _IngressSdkWorkflowStarter(WorkflowStarter):
@@ -189,7 +221,7 @@ def _authorizer_tenant_id(event: IngressEvent) -> str:
 
 
 async def _validate_provider_authentication(*, event: IngressEvent, tenant_id: str, provider: str, channel: str = "webhook") -> bool:
-    validation = await _auth_registry.validate(
+    validation = await _get_auth_registry().validate(
         AuthValidationRequest(
             tenant_id=tenant_id,
             provider=provider,
@@ -246,7 +278,7 @@ async def handle_hitl_respond(event: IngressEvent) -> dict:
     logger.info("HiTL respond received token=%s action=%s", token_preview, action)
 
     try:
-        update_result = _dynamo.update_item(
+        update_result = _get_dynamo_client().update_item(
             TableName=table_name,
             Key={"token": {"S": str(token)}},
             UpdateExpression="SET used = :used",
@@ -340,7 +372,7 @@ async def handle_hitl_jira(event: IngressEvent) -> dict:
 
     secret_path = f"/secamo/tenants/{tenant_id}/hitl/jira_webhook_secret"
     try:
-        secret_resp = _ssm.get_parameter(Name=secret_path, WithDecryption=True)
+        secret_resp = _get_ssm_client().get_parameter(Name=secret_path, WithDecryption=True)
         shared_secret = secret_resp.get("Parameter", {}).get("Value", "")
     except ClientError:
         return response.error(401, "Invalid webhook signature")
@@ -407,14 +439,20 @@ async def handle_internal(event: IngressEvent) -> dict:
     )
 
     try:
-        security_event = SecurityEvent.model_validate(normalized)
+        envelope = _build_envelope(
+            raw_body=iam_request.model_dump(mode="json"),
+            normalized=normalized,
+            provider="microsoft_graph",
+            tenant_id=event.tenant_id,
+            event_type="iam.onboarding",
+        )
     except Exception as exc:
-        return response.error(400, f"Normalized IAM payload failed SecurityEvent validation: {exc}")
+        return response.error(400, f"Normalized IAM payload failed Envelope validation: {exc}")
 
-    # 2. Start workflow via ingress_sdk with universal SecurityEvent payload shape.
+    # 2. Start workflow via ingress_sdk with strict Envelope payload shape.
     result = await temporal.start_workflow(
         workflow="IamOnboardingWorkflow",
-        input=security_event.model_dump(mode="json"),
+        input=envelope.model_dump(mode="json"),
         tenant_id=event.tenant_id,
         task_queue="iam-graph",
     )
@@ -489,6 +527,154 @@ def _graph_item_to_provider_payload(item: dict, event_type: str) -> dict:
     }
 
 
+def _severity_to_id(severity: str | None) -> int:
+    mapping = {
+        "informational": 10,
+        "low": 20,
+        "medium": 40,
+        "high": 60,
+        "critical": 80,
+    }
+    return mapping.get(str(severity or "").strip().lower(), 40)
+
+
+def _parse_occurred_at(raw_body: dict) -> datetime:
+    raw_value = raw_body.get("occurred_at") or raw_body.get("timestamp")
+    if isinstance(raw_value, str):
+        candidate = raw_value.replace("Z", "+00:00")
+        try:
+            parsed = datetime.fromisoformat(candidate)
+            return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            pass
+    return datetime.now(timezone.utc)
+
+
+def _build_storage_partition(*, tenant_id: str, event_type: str, provider_event_id: str) -> StoragePartition:
+    event_key = event_type.replace(".", "#")
+    return StoragePartition(
+        ddb_pk=f"TENANT#{tenant_id}",
+        ddb_sk=f"EVENT#{event_key}#{provider_event_id}",
+        s3_bucket=f"secamo-events-{tenant_id}",
+        s3_key_prefix=f"raw/{event_type}/{provider_event_id}",
+    )
+
+
+def _build_envelope(
+    *,
+    raw_body: dict,
+    normalized: dict,
+    provider: str,
+    tenant_id: str,
+    event_type: str,
+) -> Envelope:
+    provider_event_id = str(normalized.get("event_id") or raw_body.get("event_id") or uuid4())
+    occurred_at = _parse_occurred_at(raw_body)
+    correlation_id = str(normalized.get("correlation_id") or raw_body.get("correlation_id") or provider_event_id)
+    request_id = str(raw_body.get("request_id") or correlation_id)
+    event_key = str(event_type).strip().lower()
+
+    payload_candidate: dict
+    if event_key == "defender.alert":
+        alert = normalized.get("alert") if isinstance(normalized.get("alert"), dict) else {}
+        severity = str(alert.get("severity") or normalized.get("severity") or "medium").lower()
+        payload_candidate = {
+            "event_type": "defender.alert",
+            "activity_id": 2004,
+            "activity_name": "alert_detected",
+            "alert_id": str(alert.get("alert_id") or provider_event_id),
+            "title": str(alert.get("title") or "Security alert"),
+            "description": str(alert.get("description") or ""),
+            "severity_id": _severity_to_id(severity),
+            "severity": severity,
+            "status": str(alert.get("status") or "open"),
+            "vendor_extensions": {
+                "source_ip": VendorExtension(source="ingress", value=alert.get("source_ip")),
+                "destination_ip": VendorExtension(source="ingress", value=alert.get("destination_ip")),
+                "device_id": VendorExtension(source="ingress", value=alert.get("device_id")),
+                "user_email": VendorExtension(source="ingress", value=alert.get("user_email")),
+            },
+        }
+    elif event_key == "defender.impossible_travel":
+        user = normalized.get("user") if isinstance(normalized.get("user"), dict) else {}
+        network = normalized.get("network") if isinstance(normalized.get("network"), dict) else {}
+        severity = str(normalized.get("severity") or "high").lower()
+        payload_candidate = {
+            "event_type": "defender.impossible_travel",
+            "activity_id": 3002,
+            "activity_name": "impossible_travel",
+            "user_principal_name": str(user.get("user_principal_name") or "unknown@example.com"),
+            "source_ip": str(network.get("source_ip") or "0.0.0.0"),
+            "destination_ip": (str(network.get("destination_ip")) if network.get("destination_ip") else None),
+            "severity_id": _severity_to_id(severity),
+            "severity": severity,
+        }
+    elif event_key == "iam.onboarding":
+        user = normalized.get("user") if isinstance(normalized.get("user"), dict) else {}
+        action = str(user.get("action") or "create").lower()
+        activity_map = {"create": 1, "update": 2, "delete": 3, "password_reset": 4}
+        payload_candidate = {
+            "event_type": "iam.onboarding",
+            "activity_id": activity_map.get(action, 1),
+            "activity_name": action,
+            "user_email": str(user.get("user_principal_name") or "unknown@example.com"),
+            "action": action,
+            "user_data": user.get("user_data") if isinstance(user.get("user_data"), dict) else {},
+        }
+    elif event_key == "hitl.approval":
+        payload_candidate = {
+            "event_type": "hitl.approval",
+            "activity_id": 9001,
+            "activity_name": "hitl_response",
+            "approval_id": str(raw_body.get("approval_id") or provider_event_id),
+            "decision": str(raw_body.get("decision") or "approved"),
+            "channel": str(raw_body.get("channel") or "web"),
+            "responder": (str(raw_body.get("responder")) if raw_body.get("responder") else None),
+            "reason": (str(raw_body.get("reason")) if raw_body.get("reason") else None),
+        }
+    else:
+        raise ValueError(f"unsupported_event_type:{event_key}")
+
+    payload = SecamoEventVariantAdapter.validate_python(payload_candidate)
+
+    event_id = derive_event_id(
+        tenant_id=tenant_id,
+        event_type=payload.event_type,
+        occurred_at=occurred_at,
+        correlation_id=correlation_id,
+        provider_event_id=provider_event_id,
+    )
+    correlation = Correlation(
+        correlation_id=correlation_id,
+        causation_id=correlation_id,
+        request_id=request_id,
+        trace_id=correlation_id,
+        storage_partition=_build_storage_partition(
+            tenant_id=tenant_id,
+            event_type=payload.event_type,
+            provider_event_id=provider_event_id,
+        ),
+    )
+
+    return Envelope(
+        event_id=event_id,
+        tenant_id=tenant_id,
+        source_provider=provider,
+        event_name=payload.event_type,
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=occurred_at,
+        correlation=correlation,
+        payload=payload,
+        metadata={
+            "provider_event_id": provider_event_id,
+            "requester": normalized.get("requester"),
+            "ticket_id": normalized.get("ticket_id"),
+        },
+    )
+
+
 async def _dispatch_provider_event(*, raw_body: dict, provider: str, event_type: str, tenant_id: str) -> dict:
     routing = PROVIDER_EVENT_ROUTING.get((provider, event_type))
     if routing is None:
@@ -505,24 +691,17 @@ async def _dispatch_provider_event(*, raw_body: dict, provider: str, event_type:
     )
 
     try:
-        security_event = SecurityEvent.model_validate(normalized)
+        envelope = _build_envelope(
+            raw_body=raw_body,
+            normalized=normalized,
+            provider=provider,
+            tenant_id=tenant_id,
+            event_type=event_type,
+        )
     except Exception as exc:
-        return response.error(400, f"Normalized ingress payload failed SecurityEvent validation: {exc}")
+        return response.error(400, f"Normalized ingress payload failed Envelope validation: {exc}")
 
-    canonical_event = CanonicalEvent(
-        event_type=security_event.event_type,
-        tenant_id=tenant_id,
-        provider=provider,
-        external_event_id=security_event.event_id,
-        subject=(security_event.alert.title if security_event.alert else "ingress event"),
-        severity=security_event.severity,
-        payload=dict(raw_body),
-        request_id=security_event.correlation_id,
-    )
-    workflow_input = security_event.model_dump(mode="json")
-    intent = canonical_event_to_workflow_intent(canonical_event, workflow_input=workflow_input)
-
-    fanout_report = await _route_fanout_dispatcher.dispatch_intent(intent)
+    fanout_report = await _route_fanout_dispatcher.dispatch_intent(envelope)
     return response.accepted(
         {
             "tenant_id": tenant_id,

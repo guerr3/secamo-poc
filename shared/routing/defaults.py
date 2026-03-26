@@ -6,8 +6,17 @@ This module must not include payload normalization logic or SDK dispatch impleme
 
 from __future__ import annotations
 
+from shared.models.canonical import Envelope
 from shared.routing.contracts import WorkflowRoute
 from shared.routing.registry import RouteRegistry
+
+
+def _is_critical_defender_alert(envelope: Envelope) -> bool:
+    """Route high-severity defender findings through explicit rule precedence."""
+
+    if envelope.payload.event_type != "defender.alert":
+        return False
+    return envelope.payload.severity_id >= 60
 
 
 def build_default_route_registry() -> RouteRegistry:
@@ -15,39 +24,41 @@ def build_default_route_registry() -> RouteRegistry:
 
     registry = RouteRegistry()
 
+    # Explicit rules are evaluated before event-type fallback routes.
+    registry.register_rule(
+        name="critical-defender-alert",
+        predicate=_is_critical_defender_alert,
+        routes=(WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+    )
+
     registry.register(
         "microsoft_defender",
-        "alert",
+        "defender.alert",
         (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
     )
     registry.register(
         "microsoft_defender",
-        "impossible_travel",
+        "defender.impossible_travel",
         (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue="soc-defender"),),
     )
     registry.register(
         "crowdstrike",
-        "detection_summary",
+        "defender.alert",
         (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
     )
     registry.register(
         "crowdstrike",
-        "impossible_travel",
+        "defender.impossible_travel",
         (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue="soc-defender"),),
     )
     registry.register(
         "sentinelone",
-        "alert",
+        "defender.alert",
         (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
     )
     registry.register(
         "jira",
-        "jira:issue_created",
-        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue="iam-graph"),),
-    )
-    registry.register(
-        "jira",
-        "jira:issue_updated",
+        "iam.onboarding",
         (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue="iam-graph"),),
     )
     registry.register(
@@ -62,8 +73,13 @@ def build_default_route_registry() -> RouteRegistry:
     )
     registry.register(
         "microsoft_graph",
-        "iam_request",
+        "iam.onboarding",
         (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue="iam-graph"),),
+    )
+    registry.register(
+        "microsoft_graph",
+        "hitl.approval",
+        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue="soc-defender"),),
     )
 
     return registry
