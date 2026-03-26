@@ -1,53 +1,64 @@
-# Tests
+# Tests - verification suites for contracts, ingress, activities, and connectors
 
-> This folder contains unit tests for shared model mapping, ingress validation/routing, selected activity modules, and tenant/runtime helpers.
+> This module contains automated tests that validate integration boundaries and behavior without live external dependencies.
 
-## What This Does
+## Responsibilities
 
-### Files
+- Validate model contracts and mapping transformations.
+- Verify ingress routing, signature handling, and callback handling paths.
+- Validate activity behavior and connector dispatch semantics.
+- Provide regression safety for workflow-adjacent helper logic.
 
-| File                                                 | Purpose                                                                                                    | Used By                 |
-| ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `test_graph_client.py`                               | Verifies Graph token cache behavior, refresh paths, and auth failure handling in `shared/graph_client.py`. | Local/CI `pytest` runs. |
-| `test_ingress_graph_notifications.py`                | Verifies Graph notification challenge echo and per-item dispatch behavior in ingress handler route logic.  | Local/CI `pytest` runs. |
-| `test_graph_webhook_routing.py`                      | Verifies webhook resource routing to workflow name + queue from mapper tables.                             | Local/CI `pytest` runs. |
-| `test_ingress_mappers.py`                            | Verifies Terraform ingress lambda mapper normalization for multiple provider payload shapes.               | Local/CI `pytest` runs. |
-| `test_ingress_hitl_respond.py`                       | Verifies signed HITL callback ingest and response behavior in ingress route handling.                      | Local/CI `pytest` runs. |
-| `test_models.py`                                     | Verifies provider-event-to-canonical/security/command conversion pipeline and approval mapping behavior.   | Local/CI `pytest` runs. |
-| `test_connectors_resilience.py`                      | Verifies connector error-path behavior and retry-safe resilience expectations.                             | Local/CI `pytest` runs. |
-| `test_hitl_child_identity_rebind.py`                 | Verifies HiTL child workflow identity/signal handling across callback boundaries.                          | Local/CI `pytest` runs. |
-| `test_activities/test_audit_activities.py`           | Tests audit log writes and evidence bundle persistence behavior with mocked AWS clients.                   | Local/CI `pytest` runs. |
-| `test_activities/test_connector_dispatch.py`         | Tests connector dispatch activity behavior for fetch/execute/health/threat-intel fanout paths.             | Local/CI `pytest` runs. |
-| `test_activities/test_graph_alerts_activities.py`    | Tests alert enrichment/device/isolation/risk/threat-intel activity behavior using mocked HTTP responses.   | Local/CI `pytest` runs. |
-| `test_activities/test_graph_users_activities.py`     | Tests Graph user lifecycle activity operations and idempotent delete handling.                             | Local/CI `pytest` runs. |
-| `test_activities/test_hitl_dispatch_activity.py`     | Tests HiTL dispatch activity behavior for approval issue and callback metadata shaping.                    | Local/CI `pytest` runs. |
-| `test_activities/test_hitl_token_workflow_target.py` | Tests token-to-workflow target integrity checks for HiTL callback flows.                                   | Local/CI `pytest` runs. |
-| `test_activities/test_notifications_activities.py`   | Tests Teams and email notification activity success/error paths.                                           | Local/CI `pytest` runs. |
-| `test_activities/test_tenant_config.py`              | Tests tenant config loading defaults and parsing from SSM mock responses.                                  | Local/CI `pytest` runs. |
-| `test_activities/test_ticketing_activities.py`       | Tests ticket create/update/close/get wrappers over connector actions.                                      | Local/CI `pytest` runs. |
+## File Reference
 
-These tests validate critical behavior in shared contracts, activity logic, and ingress mapping paths. Most suites isolate side effects via monkeypatching or fake clients, so they can run without live AWS, Graph, or Temporal dependencies. Test runner behavior is configured by `pytest.ini`.
+| File                                  | Responsibility                                          |
+| ------------------------------------- | ------------------------------------------------------- |
+| `approval/`                           | Approval-related test suites.                           |
+| `auth/`                               | Auth validation and resolver tests.                     |
+| `conftest.py`                         | Shared pytest fixtures and configuration.               |
+| `contracts/`                          | Contract-level test suites.                             |
+| `e2e/`                                | End-to-end oriented test scenarios.                     |
+| `normalization/`                      | Normalization and canonical mapping tests.              |
+| `README.md`                           | Module documentation.                                   |
+| `routing/`                            | Routing and dispatch behavior tests.                    |
+| `test_activities/`                    | Activity-focused test suites.                           |
+| `test_connectors_resilience.py`       | Connector resilience and error-path tests.              |
+| `test_graph_client.py`                | Graph client token/cache tests.                         |
+| `test_graph_webhook_routing.py`       | Graph webhook route resolution tests.                   |
+| `test_hitl_child_identity_rebind.py`  | HiTL child workflow identity and signal behavior tests. |
+| `test_ingress_graph_notifications.py` | Graph notification ingress behavior tests.              |
+| `test_ingress_hitl_respond.py`        | HiTL callback ingress endpoint behavior tests.          |
+| `test_ingress_mappers.py`             | Ingress mapper normalization tests.                     |
+| `test_jira_provisioner.py`            | Jira provisioner behavior tests.                        |
+| `test_models.py`                      | Shared model mapping and validation tests.              |
+| `test_stub_connectors.py`             | Stub connector behavior tests.                          |
+| `__pycache__/`                        | Generated Python bytecode cache directory.              |
 
-## How To Run
+## Key Concepts
 
-Run all tests:
+- Boundary-first testing: tests target contracts and boundary behavior where ingress, routing, activity, and connector concerns intersect.
+- Isolation by mocking: AWS/provider/Temporal interactions are mocked to keep tests deterministic and CI-friendly.
+- Coverage by module intent: folder- and file-level suites align with architecture layers and key extension points.
+
+## Usage
+
+Most suites run directly from repository root with pytest.
 
 ```bash
 python -m pytest -q
 ```
 
-Run activity-focused tests:
+## Testing
 
 ```bash
+python -m pytest -q
 python -m pytest -q tests/test_activities
 ```
 
-## How To Verify
+## Extension Points
 
-A successful run should complete without failures and cover key flows such as ingress mapping, connector dispatch, and tenant/bootstrap behavior.
-
-## Troubleshooting
-
-- Workflow orchestration modules in [../workflows/README.md](../workflows/README.md) currently have limited direct unit-test coverage; adding deterministic workflow tests is a natural next expansion.
-- Connector implementations in [../connectors/README.md](../connectors/README.md) have minimal dedicated tests compared to activity wrappers.
-- Keep fake clients and monkeypatch fixtures explicit to preserve deterministic assertions under `asyncio_mode=auto`.
+1. Add new tests near the impacted behavior area (for example `test_activities/`, `routing/`, or root test files).
+2. Reuse fixtures from `conftest.py` for stable setup and teardown.
+3. Mock external systems; do not call live AWS or provider APIs.
+4. Add regression tests for bug fixes and edge-case branches.
+5. Update this file reference when a new top-level test file or folder is introduced.

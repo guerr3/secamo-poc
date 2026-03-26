@@ -1,41 +1,52 @@
-# Workflows
+# Workflows - deterministic orchestration layer for security automation
 
-> This folder defines parent Temporal workflows that orchestrate IAM and SOC automation, subscription reconciliation, and polling loops.
+> This module defines parent orchestration workflows and composes child workflows for reusable sub-flows.
 
-## What This Does
+## Responsibilities
 
-### Files
+- Orchestrate event-driven business flow execution in a deterministic manner.
+- Coordinate activity calls, child workflow execution, signals, and retries.
+- Separate parent workflow intent routing from child workflow sub-process reuse.
+- Keep direct external side effects out of workflow code.
 
-| File                            | Purpose                                                                                                         | Used By                                                                    |
-| ------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `__init__.py`                   | Package marker (no workflow exports in this file).                                                              | Python module loading.                                                     |
-| `defender_alert_enrichment.py`  | WF-02 parent workflow for Defender alert enrichment, optional threat intel, ticket creation, notify, and audit. | Started by ingress route fan-out for `defender.alert` intents.             |
-| `graph_subscription_manager.py` | Long-running subscription reconciler with signals and continue-as-new lifecycle.                                | Manual/scheduled Temporal starts.                                          |
-| `iam_onboarding.py`             | WF-01 parent workflow for user lifecycle (`create`, `update`, `delete`, `password_reset`) and audit logging.    | IAM ingress and lifecycle event starts.                                    |
-| `impossible_travel.py`          | WF-05 parent workflow for risky sign-in triage, ticketing, HITL, and incident response.                         | Started by ingress route fan-out for `defender.impossible_travel` intents. |
-| `polling_manager.py`            | Long-running poller that fetches provider events and starts routed child workflows.                             | Started from onboarding flow for configured polling providers.             |
-| `child/README.md`               | Child workflow layer documentation.                                                                             | Parent workflows and maintainers.                                          |
+## File Reference
 
-This layer is the deterministic orchestration center between ingress events and side-effecting activity calls. Parent workflows start child workflows in `workflows/child/` to keep SOC/IAM flows reusable and composable. Queue registration and worker lifecycle are configured in `workers/run_worker.py`.
+| File                            | Responsibility                                                                    |
+| ------------------------------- | --------------------------------------------------------------------------------- |
+| `__init__.py`                   | Workflow package marker.                                                          |
+| `child/`                        | Reusable child workflows for enrichment, approvals, response, and deprovisioning. |
+| `defender_alert_enrichment.py`  | Parent SOC enrichment orchestration workflow.                                     |
+| `graph_subscription_manager.py` | Subscription reconciliation and renewal loop workflow.                            |
+| `iam_onboarding.py`             | IAM lifecycle orchestration workflow.                                             |
+| `impossible_travel.py`          | Impossible-travel triage and incident response orchestration workflow.            |
+| `polling_manager.py`            | Polling-based provider event collection and downstream dispatch workflow.         |
+| `README.md`                     | Module documentation.                                                             |
+| `__pycache__/`                  | Generated Python bytecode cache directory.                                        |
 
-## How To Run
+## Key Concepts
 
-Workflows run via workers:
+- Determinism: workflows orchestrate only; all I/O is delegated to activities.
+- Composition: parent workflows call child workflows for reusable steps and clearer failure boundaries.
+- Queue-aware orchestration: workflow registration aligns with queue partitioning in worker bootstrap.
+
+## Usage
+
+Workflows execute through Temporal workers and are started by ingress dispatch or scheduled/manual triggers.
 
 ```bash
 python -m workers.run_worker
 ```
 
-## How To Verify
-
-Run workflow-related tests and integration-safe unit coverage:
+## Testing
 
 ```bash
 python -m pytest -q
 ```
 
-## Troubleshooting
+## Extension Points
 
-- Use child workflows for new multi-step branches instead of inflating parent run methods.
-- `iam_onboarding.py` currently includes a TODO path with a hardcoded temporary password; replace with secure generation before production use.
-- Route additions must stay consistent with code-defined routes in `shared/routing/defaults.py` and normalization output in `shared/normalization/normalizers.py`.
+1. Add a new workflow file under `workflows/` or `workflows/child/`.
+2. Register the workflow in `workers/run_worker.py` for the intended queue.
+3. Add or update routes in `shared/routing/defaults.py` when ingress-triggered.
+4. Add tests covering expected orchestration branches and failure paths.
+5. Update this file reference and related architecture docs.

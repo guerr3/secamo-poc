@@ -1,43 +1,54 @@
-# Connectors
+# Connectors - provider adapter abstraction layer
 
-> This folder provides the provider adapter contract and registry that activities use to execute provider-specific actions through a common interface.
+> This module encapsulates provider-specific implementations behind a common adapter contract.
 
-## What This Does
+## Responsibilities
 
-### Files
+- Define and enforce a stable connector interface used by activities.
+- Isolate provider SDK and HTTP behavior from workflow/activity orchestration code.
+- Centralize provider registration and connector factory resolution.
+- Preserve compatibility with stub connectors for planned integrations.
 
-| File                    | Purpose                                                                                                                             | Used By                                                             |
-| ----------------------- | ----------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `__init__.py`           | Exports connector contract and registry helpers.                                                                                    | Activities and external imports.                                    |
-| `base.py`               | Defines abstract `BaseConnector` contract (`fetch_events`, `execute_action`, `health_check`).                                       | All concrete provider connectors.                                   |
-| `jira.py`               | Jira Cloud connector implementation for ticket fetch/create/update/close/get and health checks.                                     | `activities/ticketing.py`, `activities/connector_dispatch.py`.      |
-| `microsoft_defender.py` | Microsoft Graph/Defender connector for polling resources, enrichment, and isolate actions.                                          | `activities/connector_dispatch.py`, alert enrichment flows.         |
-| `registry.py`           | Maps provider keys to connector factories and resolves connector instances.                                                         | `activities/connector_dispatch.py`.                                 |
-| `stub_providers.py`     | `[STUB]` Placeholder connectors for `crowdstrike`, `sentinelone`, `halo_itsm`, `servicenow`, `virustotal`, `abuseipdb`, and `misp`. | Registry fallback entries and future provider implementation slots. |
-| `README.md`             | Folder-level connector behavior and extension notes.                                                                                | Engineers extending provider support.                               |
+## File Reference
 
-Activities call connector operations through `get_connector(...)` from this folder instead of directly calling provider APIs, which keeps workflows provider-agnostic and deterministic. Tenant secrets are resolved upstream in activity/bootstrap code and injected into connector instances. Worker queue wiring is defined in `workers/run_worker.py`.
+| File                    | Responsibility                                                                  |
+| ----------------------- | ------------------------------------------------------------------------------- |
+| `__init__.py`           | Public exports for connector interfaces and registry helpers.                   |
+| `base.py`               | Abstract connector contract (`fetch_events`, `execute_action`, `health_check`). |
+| `errors.py`             | Connector-specific exception types and error taxonomy.                          |
+| `jira.py`               | Jira connector implementation.                                                  |
+| `jira_provisioner.py`   | Jira provisioning helper implementation.                                        |
+| `microsoft_defender.py` | Microsoft Defender/Graph connector implementation.                              |
+| `README.md`             | Module documentation.                                                           |
+| `registry.py`           | Connector factory registry and provider key resolution.                         |
+| `stub_providers.py`     | Stub connector implementations for planned providers.                           |
+| `__pycache__/`          | Generated Python bytecode cache directory.                                      |
 
-## How To Run
+## Key Concepts
 
-This module has no standalone runtime process. It is exercised through workers and activities:
+- Adapter pattern: activities use one connector interface while concrete classes encapsulate provider differences.
+- Registry-driven resolution: provider key strings map to connector factories in one place (`registry.py`).
+- Typed error boundaries: connector failures are translated into explicit connector error classes before activity-level retry policy handling.
 
-```bash
-python -m workers.run_worker
+## Usage
+
+Activities resolve connectors by provider key and execute actions without provider-specific branching in workflow code.
+
+```python
+connector = get_connector(provider, tenant_id, secrets)
+result = await connector.execute_action(action, payload)
 ```
 
-## How To Verify
-
-Run connector-related tests:
+## Testing
 
 ```bash
 python -m pytest -q tests/test_stub_connectors.py tests/test_connectors_resilience.py tests/test_jira_provisioner.py
 ```
 
-## Troubleshooting
+## Extension Points
 
-- New providers must implement `BaseConnector`, then be added to `_CONNECTOR_FACTORIES` in `registry.py`.
-- Connectors must either return a successful payload or raise a typed connector exception. Avoid returning `{"success": false}` for real failures.
-- Use typed connector errors to express retry intent: permanent configuration/validation failures should be raised as non-retryable categories, while transient HTTP/network failures should be raised as retryable categories.
-- Stub connectors intentionally return non-success placeholder results and should be replaced before claiming provider support.
-- Keep connector methods idempotent and explicit because they are called through Temporal activity retries.
+1. Add a new connector class in `connectors/` that extends `BaseConnector`.
+2. Implement required interface methods and provider-specific auth/data handling.
+3. Register the new provider key in `connectors/registry.py`.
+4. Add tests for success/failure behavior in `tests/`.
+5. Update this file table for the added module.

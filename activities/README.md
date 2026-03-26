@@ -1,55 +1,69 @@
-# Activities
+# Activities - side-effect execution layer for Temporal workflows
 
-> This folder contains Temporal activities that perform external side effects such as Graph operations, ticketing actions, notifications, audit writes, and tenant configuration retrieval.
+> Temporal activities in this folder perform all external I/O for workflow orchestration.
 
-## What This Does
+## Responsibilities
 
-### Files
+- Execute provider API calls, AWS storage operations, and notification side effects.
+- Enforce retry-safe error translation between external failures and Temporal semantics.
+- Load tenant-specific config and secrets for downstream actions.
+- Keep workflow code deterministic by isolating non-deterministic work here.
 
-| File                     | Purpose                                                                                                    | Used By                                                                        |
-| ------------------------ | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `__init__.py`            | Lazy exports for activity symbols to avoid import-time side effects.                                       | Worker imports and module-level activity access.                               |
-| `audit.py`               | Writes audit records to DynamoDB with workflow context metadata.                                           | IAM and SOC workflows.                                                         |
-| `chatops.py`             | Sends interactive alert payloads through tenant-specific ChatOps providers.                                | `workflows/defender_alert_enrichment.py`.                                      |
-| `connector_dispatch.py`  | Provider-agnostic activities for `fetch_events`, `execute_action`, health checks, and threat-intel fanout. | Polling manager, ticketing, enrichment, incident workflows.                    |
-| `evidence.py`            | Persists evidence bundle payloads to S3 and returns a reference URL.                                       | `workflows/child/incident_response.py`.                                        |
-| `graph_alerts.py`        | Reads and enriches Defender alerts through Microsoft Graph endpoints.                                      | `workflows/child/alert_enrichment.py`, SOC flows.                              |
-| `graph_devices.py`       | Device-level Graph/Defender actions (isolate, unisolate, scan, details, compliance list).                  | Alert enrichment and incident response workflows.                              |
-| `graph_signin.py`        | Identity risk and sign-in timeline operations for impossible-travel paths.                                 | `workflows/impossible_travel.py`.                                              |
-| `graph_subscriptions.py` | Graph subscription create/renew/delete/list and metadata persistence.                                      | `workflows/graph_subscription_manager.py`, ingress tenant resolution fallback. |
-| `graph_users.py`         | User lifecycle actions in Graph (get/create/update/delete/revoke/license/password).                        | `workflows/iam_onboarding.py`, `workflows/child/user_deprovisioning.py`.       |
-| `hitl.py`                | Issues HITL approvals, stores/retrieves approval tokens, and builds response links.                        | `workflows/child/hitl_approval.py`.                                            |
-| `hitl_renderers.py`      | HTML/body rendering helpers for HITL approval messages.                                                    | `activities/hitl.py`.                                                          |
-| `notify_email.py`        | Sends email notifications through Graph Mail APIs.                                                         | SOC and IAM notification points.                                               |
-| `notify_teams.py`        | Sends Teams text and adaptive card messages.                                                               | SOC notifications and HITL prompts.                                            |
-| `risk.py`                | Computes risk score and risk level from severity, intel, compliance, and enrichment context.               | `workflows/child/alert_enrichment.py`.                                         |
-| `tenant.py`              | Resolves tenant validity, config, and secrets from SSM/DynamoDB paths.                                     | Most workflows and activity bootstrap paths.                                   |
-| `threat_intel.py`        | Threat intel lookup activity (current implementation focuses on VirusTotal inputs).                        | `workflows/child/threat_intel_enrichment.py`.                                  |
-| `ticketing.py`           | Ticket lifecycle actions (create/update/close/get) via connector dispatch.                                 | Ticket child workflows and SOC orchestration.                                  |
-| `triage.py`              | Executes AI triage provider analysis and returns normalized triage recommendations.                        | `workflows/defender_alert_enrichment.py`.                                      |
+## File Reference
 
-Activities in this folder are called via `workflow.execute_activity(...)` to keep workflow code deterministic while side effects happen in activity workers. Most operations depend on contracts from `shared/models` and provider implementations routed by `connectors/`. Queue registration is handled in `workers/run_worker.py`.
+| File                     | Responsibility                                                      |
+| ------------------------ | ------------------------------------------------------------------- |
+| `__init__.py`            | Lazy export surface for activity symbols.                           |
+| `_activity_errors.py`    | Shared activity error helpers and classification utilities.         |
+| `audit.py`               | Persist audit records to DynamoDB.                                  |
+| `chatops.py`             | Send interactive ChatOps notifications.                             |
+| `connector_dispatch.py`  | Provider-agnostic dispatch for connector actions and event fetches. |
+| `evidence.py`            | Persist evidence bundles to S3.                                     |
+| `graph_alerts.py`        | Query and enrich Defender alert data via Graph.                     |
+| `graph_devices.py`       | Execute device-level actions and lookups.                           |
+| `graph_signin.py`        | Query risky sign-in and identity risk context.                      |
+| `graph_subscriptions.py` | Manage Graph webhook subscription lifecycle and metadata.           |
+| `graph_users.py`         | Execute user lifecycle operations in Graph.                         |
+| `hitl.py`                | Issue HiTL approvals and manage callback token flow.                |
+| `hitl_renderers.py`      | Render HiTL email/body content templates.                           |
+| `notify_email.py`        | Send email notifications through Graph mail APIs.                   |
+| `notify_teams.py`        | Send Teams notifications and adaptive cards.                        |
+| `README.md`              | Module documentation.                                               |
+| `risk.py`                | Compute risk scores from enrichment context.                        |
+| `tenant.py`              | Resolve tenant config, secrets, and tenant validity.                |
+| `threat_intel.py`        | Execute threat intel lookups.                                       |
+| `ticketing.py`           | Create/update/close/get ticket operations through connectors.       |
+| `triage.py`              | Execute AI triage provider analysis.                                |
+| `__pycache__/`           | Generated Python bytecode cache directory.                          |
 
-## How To Run
+## Key Concepts
 
-This module is run through the Temporal worker process:
+- Retry semantics: activities map transient failures to retryable outcomes and preserve non-retryable boundaries where caller/config/data is invalid.
+- Idempotency: write and action paths are designed to tolerate at-least-once execution under Temporal retries.
+- Tenant bootstrap: tenant configuration and secrets are resolved at runtime using tenant-scoped SSM and table paths.
 
-```bash
-python -m workers.run_worker
+## Usage
+
+Workflows invoke activities through Temporal APIs instead of calling providers directly.
+
+```python
+result = await workflow.execute_activity(
+    some_activity,
+    args=[tenant_id, payload],
+    start_to_close_timeout=timedelta(seconds=30),
+)
 ```
 
-## How To Verify
-
-Run activity-focused tests:
+## Testing
 
 ```bash
 python -m pytest -q tests/test_activities
 ```
 
-## Troubleshooting
+## Extension Points
 
-- Keep activity inputs/outputs on Pydantic models from `shared/models` so workflow boundaries stay stable.
-- `connector_dispatch.py` is the translation boundary between connector exceptions and Temporal `ApplicationError` retry semantics.
-- Connector activities should not silently convert provider failures into successful result objects.
-- `threat_intel.py` currently has limited provider depth compared with configured provider keys; additional providers should be added via connector dispatch.
-- Tenant secret lookups follow `/secamo/tenants/{tenant_id}/{secret_type}/{key}` and should not be bypassed.
+1. Add a new activity module or function under `activities/`.
+2. Annotate it with the Temporal activity definition pattern used in this codebase.
+3. Register it in `workers/run_worker.py` on the correct queue.
+4. Add focused tests under `tests/test_activities/`.
+5. Update this file table if a new module is added.

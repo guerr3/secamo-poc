@@ -1,41 +1,55 @@
-# Child Workflows
+# Child Workflows - reusable sub-processes for parent orchestration flows
 
-> This folder contains reusable Temporal child workflows that parent workflows compose for enrichment, approvals, response, ticketing, and deprovisioning.
+> This module contains child workflows that encapsulate repeatable orchestration stages used by parent workflows.
 
-## What This Does
+## Responsibilities
 
-### Files
+- Provide reusable enrichment, approval, response, ticketing, and deprovisioning stages.
+- Keep parent workflows focused on high-level branching and sequencing logic.
+- Isolate signal/timeouts and scoped sub-process behavior in dedicated workflow classes.
+- Preserve deterministic execution semantics at child workflow boundaries.
 
-| File                         | Purpose                                                                                             | Used By                                                                     |
-| ---------------------------- | --------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
-| `__init__.py`                | Re-exports child workflow classes.                                                                  | Parent workflow imports and worker registration.                            |
-| `alert_enrichment.py`        | Enriches alert context with connector, device/user details, and risk scoring.                       | `workflows/defender_alert_enrichment.py`.                                   |
-| `hitl_approval.py`           | Sends HITL request, waits for approval signal, and applies timeout policy.                          | `workflows/impossible_travel.py`.                                           |
-| `incident_response.py`       | Executes final analyst decision actions (dismiss/isolate/disable) and optional evidence collection. | `workflows/impossible_travel.py`.                                           |
-| `threat_intel_enrichment.py` | Runs threat intel fanout activity and returns provider results.                                     | `workflows/defender_alert_enrichment.py`, `workflows/impossible_travel.py`. |
-| `ticket_creation.py`         | Creates SOC ticket through connector action and normalizes ticket result.                           | `workflows/defender_alert_enrichment.py`, `workflows/impossible_travel.py`. |
-| `user_deprovisioning.py`     | Revokes sessions and deletes a user in Graph during delete lifecycle path.                          | `workflows/iam_onboarding.py`.                                              |
+## File Reference
 
-Parent orchestration in `workflows/` delegates focused subroutines to this folder to keep parent workflows smaller and easier to reason about. Each child workflow relies on activities in `activities/` for side effects and shared models from `shared/`. Worker queue binding happens in `workers/run_worker.py`.
+| File                         | Responsibility                                               |
+| ---------------------------- | ------------------------------------------------------------ |
+| `__init__.py`                | Child workflow export surface.                               |
+| `alert_enrichment.py`        | Child workflow for alert enrichment and risk context.        |
+| `hitl_approval.py`           | Child workflow for human-in-the-loop approval signal flow.   |
+| `incident_response.py`       | Child workflow for decision-based incident response actions. |
+| `README.md`                  | Module documentation.                                        |
+| `threat_intel_enrichment.py` | Child workflow for threat intel fanout stage.                |
+| `ticket_creation.py`         | Child workflow for ticket creation stage.                    |
+| `user_deprovisioning.py`     | Child workflow for user deprovisioning stage.                |
+| `__pycache__/`               | Generated Python bytecode cache directory.                   |
 
-## How To Run
+## Key Concepts
 
-Child workflows run through the same worker process:
+- Reusable orchestration units: child workflows are composed by multiple parent workflows to avoid duplication.
+- Signal-aware flow control: HiTL child workflow handles signal wait and timeout logic in one bounded module.
+- Explicit stage contracts: each child workflow has a focused role and narrow input/output expectations.
 
-```bash
-python -m workers.run_worker
+## Usage
+
+Parent workflows invoke child workflows as sub-steps in larger orchestration paths.
+
+```python
+await workflow.execute_child_workflow(
+    ChildWorkflow.run,
+    child_input,
+)
 ```
 
-## How To Verify
-
-Use standard test execution for child-workflow coverage:
+## Testing
 
 ```bash
 python -m pytest -q
 ```
 
-## Troubleshooting
+## Extension Points
 
-- Child workflow IDs are often derived from event metadata for idempotent starts; preserve deterministic ID construction when extending.
-- Keep child workflow interfaces model-based so parent and child boundaries are strongly typed.
-- Timeout and signal behavior in `hitl_approval.py` is critical for SOC automation paths and should be covered when adding new actions.
+1. Add a new child workflow module under `workflows/child/`.
+2. Export/register the class where required for worker loading.
+3. Integrate it from parent workflows where composition is needed.
+4. Add tests for child-specific branching, signal, and timeout behavior.
+5. Update this file reference and parent workflow docs.

@@ -1,36 +1,47 @@
-# Workers
+# Workers - Temporal runtime bootstrap and queue registration module
 
-> This folder contains the Temporal worker bootstrap that registers workflows/activities by task queue and runs queue workers concurrently.
+> This module starts Temporal workers and binds workflows and activities to task queues.
 
-## What This Does
+## Responsibilities
 
-### Files
+- Connect to Temporal with repository runtime settings.
+- Register activities by queue and workflows by queue.
+- Start queue workers concurrently for IAM, SOC, audit, and poller domains.
+- Provide startup failure behavior for missing imports or runtime wiring errors.
 
-| File            | Purpose                                                                                                                      | Used By                                                                    |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `__init__.py`   | Package marker.                                                                                                              | Python module loading.                                                     |
-| `run_worker.py` | Connects to Temporal, loads workflows/activities, and starts workers for `iam-graph`, `soc-defender`, `audit`, and `poller`. | Runtime entrypoint (`python -m workers.run_worker`), Docker image command. |
+## File Reference
 
-This module is the executable bridge between workflow definitions in `workflows/` and activity implementations in `activities/`. Queue names and Temporal connection settings are loaded from `shared/config.py`. Infrastructure in `terraform/` supplies runtime dependencies.
+| File            | Responsibility                                                           |
+| --------------- | ------------------------------------------------------------------------ |
+| `__init__.py`   | Package marker.                                                          |
+| `README.md`     | Module documentation.                                                    |
+| `run_worker.py` | Worker bootstrap, lazy imports, queue registration, and runtime startup. |
+| `__pycache__/`  | Generated Python bytecode cache directory.                               |
 
-## How To Run
+## Key Concepts
 
-Start workers with:
+- Queue partitioning: queue separation isolates identity, SOC, audit, and poller workloads.
+- Lazy import registration: runtime validates module availability at startup to fail fast on bad wiring.
+- Central runtime entrypoint: worker startup logic is consolidated in one module to reduce drift.
+
+## Usage
+
+Start all registered workers:
 
 ```bash
 python -m workers.run_worker
 ```
 
-## How To Verify
-
-Verify startup and queue registration behavior:
+## Testing
 
 ```bash
 python -m pytest -q
 ```
 
-## Troubleshooting
+## Extension Points
 
-- Add new workflows/activities in queue-specific sections of `load_workflows()` and `load_activities_by_queue()`.
-- Keep imports lazy and explicit, matching existing error handling, so startup fails fast on missing modules.
-- Queue split is part of operational isolation; avoid collapsing unrelated domains onto one queue.
+1. Add workflow imports and queue registration in `load_workflows()`.
+2. Add activity imports and queue registration in `load_activities_by_queue()`.
+3. Keep queue naming aligned with `shared/config.py` constants.
+4. Add tests that cover startup import behavior and queue routing assumptions.
+5. Update this file reference when worker module contents change.
