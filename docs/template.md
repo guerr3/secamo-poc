@@ -1,28 +1,59 @@
 # Titelpagina
-[Logo stagebedrijf]
+[Logo Secamo]
 
-Testplan
+Testplan - Modulaire Process Orchestrator
 
-Onderdeel van stage AP Hogeschool [stagebedrijf] [student] [specialisatie] [begeleider/mentor] [academiejaar]
+Onderdeel van stage AP Hogeschool - Secamo - Warre Gehre - Toegepaste Informatica (Cybersecurity) - Begeleider/Mentor: Xander Boedt - Academiejaar 2025-2026
 
 # Inhoud
-[Links naar secties]
+- [Titelpagina](#titelpagina)
+- [Inhoud](#inhoud)
+- [Versiebeheer](#versiebeheer)
+- [Termen en afkortingen](#termen-en-afkortingen)
+- [Inleiding](#inleiding)
+- [Projectbeschrijving en scope](#projectbeschrijving-en-scope)
+- [Belanghebbenden](#belanghebbenden)
+- [Risicoanalyse](#risicoanalyse)
+- [Teststrategie](#teststrategie)
+- [Testomgeving](#testomgeving)
+- [Bronvermelding](#bronvermelding)
 
 # Versiebeheer
-[Tabel: Nr. | Datum | Verspreiding | Wijziging]
+| Nr. | Datum | Verspreiding | Wijziging |
+|---|---|---|---|
+| 0.1 | 2026-03-20 | Intern - Warre Gehre | Eerste werkversie van het testplan op basis van Blueprint en projectscope. |
+| 0.2 | 2026-03-24 | Intern - Warre Gehre, Xander Boedt | Inleiding, projectbeschrijving, belanghebbenden en risicoanalyse toegevoegd. |
+| 0.3 | 2026-03-27 | Intern - Warre Gehre, Xander Boedt | Teststrategie, testomgeving en bronvermelding uitgewerkt en gealigneerd met codebase. |
+| 1.0 | 2026-03-27 | AP Hogeschool - Secamo | Finale versie voor indiening en evaluatie. |
 
 # Termen en afkortingen
-[Tabel: Term | Omschrijving]
+| Term | Omschrijving |
+|---|---|
+| Adapterlaag | Integratielaag die externe systemen afschermt van de interne orchestratielogica. |
+| API | Application Programming Interface: koppelvlak waarmee systemen data of functionaliteit uitwisselen. |
+| AWS | Amazon Web Services: cloudplatform waarop de infrastructuur en services van de PoC draaien. |
+| DynamoDB | NoSQL-databankdienst van AWS, gebruikt voor onder meer audit- en tokenopslag. |
+| HITL | Human-in-the-Loop: goedkeuringsstap waarbij een menselijke operator beslist over kritieke acties. |
+| IAM | Identity and Access Management: beheer van identiteiten, rollen en toegangsrechten. |
+| IaC | Infrastructure as Code: infrastructuurbeheer via code en declaratieve configuratie (bv. Terraform). |
+| Ingress | Inkomende verwerkingslaag die externe requests ontvangt, valideert en doorstuurt. |
+| OCSF | Open Cybersecurity Schema Framework: standaard voor normalisatie van security-events. |
+| PoC | Proof of Concept: afgebakende implementatie om haalbaarheid en waarde van een oplossing aan te tonen. |
+| PII | Personally Identifiable Information: persoonsgegevens die direct of indirect een persoon identificeren. |
+| S3 | Amazon Simple Storage Service: objectopslagdienst van AWS voor evidence en documenten. |
+| SSM Parameter Store | AWS-dienst voor veilige opslag van configuratie en secrets. |
+| Temporal | Workflow orchestration platform voor betrouwbare, langlopende en herstartbare procesuitvoering. |
+| Tenant | Afgescheiden klantcontext binnen een multi-tenantarchitectuur. |
 
 # Inleiding
 
 Dit testplan is bedoeld voor de projectstakeholders van het Secamo-stageproject: de student (Warre Gehre), de stagebegeleiders, technische reviewers en beslissingsnemers die de kwaliteit en vrijgave van het platform beoordelen. Het document biedt een gedeeld kader om testbeslissingen te motiveren, testresultaten eenduidig te interpreteren en risico's transparant op te volgen.
 
-Voor de modulaire process orchestrator is een projectspecifiek testplan essentieel omdat het systeem meerdere kritieke lagen combineert: ingress via AWS API Gateway/Lambda, orkestratie via Temporal-workflows en activiteiten, en integraties met cloud- en securitydiensten via een adapter pattern. Fouten in routering, tenant-isolatie, retry-gedrag of contractvalidatie kunnen rechtstreeks leiden tot operationele impact, beveiligingsrisico's of onbetrouwbare verwerking. Dit plan vertaalt daarom de architecturale keuzes en kwaliteitsdoelen uit de blueprint naar concrete en meetbare testaanpak, scope en acceptatiecriteria.
+Voor de modulaire process orchestrator is een projectspecifiek testplan essentieel omdat het systeem meerdere kritieke lagen combineert: ingress via AWS API Gateway/Lambda, orkestratie via Temporal-workflows en activiteiten, en integraties met cloud- en securitydiensten via een adapterpatroon. Fouten in routering, tenant-isolatie, retry-gedrag of contractvalidatie kunnen rechtstreeks leiden tot operationele impact, beveiligingsrisico's of onbetrouwbare verwerking. Dit plan vertaalt daarom de architecturale keuzes en kwaliteitsdoelen uit de Blueprint naar concrete en meetbare testaanpak, scope en acceptatiecriteria.
 
-Wat je in dit document mag verwachten: dit document beschrijft de testscope, testtypes, omgevingsvereisten, risico-inschatting, planning en verantwoordelijkheden voor het Secamo-platform. Daarnaast licht het toe hoe testresultaten worden beoordeeld tegenover de vooropgestelde kwaliteitsdoelen en welke beslisregels gelden voor vrijgave. De opbouw sluit aan op de technische en organisatorische context uit de blueprint, zodat ontwerpkeuzes en teststrategie consistent blijven.
+Wat je in dit document mag verwachten: dit document beschrijft de testscope, testtypes, omgevingsvereisten, risico-inschatting, planning en verantwoordelijkheden voor het Secamo-platform. Daarnaast licht het toe hoe testresultaten worden beoordeeld tegenover de vooropgestelde kwaliteitsdoelen en welke beslisregels gelden voor vrijgave. De opbouw sluit aan op de technische en organisatorische context uit de Blueprint, zodat ontwerpkeuzes en teststrategie consistent blijven.
 
-Conclusie: dit testplan is het formele instrument om de blueprint gecontroleerd om te zetten naar aantoonbaar betrouwbare en veilige oplevering.
+Conclusie: dit testplan is het formele instrument om de Blueprint gecontroleerd om te zetten naar aantoonbaar betrouwbare en veilige oplevering.
 
 # Projectbeschrijving en scope
 Dit project realiseert voor Secamo een modulaire process orchestrator die repetitieve cloud- en securityprocessen centraliseert en automatiseert. De aanleiding is de huidige operationele belasting door manuele taken zoals user lifecycle-acties, alertverwerking en compliance-opvolging, gecombineerd met beperkte autonomie bij eerder extern gebouwde automatisatie. De beoogde situatie is een intern onderhoudbaar platform dat schaalbaar, auditeerbaar en tenant-gescheiden werkt, zodat Secamo als Trusted Advisor sneller en consistenter kan leveren.
@@ -31,7 +62,7 @@ De functionele scope van deze PoC omvat:
 - Een Temporal-gebaseerde orchestration engine voor duurzame workflow-uitvoering.
 - Een ingress-laag via API Gateway en Lambda voor validatie en routering van externe triggers. 
 - Een adapterlaag voor veilige, tenant-specifieke integraties met onder meer Microsoft Graph, Defender en Jira. 
-- Een Human-in-the-Loop-flow via Mail of Teams Adaptive Cards voor kritieke beslissingen. 
+- Een Human-in-the-Loop-flow via Microsoft Teams Adaptive Cards voor kritieke beslissingen.
 - Een audit- en evidencepad met centrale opslag in DynamoDB en S3. 
 - Daarnaast behoort de opzet van de vereiste AWS-infrastructuur via IaC (Terraform) tot de scope.
 
@@ -50,9 +81,9 @@ Niet binnen deze scope:
 | Naam | Bijdrage |
 | --- | --- |
 | Warre Gehre | Analyse, ontwerp, implementatie, testuitvoering, documentatie en projectopvolging als uitvoerder van de PoC. |
-| Xander Boedt (Secamo) | Sponsor en primaire opdrachtgever: scopevalidatie, technische review, gate-goedkeuring, nalezen van tussentijdse opleveringen en inhoudelijke evaluatie van operationele bruikbaarheid voor SOC-opvolging. Inhoudelijke validatie van infrastructuurkeuzes, technische feedback op uitvoerbaarheid en review van operationele randvoorwaarden.Test alert- en incidentflows en Human-in-the-Loop-interacties, verifieert triage-werkbaarheid en levert technische feedback op security-automatisatie|
-| Secamo Cybersecurity Strategy (Maxim?)| Extra tester: valideert de strategische relevantie van compliance gerelateerde flows en geeft feedback op toepasbaarheid binnen strategy-operaties. |
-| Secamo Cyber security engineer (Dustin?) | Extra tester (zelfde als Xander): test alert- en incidentflows en Human-in-the-Loop-interacties, verifieert triage-werkbaarheid en levert technische feedback op security-automatisatie. |
+| Xander Boedt (Secamo) | Sponsor en primaire opdrachtgever: scopevalidatie, technische review, gate-goedkeuring, nalezen van tussentijdse opleveringen en inhoudelijke evaluatie van operationele bruikbaarheid voor SOC-opvolging. |
+| Secamo Cybersecurity Strategy Analist (Maxim) | Extra tester: valideert de strategische relevantie van compliancerelateerde flows en geeft feedback op toepasbaarheid binnen securitystrategie-operaties. |
+| Secamo Cybersecurity Engineer (Dustin) | Extra tester: test alert- en incidentflows en Human-in-the-Loop-interacties, verifieert triage-werkbaarheid en levert technische feedback op security-automatisatie. |
 | AP-begeleiding en schooljury | Nalezen en beoordeling van de academische kwaliteit, methodologische onderbouwing en projectresultaten. |
 
 In de eerste fase van het project ligt de focus op de samenwerking tussen Warre en Xander, waarbij Xander als primaire technische reviewer en gatekeeper fungeert. In latere fasen kunnen de extra testers (Maxim en Dustin) meer betrokken worden bij specifieke testcases die relevant zijn voor hun expertisegebieden.
@@ -263,8 +294,8 @@ Testen is in dit project een doorlopende activiteit per iteratie, niet enkel een
 | Beta- of acceptatietesten | Nee (formeel) | Bereik: geen formeel extern beta-traject in deze PoC-fase. Slaagcriterium voor interne acceptatie blijft: overeengekomen kernscenario's zijn blocker-vrij gevalideerd door projectstakeholders. Coverageverwachting voor formele beta: 0% in huidige fase. |
 | Performantie testen (load, spike, stress) | Nee (voor nu) | Bereik: geen geautomatiseerde load/spike/stresscampagne in huidige scope. Slaagcriterium in deze fase: functionele tests blijven stabiel onder normale PoC-belasting. Coverageverwachting voor formele performantiecampagne: 0% in huidige fase; gepland voor vervolgfase. |
 | Security testen | Gedeeltelijk | Bereik: negatieve paden rond authenticatie, autorisatie, tenant-context, tokenverloop en veilige foutafhandeling. Geslaagd als ongeldige of ongeautoriseerde aanvragen steeds veilig falen zonder datalek. Verwachting: 100% dekking van kritieke negatieve auth- en isolatiescenario's; DAST/SAST/pentest nog niet in scope. |
-| Cross-browser en cross-systeem testen | Nee | De applicatie is een backend-orchestrator zonder web-frontend; clients zijn providers (Graph, EDR, ticketing) en operators via API’s. Browser- of OS-specifieke rendering speelt geen rol, dus cross-browser/-systeemtests zijn niet zinvol en worden bewust niet gepland. |
-| Usability testen | Nee (formeel) | Er is geen eindgebruikers-UI; usability is hier vooral relevant voor operators via toekomstige portals of dashboards, die buiten de scope van deze POC vallen. Voor de huidige CLI/API-only setup volstaan duidelijke logs en foutboodschappen; formele usabilitytests worden daarom niet ingepland. |
+| Cross-browser en cross-systeem testen | Nee | De applicatie is een backend-orchestrator zonder webfrontend; clients zijn providers (Graph, EDR, ticketing) en operators via API's. Browser- of OS-specifieke rendering speelt geen rol, dus cross-browser/-systeemtests zijn niet zinvol en worden bewust niet gepland. |
+| Usability testen | Nee (formeel) | Er is geen eindgebruikers-UI; usability is hier vooral relevant voor operators via toekomstige portals of dashboards, die buiten de scope van deze PoC vallen. Voor de huidige CLI/API-only setup volstaan duidelijke logs en foutboodschappen; formele usabilitytests worden daarom niet ingepland. |
 
 # Testomgeving
 | Naam | Versie | Verdeler | Omschrijving | Ref |
@@ -303,13 +334,3 @@ Resultaatcaptatie en verwerking: testresultaten worden centraal gecapteerd via p
 [9] Temporal Technologies. (z.d.). temporalio/admin-tools (Docker Hub). Opgehaald op 2026-03-27 van https://hub.docker.com/r/temporalio/admin-tools.
 
 [10] PostgreSQL Global Development Group. (z.d.). PostgreSQL 16 documentation. Opgehaald op 2026-03-27 van https://www.postgresql.org/docs/16/.
-
-[11] Amazon Web Services. (z.d.). Amazon API Gateway documentation. Opgehaald op 2026-03-27 van https://docs.aws.amazon.com/apigateway/.
-
-[12] Amazon Web Services. (z.d.). AWS Lambda documentation. Opgehaald op 2026-03-27 van https://docs.aws.amazon.com/lambda/.
-
-[13] Amazon Web Services. (z.d.). Amazon DynamoDB documentation. Opgehaald op 2026-03-27 van https://docs.aws.amazon.com/dynamodb/.
-
-[14] Amazon Web Services. (z.d.). Amazon S3 documentation. Opgehaald op 2026-03-27 van https://docs.aws.amazon.com/s3/.
-
-[15] Amazon Web Services. (z.d.). AWS Systems Manager Parameter Store documentation. Opgehaald op 2026-03-27 van https://docs.aws.amazon.com/systems-manager/latest/userguide/systems-manager-parameter-store.html.
