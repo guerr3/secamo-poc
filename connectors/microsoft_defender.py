@@ -14,7 +14,8 @@ from connectors.errors import (
     ConnectorUnsupportedActionError,
 )
 from shared.graph_client import get_defender_token, get_graph_token
-from shared.models import Correlation, DefenderDetectionFindingEvent, Envelope, ImpossibleTravelEvent, StoragePartition, VendorExtension, derive_event_id
+from shared.models import DefenderDetectionFindingEvent, Envelope, ImpossibleTravelEvent, VendorExtension
+from shared.models.mappers import build_connector_correlation, build_envelope
 
 
 class MicrosoftGraphConnector(BaseConnector):
@@ -210,34 +211,20 @@ class MicrosoftGraphConnector(BaseConnector):
             )
 
         correlation_id = external_id or f"{self.tenant_id}:{provider_event_type}:{int(occurred_at.timestamp())}"
-        return Envelope(
-            event_id=derive_event_id(
-                tenant_id=self.tenant_id,
-                event_type=payload.event_type,
-                occurred_at=occurred_at,
-                correlation_id=correlation_id,
-                provider_event_id=external_id or None,
-            ),
+        correlation = build_connector_correlation(
+            tenant_id=self.tenant_id,
+            event_name=payload.event_type,
+            correlation_id=correlation_id,
+            provider_event_id=external_id or "poll",
+        )
+
+        return build_envelope(
             tenant_id=self.tenant_id,
             source_provider=self.provider,
-            event_name=payload.event_type,
-            schema_version="1.0.0",
-            event_version="1.0.0",
-            ocsf_version="1.1.0",
             occurred_at=occurred_at,
-            correlation=Correlation(
-                correlation_id=correlation_id,
-                causation_id=correlation_id,
-                request_id=correlation_id,
-                trace_id=correlation_id,
-                storage_partition=StoragePartition(
-                    ddb_pk=f"TENANT#{self.tenant_id}",
-                    ddb_sk=f"EVENT#{payload.event_type.replace('.', '#')}#{external_id or 'poll'}",
-                    s3_bucket=f"secamo-events-{self.tenant_id}",
-                    s3_key_prefix=f"raw/{payload.event_type}/{external_id or 'poll'}",
-                ),
-            ),
             payload=payload,
+            correlation=correlation,
+            provider_event_id=external_id or None,
             metadata={"provider_event_id": external_id, "resource_type": resource_type},
         )
 

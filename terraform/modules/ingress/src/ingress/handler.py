@@ -39,8 +39,8 @@ from shared.models.canonical import (
     VendorExtension,
     derive_event_id,
 )
-from shared.models.mappers import resolve_provider_event_route
 from shared.routing import build_default_route_registry
+from shared.routing.registry import UnroutableEventError
 from shared.temporal.dispatcher import RouteFanoutDispatcher, WorkflowStarter
 from shared.auth import AuthValidationRequest, CachedSecretResolver, build_default_validator_registry
 from mappers import normalize_event_body
@@ -666,13 +666,6 @@ def _build_envelope(
 
 
 async def _dispatch_provider_event(*, raw_body: dict, provider: str, event_type: str, tenant_id: str) -> dict:
-    routing = resolve_provider_event_route(provider, event_type)
-    if routing is None:
-        return response.error(
-            400,
-            f"No workflow mapping found for provider='{provider}' event_type='{event_type}'",
-        )
-
     normalized = normalize_event_body(
         provider=provider,
         event_type=event_type,
@@ -692,7 +685,14 @@ async def _dispatch_provider_event(*, raw_body: dict, provider: str, event_type:
     except Exception as exc:
         return response.error(400, f"Normalized ingress payload failed Envelope validation: {exc}")
 
-    fanout_report = await _route_fanout_dispatcher.dispatch_intent(envelope)
+    try:
+        fanout_report = await _route_fanout_dispatcher.dispatch_intent(envelope)
+    except UnroutableEventError:
+        return response.error(
+            400,
+            f"No workflow mapping found for provider='{provider}' event_type='{canonical_event_type}'",
+        )
+
     return response.accepted(
         {
             "tenant_id": tenant_id,

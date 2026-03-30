@@ -323,7 +323,7 @@ ConnectorResult = Annotated[
 
 class ApprovalDecision(BaseModel):
     """Signal payload for the HITL approval step in WF-05."""
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     approved: bool
     reviewer: str
@@ -333,7 +333,7 @@ class ApprovalDecision(BaseModel):
 
 class HiTLRequest(BaseModel):
     """Generic workflow request contract for Human-in-the-Loop approvals."""
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     workflow_id: str
     run_id: str = ""
@@ -398,7 +398,7 @@ class EvidenceBundle(BaseModel):
 # ──────────────────────────────────────────────
 
 class ThreatIntelEnrichmentRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
     indicator: str
@@ -406,7 +406,7 @@ class ThreatIntelEnrichmentRequest(BaseModel):
 
 
 class AlertEnrichmentRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
     alert: DefenderDetectionFindingEvent
@@ -415,14 +415,14 @@ class AlertEnrichmentRequest(BaseModel):
 
 
 class AlertEnrichmentResult(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     enriched_alert: EnrichedAlert
     risk_score: RiskScore
 
 
 class TicketCreationRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
     title: str
@@ -433,7 +433,7 @@ class TicketCreationRequest(BaseModel):
 
 
 class HiTLApprovalRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
     hitl_request: HiTLRequest
@@ -446,7 +446,7 @@ class HiTLApprovalRequest(BaseModel):
 
 
 class IncidentResponseRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
     decision: ApprovalDecision
@@ -464,7 +464,7 @@ class IncidentResponseRequest(BaseModel):
 
 
 class UserDeprovisioningRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
     user_id: str
@@ -472,7 +472,7 @@ class UserDeprovisioningRequest(BaseModel):
 
 
 class PollingManagerInput(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
     provider: str
@@ -484,7 +484,7 @@ class PollingManagerInput(BaseModel):
 
 
 class GraphSubscriptionManagerInput(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
     notification_url: str

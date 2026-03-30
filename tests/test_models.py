@@ -19,9 +19,9 @@ from shared.models import (
     to_envelope,
     to_workflow_command,
 )
-from shared.models.mappers import resolve_polling_route, resolve_provider_event_route
 from shared.models.common import LifecycleAction
 from shared.models.provider_events import DefenderWebhook, TeamsApprovalCallback
+from shared.routing import resolve_polling_route, resolve_provider_event_route
 
 
 @pytest.fixture()

@@ -63,6 +63,28 @@ for subdir in "${SHARED_SUBDIRS[@]}"; do
   fi
 done
 
+# Validate that key shared files are synced byte-for-byte from repository source.
+SYNC_FILES=(
+  "config.py"
+  "models/canonical.py"
+  "models/mappers.py"
+  "routing/defaults.py"
+  "routing/registry.py"
+)
+
+for relpath in "${SYNC_FILES[@]}"; do
+  src="${REPO_ROOT}/shared/${relpath}"
+  dst="${SHARED_DST}/${relpath}"
+  if [ ! -f "${src}" ] || [ ! -f "${dst}" ]; then
+    echo "ERROR: Shared sync verification failed (missing file): ${relpath}"
+    exit 1
+  fi
+  if ! cmp -s "${src}" "${dst}"; then
+    echo "ERROR: Shared sync verification failed (drift detected): ${relpath}"
+    exit 1
+  fi
+done
+
 # Clean up unnecessary files to reduce layer size
 find "${LAYER_DIR}" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "${LAYER_DIR}" -type d -name "*.dist-info" -exec rm -rf {} + 2>/dev/null || true

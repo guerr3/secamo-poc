@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Protocol, runtime_checkable
 
 from shared.models.canonical import Envelope
 from shared.routing.contracts import DispatchReport, RouteFailure, WorkflowRoute
@@ -43,6 +43,8 @@ class RouteRegistry:
 
     def __init__(self, logger: logging.Logger | None = None) -> None:
         self._fallback_routes: dict[tuple[str, str], tuple[WorkflowRoute, ...]] = {}
+        self._polling_resource_event_types: dict[tuple[str, str], str] = {}
+        self._webhook_resource_event_types: dict[tuple[str, str], str] = {}
         self._rules: list[_RouteRule] = []
         self._logger = logger or logging.getLogger("routing.registry")
 
@@ -50,15 +52,87 @@ class RouteRegistry:
     def _route_key(provider: str, event_type: str) -> tuple[str, str]:
         return provider.strip().lower(), event_type.strip().lower()
 
+    @staticmethod
+    def _resource_key(provider: str, resource_type: str) -> tuple[str, str]:
+        return provider.strip().lower(), resource_type.strip().lower()
+
+    @staticmethod
+    def _normalize_webhook_resource(resource_type: str) -> str:
+        resource_key = resource_type.strip().lower().lstrip("/")
+        if resource_key.count("/") >= 2:
+            # Microsoft Graph often sends resources like security/alerts_v2/{id}.
+            resource_key = resource_key.rsplit("/", 1)[0]
+        return resource_key
+
     def register(self, provider: str, event_type: str, routes: tuple[WorkflowRoute, ...]) -> None:
         """Register fallback routes for a provider + event-type pair."""
 
         self._fallback_routes[self._route_key(provider, event_type)] = routes
 
+    def register_polling_resource(self, provider: str, resource_type: str, event_type: str) -> None:
+        """Register provider polling resource mapping to a provider event type."""
+
+        self._polling_resource_event_types[self._resource_key(provider, resource_type)] = event_type.strip().lower()
+
+    def register_webhook_resource(self, provider: str, resource_type: str, event_type: str) -> None:
+        """Register webhook resource mapping to a canonical/provider event type."""
+
+        normalized_resource = self._normalize_webhook_resource(resource_type)
+        self._webhook_resource_event_types[self._resource_key(provider, normalized_resource)] = event_type.strip().lower()
+
     def register_rule(self, name: str, predicate: RoutePredicate, routes: tuple[WorkflowRoute, ...]) -> None:
         """Register an explicit expression rule evaluated before fallback routes."""
 
         self._rules.append(_RouteRule(name=name, predicate=predicate, routes=routes))
+
+    def resolve_provider_event(self, provider: str, event_type: str) -> tuple[WorkflowRoute, ...]:
+        """Resolve fallback routes directly from provider + event-type keys."""
+
+        return self._fallback_routes.get(self._route_key(provider, event_type), ())
+
+    @staticmethod
+    def _resolve_event_type_from_payload(payload: Any | None, default_event_type: str) -> str:
+        if isinstance(payload, dict) and payload.get("provider_event_type"):
+            return str(payload["provider_event_type"]).strip().lower()
+
+        payload_event_type = getattr(payload, "event_type", None)
+        if payload_event_type:
+            return str(payload_event_type).strip().lower()
+
+        return default_event_type
+
+    def resolve_polling(self, provider: str, resource_type: str, payload: Any | None = None) -> tuple[WorkflowRoute, ...]:
+        """Resolve provider routes from polling resource mappings."""
+
+        default_event_type = self._polling_resource_event_types.get(self._resource_key(provider, resource_type))
+        if default_event_type is None:
+            return ()
+
+        resolved_event_type = self._resolve_event_type_from_payload(payload, default_event_type)
+        resolved_routes = self.resolve_provider_event(provider, resolved_event_type)
+        if resolved_routes:
+            return resolved_routes
+
+        # Fall back to the configured resource mapping when payload hints are absent or unknown.
+        return self.resolve_provider_event(provider, default_event_type)
+
+    def resolve_webhook(self, provider: str, resource_type: str, payload: dict[str, Any] | None = None) -> tuple[WorkflowRoute, ...]:
+        """Resolve provider routes from webhook resource mappings."""
+
+        normalized_resource = self._normalize_webhook_resource(resource_type)
+        mapped_event_type = self._webhook_resource_event_types.get(self._resource_key(provider, normalized_resource))
+        if mapped_event_type:
+            mapped_routes = self.resolve_provider_event(provider, mapped_event_type)
+            if mapped_routes:
+                return mapped_routes
+
+        payload_event_type = None
+        if payload and payload.get("provider_event_type"):
+            payload_event_type = str(payload["provider_event_type"]).strip().lower()
+        if payload_event_type:
+            return self.resolve_provider_event(provider, payload_event_type)
+
+        return ()
 
     def resolve(self, envelope: Envelope) -> tuple[WorkflowRoute, ...]:
         """Resolve routes using explicit rules first, then event-type fallback."""

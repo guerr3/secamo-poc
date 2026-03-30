@@ -31,6 +31,14 @@ locals {
     "routing",
     "temporal",
   ]
+
+  shared_sync_files = [
+    "config.py",
+    "models/canonical.py",
+    "models/mappers.py",
+    "routing/defaults.py",
+    "routing/registry.py",
+  ]
 }
 
 resource "aws_lambda_layer_version" "ingress" {
@@ -46,8 +54,10 @@ resource "aws_lambda_layer_version" "ingress" {
     precondition {
       condition = alltrue([
         for pkg in local.required_shared_subpackages : fileexists("${path.module}/layers/ingress/python/shared/${pkg}/__init__.py")
+      ]) && alltrue([
+        for relpath in local.shared_sync_files : fileexists("${path.module}/layers/ingress/python/shared/${relpath}") && filemd5("${path.module}/layers/ingress/python/shared/${relpath}") == filemd5("${path.module}/../../../shared/${relpath}")
       ])
-      error_message = "Ingress layer is missing one or more required shared subpackages. Run terraform/modules/ingress/layers/ingress/build.sh (or build.ps1) before terraform apply."
+      error_message = "Ingress layer shared package is missing or stale. Run terraform/modules/ingress/layers/ingress/build.sh (or build.ps1) before terraform apply."
     }
   }
 }
@@ -265,7 +275,7 @@ resource "aws_api_gateway_authorizer" "lambda" {
   authorizer_uri                   = aws_lambda_function.authorizer.invoke_arn
   authorizer_credentials           = var.authorizer_role_arn
   type                             = "REQUEST"
-  identity_source                  = "method.request.path.tenant_id"
+  identity_source                  = "context.path"
   authorizer_result_ttl_in_seconds = 0
 }
 

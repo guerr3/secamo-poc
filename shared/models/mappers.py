@@ -26,78 +26,7 @@ from shared.models.common import LifecycleAction
 from shared.models.domain import ApprovalDecision
 from shared.models.ingress import IamIngressRequest, RawIngressEnvelope
 from shared.models.provider_events import DefenderWebhook, ProviderEvent, TeamsApprovalCallback
-
-
-PROVIDER_EVENT_ROUTING: dict[tuple[str, str], tuple[str, str]] = {
-    ("microsoft_defender", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
-    ("microsoft_defender", "impossible_travel"): ("ImpossibleTravelWorkflow", "soc-defender"),
-    ("crowdstrike", "detection_summary"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
-    ("crowdstrike", "impossible_travel"): ("ImpossibleTravelWorkflow", "soc-defender"),
-    ("sentinelone", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
-    ("jira", "jira:issue_created"): ("IamOnboardingWorkflow", "iam-graph"),
-    ("jira", "jira:issue_updated"): ("IamOnboardingWorkflow", "iam-graph"),
-    ("iam-api", "iam.onboarding"): ("IamOnboardingWorkflow", "iam-graph"),
-    # Backwards-compatible alias used by current webhook mapper/tests.
-    ("defender", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
-}
-
-POLLING_RESOURCE_EVENT_TYPES: dict[tuple[str, str], str] = {
-    ("microsoft_defender", "defender_alerts"): "alert",
-    ("microsoft_defender", "entra_signin_logs"): "impossible_travel",
-}
-
-WEBHOOK_RESOURCE_ROUTING: dict[tuple[str, str], tuple[str, str]] = {
-    ("microsoft_graph", "security/alerts"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
-    ("microsoft_graph", "security/alerts_v2"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
-    ("microsoft_graph", "auditlogs/signins"): ("ImpossibleTravelWorkflow", "soc-defender"),
-    ("microsoft_graph", "identityprotection/riskyusers"): ("ImpossibleTravelWorkflow", "soc-defender"),
-}
-
-_EVENT_TYPE_TO_PROVIDER_EVENT_TYPE: dict[str, str] = {
-    "defender.alert": "alert",
-    "defender.impossible_travel": "impossible_travel",
-    "iam.onboarding": "iam.onboarding",
-}
-
-
-def resolve_provider_event_route(provider: str, event_type: str) -> tuple[str, str] | None:
-    return PROVIDER_EVENT_ROUTING.get((provider.lower(), event_type.lower()))
-
-
-def resolve_polling_route(provider: str, resource_type: str, payload: Any | None = None) -> tuple[str, str] | None:
-    provider_key = provider.lower()
-    resource_key = resource_type.lower()
-    configured_event_type = POLLING_RESOURCE_EVENT_TYPES.get((provider_key, resource_key))
-    if not configured_event_type:
-        return None
-
-    provider_event_type = configured_event_type
-    if isinstance(payload, dict) and payload.get("provider_event_type"):
-        provider_event_type = str(payload["provider_event_type"])
-    elif hasattr(payload, "event_type"):
-        provider_event_type = _EVENT_TYPE_TO_PROVIDER_EVENT_TYPE.get(
-            str(getattr(payload, "event_type")),
-            configured_event_type,
-        )
-
-    return resolve_provider_event_route(provider, provider_event_type)
-
-
-def resolve_webhook_route(provider: str, resource_type: str, payload: dict[str, Any] | None = None) -> tuple[str, str] | None:
-    provider_key = provider.lower().strip()
-    resource_key = resource_type.lower().strip().lstrip("/")
-
-    if resource_key.count("/") >= 2:
-        resource_key = resource_key.rsplit("/", 1)[0]
-
-    direct = WEBHOOK_RESOURCE_ROUTING.get((provider_key, resource_key))
-    if direct is not None:
-        return direct
-
-    if payload and payload.get("provider_event_type"):
-        return resolve_provider_event_route(provider, str(payload["provider_event_type"]))
-
-    return None
+from shared.routing import resolve_provider_event_route
 
 
 _PROVIDER_MAP: dict[str, type[ProviderEvent]] = {
@@ -134,10 +63,15 @@ def _storage_partition(tenant_id: str, event_name: str, provider_event_id: str |
     )
 
 
+def build_storage_partition(tenant_id: str, event_name: str, provider_event_id: str | None) -> StoragePartition:
+    """Build deterministic storage partition hints for canonical events."""
+
+    return _storage_partition(tenant_id, event_name, provider_event_id)
+
+
 def _build_correlation(
     *,
     tenant_id: str,
-    source_provider: str,
     request_id: str,
     event_name: str,
     provider_event_id: str | None,
@@ -149,6 +83,57 @@ def _build_correlation(
         request_id=request_id,
         trace_id=request_id,
         storage_partition=_storage_partition(tenant_id, event_name, provider_event_id),
+    )
+
+
+def build_connector_correlation(
+    *,
+    tenant_id: str,
+    event_name: str,
+    correlation_id: str,
+    provider_event_id: str | None,
+) -> Correlation:
+    """Build connector-centric correlation where request/trace align with correlation id."""
+
+    return Correlation(
+        correlation_id=correlation_id,
+        causation_id=correlation_id,
+        request_id=correlation_id,
+        trace_id=correlation_id,
+        storage_partition=_storage_partition(tenant_id, event_name, provider_event_id),
+    )
+
+
+def build_envelope(
+    *,
+    tenant_id: str,
+    source_provider: str,
+    occurred_at: datetime,
+    payload: DefenderDetectionFindingEvent | ImpossibleTravelEvent | IamOnboardingEvent | HitlApprovalEvent,
+    correlation: Correlation,
+    provider_event_id: str | None,
+    metadata: dict[str, Any] | None = None,
+) -> Envelope:
+    """Create a canonical envelope from typed payload and correlation context."""
+
+    return Envelope(
+        event_id=derive_event_id(
+            tenant_id=tenant_id,
+            event_type=payload.event_type,
+            occurred_at=occurred_at,
+            correlation_id=correlation.correlation_id,
+            provider_event_id=provider_event_id,
+        ),
+        tenant_id=tenant_id,
+        source_provider=source_provider,
+        event_name=payload.event_type,
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=occurred_at,
+        correlation=correlation,
+        payload=payload,
+        metadata=metadata or {},
     )
 
 
@@ -173,29 +158,18 @@ def _defender_to_envelope(provider_event: DefenderWebhook, ingress: RawIngressEn
 
     correlation = _build_correlation(
         tenant_id=ingress.tenant_id,
-        source_provider=ingress.provider,
         request_id=ingress.request_id,
         event_name=payload.event_type,
         provider_event_id=provider_event.alert_id,
     )
 
-    return Envelope(
-        event_id=derive_event_id(
-            tenant_id=ingress.tenant_id,
-            event_type=payload.event_type,
-            occurred_at=occurred_at,
-            correlation_id=correlation.correlation_id,
-            provider_event_id=provider_event.alert_id,
-        ),
+    return build_envelope(
         tenant_id=ingress.tenant_id,
         source_provider=ingress.provider,
-        event_name=payload.event_type,
-        schema_version="1.0.0",
-        event_version="1.0.0",
-        ocsf_version="1.1.0",
         occurred_at=occurred_at,
-        correlation=correlation,
         payload=payload,
+        correlation=correlation,
+        provider_event_id=provider_event.alert_id,
         metadata={
             "request_id": ingress.request_id,
             "route": ingress.route,
@@ -228,29 +202,18 @@ def _teams_to_envelope(provider_event: TeamsApprovalCallback, ingress: RawIngres
 
     correlation = _build_correlation(
         tenant_id=ingress.tenant_id,
-        source_provider=ingress.provider,
         request_id=ingress.request_id,
         event_name=payload.event_type,
         provider_event_id=provider_event.workflow_id,
     )
 
-    return Envelope(
-        event_id=derive_event_id(
-            tenant_id=ingress.tenant_id,
-            event_type=payload.event_type,
-            occurred_at=occurred_at,
-            correlation_id=correlation.correlation_id,
-            provider_event_id=provider_event.workflow_id,
-        ),
+    return build_envelope(
         tenant_id=ingress.tenant_id,
         source_provider=ingress.provider,
-        event_name=payload.event_type,
-        schema_version="1.0.0",
-        event_version="1.0.0",
-        ocsf_version="1.1.0",
         occurred_at=occurred_at,
-        correlation=correlation,
         payload=payload,
+        correlation=correlation,
+        provider_event_id=provider_event.workflow_id,
         metadata={
             "request_id": ingress.request_id,
             "route": ingress.route,
@@ -292,40 +255,30 @@ def iam_request_to_envelope(
 
     correlation = _build_correlation(
         tenant_id=tenant_id,
-        source_provider="iam-api",
         request_id=req_id,
         event_name=payload.event_type,
         provider_event_id=request.ticket_id,
     )
 
-    return Envelope(
-        event_id=derive_event_id(
-            tenant_id=tenant_id,
-            event_type=payload.event_type,
-            occurred_at=now,
-            correlation_id=correlation.correlation_id,
-            provider_event_id=request.ticket_id,
-        ),
+    return build_envelope(
         tenant_id=tenant_id,
         source_provider="iam-api",
-        event_name=payload.event_type,
-        schema_version="1.0.0",
-        event_version="1.0.0",
-        ocsf_version="1.1.0",
         occurred_at=now,
-        correlation=correlation,
         payload=payload,
+        correlation=correlation,
+        provider_event_id=request.ticket_id,
         metadata={"request_id": req_id},
     )
 
 
 def _envelope_to_start_route(envelope: Envelope) -> tuple[str, str]:
-    payload = envelope.payload
-    provider_event_type = _EVENT_TYPE_TO_PROVIDER_EVENT_TYPE.get(payload.event_type, payload.event_type)
-    routed = resolve_provider_event_route(envelope.source_provider, provider_event_type)
+    routed = resolve_provider_event_route(envelope.source_provider, envelope.payload.event_type)
+    if routed is None and envelope.payload.event_type == "iam.onboarding":
+        # Internal IAM requests use iam-api as source provider but dispatch through onboarding workflow defaults.
+        routed = resolve_provider_event_route("microsoft_graph", envelope.payload.event_type)
     if routed is None:
         raise ValueError(
-            f"No workflow mapping for provider={envelope.source_provider!r} event_type={payload.event_type!r}"
+            f"No workflow mapping for provider={envelope.source_provider!r} event_type={envelope.payload.event_type!r}"
         )
     return routed
 
@@ -368,11 +321,11 @@ def to_approval_decision(envelope: Envelope) -> ApprovalDecision:
 
 
 __all__ = [
+    "build_connector_correlation",
+    "build_envelope",
     "build_provider_event",
+    "build_storage_partition",
     "iam_request_to_envelope",
-    "resolve_polling_route",
-    "resolve_provider_event_route",
-    "resolve_webhook_route",
     "to_approval_decision",
     "to_envelope",
     "to_workflow_command",

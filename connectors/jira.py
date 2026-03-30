@@ -13,7 +13,8 @@ from connectors.errors import (
     ConnectorTransientError,
     ConnectorUnsupportedActionError,
 )
-from shared.models import Correlation, Envelope, IamOnboardingEvent, LifecycleAction, StoragePartition, VendorExtension, derive_event_id
+from shared.models import Envelope, IamOnboardingEvent, LifecycleAction, VendorExtension
+from shared.models.mappers import build_connector_correlation, build_envelope
 
 
 class JiraConnector(BaseConnector):
@@ -162,34 +163,18 @@ class JiraConnector(BaseConnector):
             )
             correlation_id = issue_id or issue_key
             events.append(
-                Envelope(
-                    event_id=derive_event_id(
-                        tenant_id=self.tenant_id,
-                        event_type=payload.event_type,
-                        occurred_at=occurred_at,
-                        correlation_id=correlation_id,
-                        provider_event_id=issue_id,
-                    ),
+                build_envelope(
                     tenant_id=self.tenant_id,
                     source_provider=self.provider,
-                    event_name=payload.event_type,
-                    schema_version="1.0.0",
-                    event_version="1.0.0",
-                    ocsf_version="1.1.0",
                     occurred_at=occurred_at,
-                    correlation=Correlation(
+                    correlation=build_connector_correlation(
+                        tenant_id=self.tenant_id,
+                        event_name=payload.event_type,
                         correlation_id=correlation_id,
-                        causation_id=correlation_id,
-                        request_id=correlation_id,
-                        trace_id=correlation_id,
-                        storage_partition=StoragePartition(
-                            ddb_pk=f"TENANT#{self.tenant_id}",
-                            ddb_sk=f"EVENT#{payload.event_type.replace('.', '#')}#{issue_key}",
-                            s3_bucket=f"secamo-events-{self.tenant_id}",
-                            s3_key_prefix=f"raw/{payload.event_type}/{issue_key}",
-                        ),
+                        provider_event_id=issue_key,
                     ),
                     payload=payload,
+                    provider_event_id=issue_id or None,
                     metadata={"provider_event_type": "jira:issue_updated", "summary": fields.get("summary") or ""},
                 )
             )

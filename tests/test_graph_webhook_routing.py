@@ -1,4 +1,4 @@
-from shared.models.mappers import resolve_webhook_route
+from shared.routing import resolve_webhook_route
 
 
 def test_resolve_webhook_route_alerts_v2_resource() -> None:

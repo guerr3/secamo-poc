@@ -92,17 +92,21 @@ def _legacy_mapper_unavailable(*_args, **_kwargs):
 
 try:
     from shared.models.mappers import (
+        build_connector_correlation,
+        build_envelope,
         build_provider_event,
+        build_storage_partition,
         iam_request_to_envelope,
-        resolve_webhook_route,
         to_approval_decision,
         to_envelope,
         to_workflow_command,
     )
 except Exception:
+    build_connector_correlation = _legacy_mapper_unavailable
+    build_envelope = _legacy_mapper_unavailable
     build_provider_event = _legacy_mapper_unavailable
+    build_storage_partition = _legacy_mapper_unavailable
     iam_request_to_envelope = _legacy_mapper_unavailable
-    resolve_webhook_route = _legacy_mapper_unavailable
     to_approval_decision = _legacy_mapper_unavailable
     to_envelope = _legacy_mapper_unavailable
     to_workflow_command = _legacy_mapper_unavailable
@@ -181,9 +185,11 @@ __all__ = [
     "StartWorkflowCommand",
     "WorkflowCommand",
     # legacy mapper symbols kept during transition
+    "build_connector_correlation",
+    "build_envelope",
     "build_provider_event",
+    "build_storage_partition",
     "iam_request_to_envelope",
-    "resolve_webhook_route",
     "to_approval_decision",
     "to_envelope",
     "to_workflow_command",

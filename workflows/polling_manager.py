@@ -12,10 +12,11 @@ with workflow.unsafe.imports_passed_through():
     from activities.tenant import get_tenant_config
     from shared.models import PollingManagerInput, TenantConfig
     from shared.models.canonical import Envelope
-    from shared.models.mappers import resolve_polling_route
+    from shared.routing import build_default_route_registry
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
+_ROUTE_REGISTRY = build_default_route_registry()
 
 @workflow.defn
 class PollingManagerWorkflow:
@@ -80,12 +81,12 @@ class PollingManagerWorkflow:
                     occurred = occurred.astimezone(timezone.utc)
                 new_cursor = occurred.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-            route = resolve_polling_route(
+            routes = _ROUTE_REGISTRY.resolve_polling(
                 provider=input.provider,
                 resource_type=input.resource_type,
                 payload=event.payload,
             )
-            if route is None:
+            if not routes:
                 workflow.logger.warning(
                     "No polling route configured for provider=%s resource_type=%s event_id=%s",
                     input.provider,
@@ -94,7 +95,9 @@ class PollingManagerWorkflow:
                 )
                 continue
 
-            workflow_name, task_queue = route
+            route = routes[0]
+            workflow_name = route.workflow_name
+            task_queue = route.task_queue
             envelope = event
             event_id = envelope.event_id
             child_workflow_id = f"{input.provider}-{input.resource_type}-{input.tenant_id}-{event_id}"

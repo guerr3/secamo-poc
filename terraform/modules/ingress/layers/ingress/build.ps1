@@ -63,6 +63,30 @@ foreach ($Subdir in $SharedSubdirs) {
     }
 }
 
+# Validate that key shared files are synced byte-for-byte from repository source.
+$SyncFiles = @(
+    "config.py",
+    "models/canonical.py",
+    "models/mappers.py",
+    "routing/defaults.py",
+    "routing/registry.py"
+)
+
+foreach ($RelPath in $SyncFiles) {
+    $SrcFile = Join-Path (Join-Path $RepoRoot "shared") $RelPath
+    $DstFile = Join-Path $SharedDst $RelPath
+
+    if (!(Test-Path $SrcFile) -or !(Test-Path $DstFile)) {
+        throw "Shared sync verification failed (missing file): $RelPath"
+    }
+
+    $SrcHash = (Get-FileHash -Path $SrcFile -Algorithm SHA256).Hash
+    $DstHash = (Get-FileHash -Path $DstFile -Algorithm SHA256).Hash
+    if ($SrcHash -ne $DstHash) {
+        throw "Shared sync verification failed (drift detected): $RelPath"
+    }
+}
+
 # Clean up unnecessary files to reduce layer size
 Write-Host "Cleaning up unnecessary files..." -ForegroundColor Gray
 Get-ChildItem -Path $LayerDir -Filter "__pycache__" -Recurse -Directory -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force

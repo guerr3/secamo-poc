@@ -113,8 +113,9 @@ class HitlApprovalEvent(StrictModel):
     """First-class HiTL approval payload for callback-driven decisions."""
 
     event_type: Literal["hitl.approval"]
-    category_uid: Literal[0] = 0
-    class_uid: Literal[0] = 0
+    # Custom extension UIDs (non-zero) reserved for Secamo-specific approval events.
+    category_uid: Literal[99] = 99
+    class_uid: Literal[990001] = 990001
     activity_id: int
     activity_name: str | None = None
     approval_id: str

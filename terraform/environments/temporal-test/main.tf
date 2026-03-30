@@ -629,6 +629,21 @@ resource "aws_iam_role_policy" "authorizer_ssm" {
 # HITL STORAGE + PARAMETERS
 # ══════════════════════════════════════════════════════════════
 
+resource "aws_dynamodb_table" "tenants" {
+  name         = "${local.name_prefix}-tenants"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "tenant_id"
+
+  attribute {
+    name = "tenant_id"
+    type = "S"
+  }
+
+  tags = {
+    Name = "${local.name_prefix}-tenants"
+  }
+}
+
 resource "aws_dynamodb_table" "hitl_tokens" {
   name         = "${local.name_prefix}-hitl-tokens"
   billing_mode = "PAY_PER_REQUEST"
@@ -695,6 +710,7 @@ module "ingress" {
 
   temporal_host      = "${aws_instance.temporal.private_ip}:7233"
   temporal_namespace = var.temporal_namespace
+  tenant_table_name  = aws_dynamodb_table.tenants.name
   hitl_token_table   = aws_dynamodb_table.hitl_tokens.name
 
   allowed_cidr_blocks = var.microsoft_allowed_cidrs

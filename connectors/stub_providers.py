@@ -5,7 +5,8 @@ import hashlib
 from typing import Any
 
 from connectors.base import BaseConnector
-from shared.models import Correlation, DefenderDetectionFindingEvent, Envelope, StoragePartition, VendorExtension, derive_event_id
+from shared.models import DefenderDetectionFindingEvent, Envelope, VendorExtension
+from shared.models.mappers import build_connector_correlation, build_envelope
 
 
 class _StubConnector(BaseConnector):
@@ -41,34 +42,18 @@ class _StubConnector(BaseConnector):
             )
             occurred_at = self._now()
             events.append(
-                Envelope(
-                    event_id=derive_event_id(
+                build_envelope(
+                    tenant_id=self.tenant_id,
+                    source_provider=self.provider,
+                    occurred_at=occurred_at,
+                    correlation=build_connector_correlation(
                         tenant_id=self.tenant_id,
-                        event_type=payload.event_type,
-                        occurred_at=occurred_at,
+                        event_name=payload.event_type,
                         correlation_id=event_id,
                         provider_event_id=event_id,
                     ),
-                    tenant_id=self.tenant_id,
-                    source_provider=self.provider,
-                    event_name=payload.event_type,
-                    schema_version="1.0.0",
-                    event_version="1.0.0",
-                    ocsf_version="1.1.0",
-                    occurred_at=occurred_at,
-                    correlation=Correlation(
-                        correlation_id=event_id,
-                        causation_id=event_id,
-                        request_id=event_id,
-                        trace_id=event_id,
-                        storage_partition=StoragePartition(
-                            ddb_pk=f"TENANT#{self.tenant_id}",
-                            ddb_sk=f"EVENT#{payload.event_type.replace('.', '#')}#{event_id}",
-                            s3_bucket=f"secamo-events-{self.tenant_id}",
-                            s3_key_prefix=f"raw/{payload.event_type}/{event_id}",
-                        ),
-                    ),
                     payload=payload,
+                    provider_event_id=event_id,
                     metadata={"query": query},
                 )
             )
