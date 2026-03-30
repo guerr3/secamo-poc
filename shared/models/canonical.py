@@ -24,7 +24,7 @@ JsonValue = TypeAliasType("JsonValue", JsonScalar | list["JsonValue"] | dict[str
 class StrictModel(BaseModel):
     """Base strict model that rejects unknown fields."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
 
 class StoragePartition(StrictModel):
@@ -159,65 +159,6 @@ class Envelope(StrictModel):
     raw_data_ref: str | None = None
 
 
-# Transitional compatibility models kept for non-migrated connectors/mappers.
-class AlertData(StrictModel):
-    alert_id: str
-    severity: str = "medium"
-    title: str = ""
-    description: str = ""
-    device_id: str | None = None
-    user_email: str | None = None
-    source_ip: str | None = None
-    destination_ip: str | None = None
-
-
-class UserContext(StrictModel):
-    user_principal_name: str | None = None
-    action: LifecycleAction | None = None
-    user_data: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class DeviceContext(StrictModel):
-    device_id: str | None = None
-    hostname: str | None = None
-
-
-class NetworkContext(StrictModel):
-    source_ip: str | None = None
-    destination_ip: str | None = None
-    location: str | None = None
-
-
-class SecurityEvent(StrictModel):
-    event_id: str
-    event_type: str
-    tenant_id: str
-    source_provider: str
-    requester: str = "ingress-api"
-    severity: str | None = None
-    correlation_id: str | None = None
-    ticket_id: str | None = None
-    alert: AlertData | None = None
-    user: UserContext | None = None
-    device: DeviceContext | None = None
-    network: NetworkContext | None = None
-    metadata: dict[str, JsonValue] = Field(default_factory=dict)
-
-
-class CanonicalEvent(StrictModel):
-    event_type: str
-    tenant_id: str
-    provider: str
-    external_event_id: str | None = None
-    subject: str
-    severity: str | None = None
-    occurred_at: datetime | None = None
-    payload: dict[str, JsonValue] = Field(default_factory=dict)
-    actor: dict[str, JsonValue] | None = None
-    request_id: str | None = None
-    correlation_id: str | None = None
-
-
 def derive_event_id(
     *,
     tenant_id: str,
@@ -242,20 +183,14 @@ def derive_event_id(
 
 __all__ = [
     "Correlation",
-    "CanonicalEvent",
-    "AlertData",
-    "DeviceContext",
     "DefenderDetectionFindingEvent",
     "Envelope",
     "HitlApprovalEvent",
     "IamOnboardingEvent",
     "ImpossibleTravelEvent",
-    "NetworkContext",
-    "SecurityEvent",
     "SecamoEventVariant",
     "SecamoEventVariantAdapter",
     "StoragePartition",
-    "UserContext",
     "VendorExtension",
     "VendorExtensions",
     "derive_event_id",

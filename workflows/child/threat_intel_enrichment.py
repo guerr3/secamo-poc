@@ -29,7 +29,6 @@ class ThreatIntelEnrichmentWorkflow:
                 request.tenant_id,
                 request.providers,
                 request.indicator,
-                request.ti_secrets,
             ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,

@@ -123,3 +123,39 @@ async def test_handle_graph_notification_dispatches_supported_items(monkeypatch)
     assert result["body"]["received"] == 2
     assert result["body"]["dispatched"] == 1
     assert result["body"]["ignored"] == 1
+
+
+async def test_dispatch_provider_event_uses_canonical_event_type_for_jira(monkeypatch) -> None:
+    module = _load_handler_module()
+
+    captured: dict[str, str] = {}
+
+    async def _fake_dispatch_intent(envelope):
+        captured["payload_event_type"] = envelope.payload.event_type
+        captured["source_provider"] = envelope.source_provider
+        return SimpleNamespace(attempted=1, succeeded=1, failed=0)
+
+    monkeypatch.setattr(module, "_route_fanout_dispatcher", SimpleNamespace(dispatch_intent=_fake_dispatch_intent))
+
+    result = await module._dispatch_provider_event(
+        raw_body={
+            "provider": "jira",
+            "event_type": "jira:issue_created",
+            "issue": {
+                "key": "IAM-42",
+                "fields": {
+                    "customfield_employee_email": "jane@example.com",
+                    "customfield_employee_name": "Jane Doe",
+                    "customfield_lifecycle_action": "create",
+                    "reporter": {"emailAddress": "manager@example.com"},
+                },
+            },
+        },
+        provider="jira",
+        event_type="jira:issue_created",
+        tenant_id="tenant-demo-001",
+    )
+
+    assert result["statusCode"] == 202
+    assert captured["payload_event_type"] == "iam.onboarding"
+    assert captured["source_provider"] == "jira"

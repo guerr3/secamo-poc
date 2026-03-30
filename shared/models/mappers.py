@@ -1,8 +1,7 @@
-"""
-shared.models.mappers — Conversion functions between model layers.
+"""shared.models.mappers — Envelope-first conversion helpers.
 
-Envelope → ProviderEvent → CanonicalEvent → WorkflowCommand
-                                           → Domain contracts
+RawIngressEnvelope/IAM requests are converted directly to canonical Envelope.
+Workflow commands are generated directly from Envelope payload variants.
 """
 
 from __future__ import annotations
@@ -11,26 +10,22 @@ from datetime import datetime, timezone
 from typing import Any
 
 from shared.models.canonical import (
-    AlertData,
-    CanonicalEvent,
-    DeviceContext,
-    NetworkContext,
-    SecurityEvent,
-    UserContext,
+    Correlation,
+    DefenderDetectionFindingEvent,
+    Envelope,
+    HitlApprovalEvent,
+    IamOnboardingEvent,
+    ImpossibleTravelEvent,
+    SecamoEventVariantAdapter,
+    StoragePartition,
+    VendorExtension,
+    derive_event_id,
 )
-from shared.models.commands import (
-    SignalWorkflowCommand,
-    StartWorkflowCommand,
-    WorkflowCommand,
-)
+from shared.models.commands import SignalWorkflowCommand, StartWorkflowCommand, WorkflowCommand
 from shared.models.common import LifecycleAction
 from shared.models.domain import ApprovalDecision
 from shared.models.ingress import IamIngressRequest, RawIngressEnvelope
-from shared.models.provider_events import (
-    DefenderWebhook,
-    ProviderEvent,
-    TeamsApprovalCallback,
-)
+from shared.models.provider_events import DefenderWebhook, ProviderEvent, TeamsApprovalCallback
 
 
 PROVIDER_EVENT_ROUTING: dict[tuple[str, str], tuple[str, str]] = {
@@ -41,6 +36,7 @@ PROVIDER_EVENT_ROUTING: dict[tuple[str, str], tuple[str, str]] = {
     ("sentinelone", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
     ("jira", "jira:issue_created"): ("IamOnboardingWorkflow", "iam-graph"),
     ("jira", "jira:issue_updated"): ("IamOnboardingWorkflow", "iam-graph"),
+    ("iam-api", "iam.onboarding"): ("IamOnboardingWorkflow", "iam-graph"),
     # Backwards-compatible alias used by current webhook mapper/tests.
     ("defender", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
 }
@@ -57,12 +53,18 @@ WEBHOOK_RESOURCE_ROUTING: dict[tuple[str, str], tuple[str, str]] = {
     ("microsoft_graph", "identityprotection/riskyusers"): ("ImpossibleTravelWorkflow", "soc-defender"),
 }
 
+_EVENT_TYPE_TO_PROVIDER_EVENT_TYPE: dict[str, str] = {
+    "defender.alert": "alert",
+    "defender.impossible_travel": "impossible_travel",
+    "iam.onboarding": "iam.onboarding",
+}
+
 
 def resolve_provider_event_route(provider: str, event_type: str) -> tuple[str, str] | None:
     return PROVIDER_EVENT_ROUTING.get((provider.lower(), event_type.lower()))
 
 
-def resolve_polling_route(provider: str, resource_type: str, payload: dict[str, Any] | None = None) -> tuple[str, str] | None:
+def resolve_polling_route(provider: str, resource_type: str, payload: Any | None = None) -> tuple[str, str] | None:
     provider_key = provider.lower()
     resource_key = resource_type.lower()
     configured_event_type = POLLING_RESOURCE_EVENT_TYPES.get((provider_key, resource_key))
@@ -70,12 +72,15 @@ def resolve_polling_route(provider: str, resource_type: str, payload: dict[str, 
         return None
 
     provider_event_type = configured_event_type
-    if payload and payload.get("provider_event_type"):
+    if isinstance(payload, dict) and payload.get("provider_event_type"):
         provider_event_type = str(payload["provider_event_type"])
+    elif hasattr(payload, "event_type"):
+        provider_event_type = _EVENT_TYPE_TO_PROVIDER_EVENT_TYPE.get(
+            str(getattr(payload, "event_type")),
+            configured_event_type,
+        )
 
-    if not provider_event_type:
-        return None
-    return resolve_provider_event_route(provider, str(provider_event_type))
+    return resolve_provider_event_route(provider, provider_event_type)
 
 
 def resolve_webhook_route(provider: str, resource_type: str, payload: dict[str, Any] | None = None) -> tuple[str, str] | None:
@@ -83,7 +88,6 @@ def resolve_webhook_route(provider: str, resource_type: str, payload: dict[str, 
     resource_key = resource_type.lower().strip().lstrip("/")
 
     if resource_key.count("/") >= 2:
-        # Microsoft Graph often sends resources like security/alerts_v2/{id}.
         resource_key = resource_key.rsplit("/", 1)[0]
 
     direct = WEBHOOK_RESOURCE_ROUTING.get((provider_key, resource_key))
@@ -96,8 +100,6 @@ def resolve_webhook_route(provider: str, resource_type: str, payload: dict[str, 
     return None
 
 
-# ── Envelope → ProviderEvent ──────────────────────────────────
-
 _PROVIDER_MAP: dict[str, type[ProviderEvent]] = {
     "defender": DefenderWebhook,
     "teams": TeamsApprovalCallback,
@@ -105,13 +107,6 @@ _PROVIDER_MAP: dict[str, type[ProviderEvent]] = {
 
 
 def build_provider_event(envelope: RawIngressEnvelope) -> ProviderEvent:
-    """
-    Parse the raw envelope body into the correct ProviderEvent subtype
-    based on ``envelope.provider``.
-
-    Raises:
-        ValueError: For unknown providers.
-    """
     provider_cls = _PROVIDER_MAP.get(envelope.provider.lower())
     if provider_cls is None:
         raise ValueError(f"Unknown provider: {envelope.provider!r}")
@@ -128,247 +123,257 @@ def build_provider_event(envelope: RawIngressEnvelope) -> ProviderEvent:
     return provider_cls.model_validate({**base_fields, **payload})
 
 
-# ── ProviderEvent → CanonicalEvent ────────────────────────────
-
-def to_canonical_event(
-    provider_event: ProviderEvent,
-    envelope: RawIngressEnvelope,
-) -> CanonicalEvent:
-    """Convert a provider event + envelope into a CanonicalEvent."""
-    if isinstance(provider_event, DefenderWebhook):
-        return _defender_to_canonical(provider_event, envelope)
-    if isinstance(provider_event, TeamsApprovalCallback):
-        return _teams_to_canonical(provider_event, envelope)
-    raise ValueError(f"No canonical mapping for {type(provider_event).__name__}")
+def _storage_partition(tenant_id: str, event_name: str, provider_event_id: str | None) -> StoragePartition:
+    event_suffix = provider_event_id or "ingress"
+    normalized_event = event_name.replace(".", "#")
+    return StoragePartition(
+        ddb_pk=f"TENANT#{tenant_id}",
+        ddb_sk=f"EVENT#{normalized_event}#{event_suffix}",
+        s3_bucket=f"secamo-events-{tenant_id}",
+        s3_key_prefix=f"raw/{event_name}/{event_suffix}",
+    )
 
 
-def _defender_to_canonical(
-    event: DefenderWebhook, envelope: RawIngressEnvelope,
-) -> CanonicalEvent:
-    return CanonicalEvent(
+def _build_correlation(
+    *,
+    tenant_id: str,
+    source_provider: str,
+    request_id: str,
+    event_name: str,
+    provider_event_id: str | None,
+) -> Correlation:
+    corr_id = provider_event_id or request_id
+    return Correlation(
+        correlation_id=corr_id,
+        causation_id=request_id,
+        request_id=request_id,
+        trace_id=request_id,
+        storage_partition=_storage_partition(tenant_id, event_name, provider_event_id),
+    )
+
+
+def _defender_to_envelope(provider_event: DefenderWebhook, ingress: RawIngressEnvelope) -> Envelope:
+    occurred_at = provider_event.occurred_at or ingress.received_at
+    payload = DefenderDetectionFindingEvent(
         event_type="defender.alert",
-        tenant_id=envelope.tenant_id,
-        provider="defender",
-        external_event_id=event.alert_id,
-        subject=event.title,
-        severity=event.severity,
-        occurred_at=event.occurred_at,
-        request_id=envelope.request_id,
-        payload={
-            "alert_id": event.alert_id,
-            "severity": event.severity,
-            "title": event.title,
-            "description": event.description,
-            "device_id": event.device_id,
-            "user_email": event.user_email,
-            "source_ip": event.source_ip,
-            "destination_ip": event.destination_ip,
+        activity_id=2004,
+        activity_name="ingress.webhook",
+        alert_id=provider_event.alert_id,
+        title=provider_event.title,
+        description=provider_event.description,
+        severity_id=40,
+        severity=provider_event.severity,
+        vendor_extensions={
+            "source_ip": VendorExtension(source="defender", value=provider_event.source_ip),
+            "destination_ip": VendorExtension(source="defender", value=provider_event.destination_ip),
+            "device_id": VendorExtension(source="defender", value=provider_event.device_id),
+            "user_email": VendorExtension(source="defender", value=provider_event.user_email),
+        },
+    )
+
+    correlation = _build_correlation(
+        tenant_id=ingress.tenant_id,
+        source_provider=ingress.provider,
+        request_id=ingress.request_id,
+        event_name=payload.event_type,
+        provider_event_id=provider_event.alert_id,
+    )
+
+    return Envelope(
+        event_id=derive_event_id(
+            tenant_id=ingress.tenant_id,
+            event_type=payload.event_type,
+            occurred_at=occurred_at,
+            correlation_id=correlation.correlation_id,
+            provider_event_id=provider_event.alert_id,
+        ),
+        tenant_id=ingress.tenant_id,
+        source_provider=ingress.provider,
+        event_name=payload.event_type,
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=occurred_at,
+        correlation=correlation,
+        payload=payload,
+        metadata={
+            "request_id": ingress.request_id,
+            "route": ingress.route,
+            "method": ingress.method,
         },
     )
 
 
-def _teams_to_canonical(
-    event: TeamsApprovalCallback, envelope: RawIngressEnvelope,
-) -> CanonicalEvent:
-    return CanonicalEvent(
-        event_type="teams.approval_callback",
-        tenant_id=envelope.tenant_id,
-        provider="teams",
-        subject=f"approval:{event.workflow_id}",
-        occurred_at=event.occurred_at,
-        request_id=envelope.request_id,
-        payload={
-            "workflow_id": event.workflow_id,
-            "approved": event.approved,
-            "reviewer": event.reviewer,
-            "action": event.action,
-            "comments": event.comments,
+def _decision_from_callback(callback: TeamsApprovalCallback) -> str:
+    if callback.approved:
+        return "approved"
+    return "rejected"
+
+
+def _teams_to_envelope(provider_event: TeamsApprovalCallback, ingress: RawIngressEnvelope) -> Envelope:
+    occurred_at = provider_event.occurred_at or ingress.received_at
+    payload = HitlApprovalEvent(
+        event_type="hitl.approval",
+        activity_id=0,
+        activity_name="ingress.callback",
+        approval_id=provider_event.workflow_id,
+        decision=_decision_from_callback(provider_event),
+        channel="teams",
+        responder=provider_event.reviewer,
+        reason=provider_event.comments or None,
+        vendor_extensions={
+            "action": VendorExtension(source="teams", value=provider_event.action),
+        },
+    )
+
+    correlation = _build_correlation(
+        tenant_id=ingress.tenant_id,
+        source_provider=ingress.provider,
+        request_id=ingress.request_id,
+        event_name=payload.event_type,
+        provider_event_id=provider_event.workflow_id,
+    )
+
+    return Envelope(
+        event_id=derive_event_id(
+            tenant_id=ingress.tenant_id,
+            event_type=payload.event_type,
+            occurred_at=occurred_at,
+            correlation_id=correlation.correlation_id,
+            provider_event_id=provider_event.workflow_id,
+        ),
+        tenant_id=ingress.tenant_id,
+        source_provider=ingress.provider,
+        event_name=payload.event_type,
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=occurred_at,
+        correlation=correlation,
+        payload=payload,
+        metadata={
+            "request_id": ingress.request_id,
+            "route": ingress.route,
+            "method": ingress.method,
         },
     )
 
 
-def iam_request_to_canonical(
+def to_envelope(provider_event: ProviderEvent, ingress: RawIngressEnvelope) -> Envelope:
+    if isinstance(provider_event, DefenderWebhook):
+        return _defender_to_envelope(provider_event, ingress)
+    if isinstance(provider_event, TeamsApprovalCallback):
+        return _teams_to_envelope(provider_event, ingress)
+    raise ValueError(f"No envelope mapping for {type(provider_event).__name__}")
+
+
+def iam_request_to_envelope(
     request: IamIngressRequest,
     tenant_id: str,
     request_id: str | None = None,
-) -> CanonicalEvent:
-    """Convert a first-party IamIngressRequest into a CanonicalEvent."""
-    return CanonicalEvent(
+) -> Envelope:
+    now = datetime.now(timezone.utc)
+    req_id = request_id or "internal-iam"
+    user_email = str(request.user_data.get("email") or "")
+    action = LifecycleAction(str(request.action))
+
+    payload = IamOnboardingEvent(
         event_type="iam.onboarding",
-        tenant_id=tenant_id,
-        provider="iam-api",
-        subject=request.user_data.get("email", ""),
-        actor={"requester": request.requester},
-        occurred_at=datetime.now(timezone.utc),
-        request_id=request_id,
-        payload={
-            "action": request.action,
-            "user_data": request.user_data,
-            "requester": request.requester,
-            "ticket_id": request.ticket_id or "",
+        activity_id=3001,
+        activity_name="iam.internal_request",
+        user_email=user_email,
+        action=action,
+        user_data=request.user_data,
+        vendor_extensions={
+            "requester": VendorExtension(source="iam-api", value=request.requester),
+            "ticket_id": VendorExtension(source="iam-api", value=request.ticket_id or ""),
         },
     )
 
+    correlation = _build_correlation(
+        tenant_id=tenant_id,
+        source_provider="iam-api",
+        request_id=req_id,
+        event_name=payload.event_type,
+        provider_event_id=request.ticket_id,
+    )
 
-# ── CanonicalEvent → WorkflowCommand ─────────────────────────
+    return Envelope(
+        event_id=derive_event_id(
+            tenant_id=tenant_id,
+            event_type=payload.event_type,
+            occurred_at=now,
+            correlation_id=correlation.correlation_id,
+            provider_event_id=request.ticket_id,
+        ),
+        tenant_id=tenant_id,
+        source_provider="iam-api",
+        event_name=payload.event_type,
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=now,
+        correlation=correlation,
+        payload=payload,
+        metadata={"request_id": req_id},
+    )
 
-_EVENT_TYPE_TO_WORKFLOW: dict[str, dict[str, str]] = {
-    "defender.alert": {
-        "workflow_name": "DefenderAlertEnrichmentWorkflow",
-        "task_queue": "soc-defender",
-    },
-    "iam.onboarding": {
-        "workflow_name": "IamOnboardingWorkflow",
-        "task_queue": "iam-graph",
-    },
-}
 
-_CANONICAL_EVENT_TO_PROVIDER_ROUTE: dict[str, tuple[str, str]] = {
-    "defender.alert": ("microsoft_defender", "alert"),
-}
+def _envelope_to_start_route(envelope: Envelope) -> tuple[str, str]:
+    payload = envelope.payload
+    provider_event_type = _EVENT_TYPE_TO_PROVIDER_EVENT_TYPE.get(payload.event_type, payload.event_type)
+    routed = resolve_provider_event_route(envelope.source_provider, provider_event_type)
+    if routed is None:
+        raise ValueError(
+            f"No workflow mapping for provider={envelope.source_provider!r} event_type={payload.event_type!r}"
+        )
+    return routed
 
 
-def to_workflow_command(event: CanonicalEvent) -> WorkflowCommand:
-    """
-    Generate a StartWorkflowCommand or SignalWorkflowCommand from a
-    CanonicalEvent, based on ``event_type``.
-    """
-    # Signals
-    if event.event_type == "teams.approval_callback":
+def to_workflow_command(envelope: Envelope) -> WorkflowCommand:
+    if isinstance(envelope.payload, HitlApprovalEvent):
         return SignalWorkflowCommand(
-            tenant_id=event.tenant_id,
-            workflow_id=event.payload["workflow_id"],
+            tenant_id=envelope.tenant_id,
+            workflow_id=envelope.payload.approval_id,
             signal_name="approve",
             signal_payload={
-                "approved": event.payload["approved"],
-                "reviewer": event.payload["reviewer"],
-                "action": event.payload["action"],
-                "comments": event.payload.get("comments", ""),
+                "approved": envelope.payload.decision == "approved",
+                "reviewer": envelope.payload.responder or "unknown",
+                "action": str(envelope.payload.vendor_extensions.get("action", VendorExtension(source="teams", value="dismiss")).value),
+                "comments": envelope.payload.reason or "",
             },
         )
 
-    # Workflow starts
-    provider_route = _CANONICAL_EVENT_TO_PROVIDER_ROUTE.get(event.event_type)
-    if provider_route is not None:
-        routed = resolve_provider_event_route(provider_route[0], provider_route[1])
-        if routed is not None:
-            workflow_name, task_queue = routed
-            return StartWorkflowCommand(
-                tenant_id=event.tenant_id,
-                workflow_name=workflow_name,
-                task_queue=task_queue,
-                workflow_input=to_security_event(event),
-            )
-
-    mapping = _EVENT_TYPE_TO_WORKFLOW.get(event.event_type)
-    if mapping is None:
-        raise ValueError(f"No workflow mapping for event_type={event.event_type!r}")
-
+    workflow_name, task_queue = _envelope_to_start_route(envelope)
     return StartWorkflowCommand(
-        tenant_id=event.tenant_id,
-        workflow_name=mapping["workflow_name"],
-        task_queue=mapping["task_queue"],
-        workflow_input=to_security_event(event),
+        tenant_id=envelope.tenant_id,
+        workflow_name=workflow_name,
+        task_queue=task_queue,
+        workflow_input=envelope,
     )
 
 
-# ── CanonicalEvent → Universal Workflow Contract ──────────────
+def to_approval_decision(envelope: Envelope) -> ApprovalDecision:
+    if not isinstance(envelope.payload, HitlApprovalEvent):
+        raise ValueError("Approval decision conversion requires hitl.approval envelope payload")
 
-def _event_identity(event: CanonicalEvent) -> str:
-    occurred = event.occurred_at.isoformat() if event.occurred_at else "na"
-    return (
-        event.external_event_id
-        or event.request_id
-        or f"{event.tenant_id}:{event.event_type}:{occurred}"
-    )
-
-
-def to_security_event(event: CanonicalEvent) -> SecurityEvent:
-    """Convert CanonicalEvent into universal SecurityEvent workflow input."""
-    payload = event.payload or {}
-
-    alert_payload = payload.get("alert", payload)
-    alert = None
-    if event.event_type in {"defender.alert", "defender.impossible_travel"}:
-        alert = AlertData.model_validate(
-            {
-                "alert_id": alert_payload.get("alert_id") or event.external_event_id or "",
-                "severity": alert_payload.get("severity") or event.severity or "medium",
-                "title": alert_payload.get("title") or event.subject or "Security alert",
-                "description": alert_payload.get("description") or "",
-                "device_id": alert_payload.get("device_id"),
-                "user_email": alert_payload.get("user_email"),
-                "source_ip": alert_payload.get("source_ip"),
-                "destination_ip": alert_payload.get("destination_ip"),
-            }
-        )
-
-    user = None
-    if event.event_type == "iam.onboarding":
-        user_data = payload.get("user_data", {})
-        action = payload.get("action")
-        user = UserContext(
-            user_principal_name=user_data.get("email"),
-            action=LifecycleAction(action) if action else None,
-            user_data=user_data,
-        )
-    elif alert and alert.user_email:
-        user = UserContext(user_principal_name=alert.user_email)
-
-    device = None
-    if alert and alert.device_id:
-        device = DeviceContext(device_id=alert.device_id)
-
-    network = None
-    source_ip = alert.source_ip if alert else payload.get("source_ip")
-    destination_ip = alert.destination_ip if alert else payload.get("destination_ip")
-    if source_ip or destination_ip or payload.get("location"):
-        network = NetworkContext(
-            source_ip=source_ip,
-            destination_ip=destination_ip,
-            location=payload.get("location"),
-        )
-
-    known_keys = {
-        "alert",
-        "alert_id",
-        "severity",
-        "title",
-        "description",
-        "device_id",
-        "user_email",
-        "source_ip",
-        "destination_ip",
-        "action",
-        "user_data",
-        "requester",
-        "ticket_id",
-        "location",
-    }
-    metadata = {k: v for k, v in payload.items() if k not in known_keys}
-
-    return SecurityEvent(
-        event_id=_event_identity(event),
-        tenant_id=event.tenant_id,
-        event_type=event.event_type,
-        source_provider=event.provider,
-        requester=payload.get("requester", "ingress-api"),
-        severity=(alert.severity if alert else event.severity),
-        correlation_id=event.correlation_id,
-        ticket_id=payload.get("ticket_id"),
-        alert=alert,
-        user=user,
-        device=device,
-        network=network,
-        metadata=metadata,
-    )
-
-
-def to_approval_decision(event: CanonicalEvent) -> ApprovalDecision:
-    """Convert a canonical Teams callback into an ApprovalDecision."""
+    action_ext = envelope.payload.vendor_extensions.get("action")
+    action = str(action_ext.value) if action_ext is not None else "dismiss"
     return ApprovalDecision(
-        approved=event.payload["approved"],
-        reviewer=event.payload["reviewer"],
-        action=event.payload["action"],
-        comments=event.payload.get("comments", ""),
+        approved=envelope.payload.decision == "approved",
+        reviewer=envelope.payload.responder or "unknown",
+        action=action,
+        comments=envelope.payload.reason or "",
     )
+
+
+__all__ = [
+    "build_provider_event",
+    "iam_request_to_envelope",
+    "resolve_polling_route",
+    "resolve_provider_event_route",
+    "resolve_webhook_route",
+    "to_approval_decision",
+    "to_envelope",
+    "to_workflow_command",
+]

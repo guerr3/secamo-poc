@@ -37,7 +37,7 @@ async def test_stub_connectors_health_and_fetch(provider: str, secrets: TenantSe
 
     events = await connector.fetch_events({"top": 2})
     assert len(events) == 2
-    assert all(event.provider == provider for event in events)
+    assert all(event.source_provider == provider for event in events)
 
 
 @pytest.mark.asyncio

@@ -1,4 +1,4 @@
-"""Tests for shared model mapping into universal SecurityEvent workflow input."""
+"""Tests for shared model mapping into Envelope-first workflow inputs."""
 
 from datetime import datetime, timezone
 
@@ -6,17 +6,17 @@ import pytest
 
 from shared.models import (
     ApprovalDecision,
-    CanonicalEvent,
+    Envelope,
     IamIngressRequest,
+    IamOnboardingEvent,
+    HitlApprovalEvent,
     RawIngressEnvelope,
-    SecurityEvent,
     SignalWorkflowCommand,
     StartWorkflowCommand,
     build_provider_event,
-    iam_request_to_canonical,
+    iam_request_to_envelope,
     to_approval_decision,
-    to_canonical_event,
-    to_security_event,
+    to_envelope,
     to_workflow_command,
 )
 from shared.models.mappers import resolve_polling_route, resolve_provider_event_route
@@ -84,28 +84,23 @@ def teams_envelope() -> RawIngressEnvelope:
 
 
 class TestDefenderPipeline:
-    def test_full_pipeline_to_security_event(self, defender_envelope):
+    def test_full_pipeline_to_envelope(self, defender_envelope):
         event = build_provider_event(defender_envelope)
         assert isinstance(event, DefenderWebhook)
 
-        canonical = to_canonical_event(event, defender_envelope)
-        assert isinstance(canonical, CanonicalEvent)
-        assert canonical.event_type == "defender.alert"
+        envelope = to_envelope(event, defender_envelope)
+        assert isinstance(envelope, Envelope)
+        assert envelope.payload.event_type == "defender.alert"
 
-        se = to_security_event(canonical)
-        assert isinstance(se, SecurityEvent)
-        assert se.tenant_id == "tenant-demo-001"
-        assert se.alert is not None
-        assert se.alert.alert_id == "ALT-100"
-        assert se.user is not None
-        assert se.user.user_principal_name == "alice@secamo.be"
-        assert se.network is not None
-        assert se.network.source_ip == "10.0.0.1"
+        payload = envelope.payload
+        assert envelope.tenant_id == "tenant-demo-001"
+        assert payload.alert_id == "ALT-100"
+        assert payload.title == "Suspicious login"
 
-        cmd = to_workflow_command(canonical)
+        cmd = to_workflow_command(envelope)
         assert isinstance(cmd, StartWorkflowCommand)
         assert cmd.workflow_name == "DefenderAlertEnrichmentWorkflow"
-        assert isinstance(cmd.workflow_input, SecurityEvent)
+        assert isinstance(cmd.workflow_input, Envelope)
 
 
 class TestTeamsPipeline:
@@ -113,8 +108,9 @@ class TestTeamsPipeline:
         event = build_provider_event(teams_envelope)
         assert isinstance(event, TeamsApprovalCallback)
 
-        canonical = to_canonical_event(event, teams_envelope)
-        cmd = to_workflow_command(canonical)
+        envelope = to_envelope(event, teams_envelope)
+        assert isinstance(envelope.payload, HitlApprovalEvent)
+        cmd = to_workflow_command(envelope)
 
         assert isinstance(cmd, SignalWorkflowCommand)
         assert cmd.workflow_id == "wf-impossible-travel-001"
@@ -122,8 +118,8 @@ class TestTeamsPipeline:
 
     def test_canonical_to_approval_decision(self, teams_envelope):
         event = build_provider_event(teams_envelope)
-        canonical = to_canonical_event(event, teams_envelope)
-        decision = to_approval_decision(canonical)
+        envelope = to_envelope(event, teams_envelope)
+        decision = to_approval_decision(envelope)
 
         assert isinstance(decision, ApprovalDecision)
         assert decision.approved is True
@@ -131,23 +127,21 @@ class TestTeamsPipeline:
 
 
 class TestIamPipeline:
-    def test_full_pipeline_to_security_event(self, cli_payload):
+    def test_full_pipeline_to_envelope(self, cli_payload):
         iam_req = IamIngressRequest.model_validate(cli_payload)
-        canonical = iam_request_to_canonical(
+        envelope = iam_request_to_envelope(
             iam_req, tenant_id="tenant-demo-001", request_id="req-iam-001"
         )
 
-        se = to_security_event(canonical)
-        assert se.event_type == "iam.onboarding"
-        assert se.user is not None
-        assert se.user.action == LifecycleAction.CREATE
-        assert se.user.user_data is not None
-        assert se.user.user_data["email"] == "john.doe@secamo.be"
+        assert isinstance(envelope.payload, IamOnboardingEvent)
+        assert envelope.payload.event_type == "iam.onboarding"
+        assert envelope.payload.action == LifecycleAction.CREATE
+        assert envelope.payload.user_data["email"] == "john.doe@secamo.be"
 
-        cmd = to_workflow_command(canonical)
+        cmd = to_workflow_command(envelope)
         assert isinstance(cmd, StartWorkflowCommand)
         assert cmd.workflow_name == "IamOnboardingWorkflow"
-        assert isinstance(cmd.workflow_input, SecurityEvent)
+        assert isinstance(cmd.workflow_input, Envelope)
 
 
 class TestExtraFieldsIgnored:

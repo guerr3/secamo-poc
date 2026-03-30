@@ -14,7 +14,7 @@ from connectors.errors import (
     ConnectorUnsupportedActionError,
 )
 from shared.graph_client import get_defender_token, get_graph_token
-from shared.models import CanonicalEvent
+from shared.models import Correlation, DefenderDetectionFindingEvent, Envelope, ImpossibleTravelEvent, StoragePartition, VendorExtension, derive_event_id
 
 
 class MicrosoftGraphConnector(BaseConnector):
@@ -160,40 +160,88 @@ class MicrosoftGraphConnector(BaseConnector):
     def _escape_odata_literal(value: str) -> str:
         return value.replace("'", "''")
 
-    def _map_event(self, item: dict[str, Any], resource_type: str, occurred_field: str, event_type: str, provider_event_type: str) -> CanonicalEvent:
+    def _map_event(self, item: dict[str, Any], resource_type: str, occurred_field: str, event_type: str, provider_event_type: str) -> Envelope:
         occurred_at = self._parse_iso_datetime(item.get(occurred_field))
+        if occurred_at is None:
+            occurred_at = datetime.now(timezone.utc)
         external_id = str(item.get("id") or item.get("alertId") or "")
 
-        base_payload: dict[str, Any] = {
-            "resource_type": resource_type,
-            "provider_event_type": provider_event_type,
-            **item,
-        }
+        if resource_type == "entra_signin_logs":
+            user_principal_name = str(item.get("userPrincipalName") or "unknown@example.com")
+            source_ip = str(item.get("ipAddress") or "0.0.0.0")
+            destination_ip = str(item.get("resourceDisplayName") or "") or None
+            payload = ImpossibleTravelEvent(
+                event_type="defender.impossible_travel",
+                activity_id=3002,
+                activity_name="poller.fetch",
+                user_principal_name=user_principal_name,
+                source_ip=source_ip,
+                destination_ip=destination_ip,
+                severity_id=40,
+                severity="medium",
+                vendor_extensions={
+                    "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
+                    "resource_type": VendorExtension(source=self.provider, value=resource_type),
+                },
+            )
+        else:
+            payload = DefenderDetectionFindingEvent(
+                event_type="defender.alert",
+                activity_id=2004,
+                activity_name="poller.fetch",
+                alert_id=external_id,
+                title=str(item.get("title") or external_id),
+                description=str(item.get("description") or ""),
+                severity_id=40,
+                severity=(item.get("severity") or "medium").lower(),
+                vendor_extensions={
+                    "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
+                    "resource_type": VendorExtension(source=self.provider, value=resource_type),
+                    "source_ip": VendorExtension(source=self.provider, value=item.get("ipAddress")),
+                    "device_id": VendorExtension(
+                        source=self.provider,
+                        value=(item.get("deviceEvidence") or [{}])[0].get("deviceId") if item.get("deviceEvidence") else None,
+                    ),
+                    "user_email": VendorExtension(
+                        source=self.provider,
+                        value=(item.get("userStates") or [{}])[0].get("userPrincipalName") if item.get("userStates") else None,
+                    ),
+                },
+            )
 
-        if resource_type == "defender_alerts":
-            payload = {
-                "alert_id": item.get("id", ""),
-                "severity": (item.get("severity") or "medium").lower(),
-                "title": item.get("title", ""),
-                "description": item.get("description", ""),
-                "device_id": (item.get("deviceEvidence") or [{}])[0].get("deviceId") if item.get("deviceEvidence") else None,
-                "user_email": (item.get("userStates") or [{}])[0].get("userPrincipalName") if item.get("userStates") else None,
-                "source_ip": item.get("ipAddress"),
-            }
-            base_payload.update(payload)
-
-        return CanonicalEvent(
-            event_type=event_type,
+        correlation_id = external_id or f"{self.tenant_id}:{provider_event_type}:{int(occurred_at.timestamp())}"
+        return Envelope(
+            event_id=derive_event_id(
+                tenant_id=self.tenant_id,
+                event_type=payload.event_type,
+                occurred_at=occurred_at,
+                correlation_id=correlation_id,
+                provider_event_id=external_id or None,
+            ),
             tenant_id=self.tenant_id,
-            provider=self.provider,
-            external_event_id=external_id or None,
-            subject=item.get("title") or item.get("userPrincipalName") or external_id,
-            severity=(item.get("severity") or "medium").lower() if item.get("severity") else None,
+            source_provider=self.provider,
+            event_name=payload.event_type,
+            schema_version="1.0.0",
+            event_version="1.0.0",
+            ocsf_version="1.1.0",
             occurred_at=occurred_at,
-            payload=base_payload,
+            correlation=Correlation(
+                correlation_id=correlation_id,
+                causation_id=correlation_id,
+                request_id=correlation_id,
+                trace_id=correlation_id,
+                storage_partition=StoragePartition(
+                    ddb_pk=f"TENANT#{self.tenant_id}",
+                    ddb_sk=f"EVENT#{payload.event_type.replace('.', '#')}#{external_id or 'poll'}",
+                    s3_bucket=f"secamo-events-{self.tenant_id}",
+                    s3_key_prefix=f"raw/{payload.event_type}/{external_id or 'poll'}",
+                ),
+            ),
+            payload=payload,
+            metadata={"provider_event_id": external_id, "resource_type": resource_type},
         )
 
-    async def fetch_events(self, query: dict) -> list[CanonicalEvent]:
+    async def fetch_events(self, query: dict) -> list[Envelope]:
         token = await get_graph_token(self.secrets)
         top = int(query.get("top", 20))
         resource_type = str(query.get("resource_type", "defender_alerts")).strip().lower() or "defender_alerts"
@@ -226,7 +274,7 @@ class MicrosoftGraphConnector(BaseConnector):
             params["$orderby"] = f"{filter_field} asc"
 
         headers = {"Authorization": f"Bearer {token}"}
-        events: list[CanonicalEvent] = []
+        events: list[Envelope] = []
         next_url: str | None = url
         next_params: dict[str, str] | None = params
         visited_urls: set[str] = set()

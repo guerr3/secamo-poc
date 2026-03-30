@@ -1,8 +1,7 @@
-"""
-shared.models.commands — Workflow command models.
+"""shared.models.commands — Workflow command models.
 
-Represent the intent to start or signal a Temporal workflow,
-generated from a CanonicalEvent by the mapper layer.
+Represent the intent to start or signal a Temporal workflow
+from canonical Envelope inputs.
 """
 
 from __future__ import annotations
@@ -11,10 +10,12 @@ from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from shared.models.canonical import Envelope
+
 
 class WorkflowCommand(BaseModel):
     """Base class for workflow commands."""
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     tenant_id: str
     command_type: Literal["start_workflow", "signal_workflow"]
@@ -27,7 +28,7 @@ class StartWorkflowCommand(WorkflowCommand):
     workflow_name: str
     workflow_id: Optional[str] = None
     task_queue: str
-    workflow_input: Any
+    workflow_input: Envelope
 
 
 class SignalWorkflowCommand(WorkflowCommand):

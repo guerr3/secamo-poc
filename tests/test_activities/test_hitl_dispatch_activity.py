@@ -8,7 +8,6 @@ from shared.models import (
     HitlCallbackBinding,
     HitlChannelDispatchResult,
     HiTLRequest,
-    TenantSecrets,
 )
 
 
@@ -25,20 +24,11 @@ def _sample_request(channels: list[str]) -> HiTLRequest:
     )
 
 
-def _sample_graph_secrets() -> TenantSecrets:
-    return TenantSecrets(
-        client_id="cid",
-        client_secret="secret",
-        tenant_azure_id="azure-tenant",
-    )
-
-
 @pytest.mark.asyncio
 async def test_request_hitl_approval_returns_typed_results_for_supported_and_unsupported_channels(
     monkeypatch,
 ) -> None:
     request = _sample_request(["email", "teams", "jira"])
-    graph_secrets = _sample_graph_secrets()
 
     monkeypatch.setattr(hitl_module.activity, "heartbeat", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -53,7 +43,7 @@ async def test_request_hitl_approval_returns_typed_results_for_supported_and_uns
         ),
     )
 
-    async def _email_ok(_request, _secrets, _binding):
+    async def _email_ok(_request, _binding):
         return HitlChannelDispatchResult(channel="email", success=True, message_id="mail-1")
 
     async def _teams_ok(_request, _binding):
@@ -62,7 +52,7 @@ async def test_request_hitl_approval_returns_typed_results_for_supported_and_uns
     monkeypatch.setattr(hitl_module, "_dispatch_email", _email_ok)
     monkeypatch.setattr(hitl_module, "_dispatch_teams", _teams_ok)
 
-    result = await hitl_module.request_hitl_approval("tenant-001", request, graph_secrets, None)
+    result = await hitl_module.request_hitl_approval("tenant-001", request)
 
     assert result.workflow_id == "child-hitl-123"
     assert result.run_id == "child-run-123"
@@ -78,7 +68,6 @@ async def test_request_hitl_approval_returns_typed_results_for_supported_and_uns
 @pytest.mark.asyncio
 async def test_request_hitl_approval_raises_when_all_channels_fail(monkeypatch) -> None:
     request = _sample_request(["jira"])
-    graph_secrets = _sample_graph_secrets()
 
     monkeypatch.setattr(hitl_module.activity, "heartbeat", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
@@ -94,6 +83,6 @@ async def test_request_hitl_approval_raises_when_all_channels_fail(monkeypatch) 
     )
 
     with pytest.raises(ApplicationError) as exc:
-        await hitl_module.request_hitl_approval("tenant-001", request, graph_secrets, None)
+        await hitl_module.request_hitl_approval("tenant-001", request)
 
     assert exc.value.type == "HiTLDispatchFailed"

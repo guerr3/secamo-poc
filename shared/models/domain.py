@@ -9,7 +9,7 @@ backwards compatibility.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, Optional
+from typing import Annotated, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -17,7 +17,7 @@ from shared.models.canonical import DefenderDetectionFindingEvent, Envelope
 
 
 class TenantSecrets(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     client_id: str
     client_secret: str = Field(repr=False)
@@ -35,7 +35,7 @@ class TenantSecrets(BaseModel):
 
 class GraphSubscriptionConfig(BaseModel):
     """Declarative per-tenant Graph subscription configuration."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     resource: str
     change_types: list[str] = Field(default_factory=lambda: ["created", "updated"])
@@ -48,7 +48,7 @@ class GraphSubscriptionConfig(BaseModel):
 
 class GraphSubscriptionState(BaseModel):
     """Persisted runtime state for a Graph subscription."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     subscription_id: str
     tenant_id: str
@@ -132,7 +132,7 @@ class TenantConfig(BaseModel):
 
 
 class PollingProviderConfig(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     provider: str
     resource_type: str
@@ -141,7 +141,7 @@ class PollingProviderConfig(BaseModel):
 
 
 class GraphUser(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     user_id: str
     email: str
@@ -151,7 +151,7 @@ class GraphUser(BaseModel):
 
 class DeviceDetail(BaseModel):
     """Defender for Endpoint machine entity fields from get-machine-by-id."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     id: str
     computerDnsName: str | None = None
@@ -175,7 +175,7 @@ class DeviceDetail(BaseModel):
 
 class RiskyUserResult(BaseModel):
     """Identity Protection riskyUser resource fields from Graph v1.0."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     id: str
     isDeleted: bool | None = None
@@ -195,7 +195,7 @@ class RiskyUserResult(BaseModel):
 
 class EnrichedAlert(BaseModel):
     """Output of graph_enrich_alert — alert + extra Graph context."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     alert_id: str
     severity: str
@@ -210,7 +210,7 @@ class EnrichedAlert(BaseModel):
 
 class ThreatIntelResult(BaseModel):
     """Result of threat intelligence lookup for an IP or indicator."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     indicator: str
     is_malicious: bool
@@ -221,7 +221,7 @@ class ThreatIntelResult(BaseModel):
 
 class RiskScore(BaseModel):
     """Calculated risk score for an alert."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     alert_id: str
     score: float              # 0.0 – 100.0
@@ -231,7 +231,7 @@ class RiskScore(BaseModel):
 
 class TicketData(BaseModel):
     """Input for creating or updating a ticket."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     tenant_id: str
     title: str
@@ -244,7 +244,7 @@ class TicketData(BaseModel):
 
 class TicketResult(BaseModel):
     """Result after ticket creation / update."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     ticket_id: str
     status: str
@@ -253,7 +253,7 @@ class TicketResult(BaseModel):
 
 class NotificationResult(BaseModel):
     """Result of a Teams or e-mail notification."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     success: bool
     channel: str              # "teams" | "email"
@@ -265,35 +265,65 @@ class NotificationResult(BaseModel):
 # ──────────────────────────────────────────────
 
 
-class ConnectorFetchResult(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class ConnectorFetchData(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
-    provider: str
     events: list[Envelope] = Field(default_factory=list)
     raw_count: int = 0
 
 
-class ConnectorActionResult(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class ConnectorActionData(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
-    provider: str
     action: str
+    payload: dict = Field(default_factory=dict)
+
+
+class ConnectorHealthData(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    healthy: bool
+
+
+class ConnectorFetchResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    operation_type: Literal["fetch"] = "fetch"
+    provider: str
+    success: bool = True
+    details: str = "fetch completed"
+    data: ConnectorFetchData
+
+
+class ConnectorActionResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True)
+
+    operation_type: Literal["action"] = "action"
+    provider: str
     success: bool
     details: str = ""
-    data: dict = Field(default_factory=dict)
+    data: ConnectorActionData
 
 
 class ConnectorHealthResult(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
+    operation_type: Literal["health"] = "health"
     provider: str
-    healthy: bool
+    success: bool
     details: str = ""
+    data: ConnectorHealthData
+
+
+ConnectorResult = Annotated[
+    ConnectorFetchResult | ConnectorActionResult | ConnectorHealthResult,
+    Field(discriminator="operation_type"),
+]
 
 
 class ApprovalDecision(BaseModel):
     """Signal payload for the HITL approval step in WF-05."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     approved: bool
     reviewer: str
@@ -331,7 +361,7 @@ class HitlCallbackBinding(BaseModel):
 
 class HitlChannelDispatchResult(BaseModel):
     """Per-channel outbound delivery result for HITL requests."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     channel: str
     success: bool
@@ -342,7 +372,7 @@ class HitlChannelDispatchResult(BaseModel):
 
 class HitlDispatchResult(BaseModel):
     """Typed aggregate result returned by request_hitl_approval activity."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     workflow_id: str
     run_id: str = ""
@@ -354,7 +384,7 @@ class HitlDispatchResult(BaseModel):
 
 class EvidenceBundle(BaseModel):
     """Collected evidence bundle for compliance/audit trail."""
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     workflow_id: str
     tenant_id: str
@@ -368,33 +398,31 @@ class EvidenceBundle(BaseModel):
 # ──────────────────────────────────────────────
 
 class ThreatIntelEnrichmentRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     tenant_id: str
     indicator: str
     providers: list[str] = Field(default_factory=list)
-    ti_secrets: TenantSecrets
 
 
 class AlertEnrichmentRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     tenant_id: str
     alert: DefenderDetectionFindingEvent
     edr_provider: str
-    graph_secrets: TenantSecrets
     threat_intel: ThreatIntelResult | None = None
 
 
 class AlertEnrichmentResult(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     enriched_alert: EnrichedAlert
     risk_score: RiskScore
 
 
 class TicketCreationRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     tenant_id: str
     title: str
@@ -402,7 +430,6 @@ class TicketCreationRequest(BaseModel):
     severity: str
     source_workflow: str
     ticketing_provider: str
-    ticketing_secrets: TenantSecrets
 
 
 class HiTLApprovalRequest(BaseModel):
@@ -410,16 +437,16 @@ class HiTLApprovalRequest(BaseModel):
 
     tenant_id: str
     hitl_request: HiTLRequest
-    config: TenantConfig
-    graph_secrets: TenantSecrets
-    ticketing_secrets: TenantSecrets
+    hitl_timeout_hours: int = 8
+    auto_isolate_on_timeout: bool = False
+    escalation_enabled: bool = True
     edr_provider: str = "microsoft_defender"
     ticketing_provider: str = "jira"
     device_id: str | None = None
 
 
 class IncidentResponseRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     tenant_id: str
     decision: ApprovalDecision
@@ -427,9 +454,7 @@ class IncidentResponseRequest(BaseModel):
     user_email: str
     device_id: str | None = None
     ticket_id: str
-    config: TenantConfig
-    graph_secrets: TenantSecrets
-    ticketing_secrets: TenantSecrets
+    evidence_bundle_enabled: bool = True
     edr_provider: str = "microsoft_defender"
     ticketing_provider: str = "jira"
     parent_workflow_id: str
@@ -439,16 +464,15 @@ class IncidentResponseRequest(BaseModel):
 
 
 class UserDeprovisioningRequest(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     tenant_id: str
     user_id: str
     user_email: str
-    secrets: TenantSecrets
 
 
 class PollingManagerInput(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     tenant_id: str
     provider: str
@@ -460,7 +484,7 @@ class PollingManagerInput(BaseModel):
 
 
 class GraphSubscriptionManagerInput(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+    model_config = ConfigDict(from_attributes=True, frozen=True)
 
     tenant_id: str
     notification_url: str

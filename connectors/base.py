@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from shared.models import CanonicalEvent, TenantSecrets
+from shared.models import Envelope, TenantSecrets
 
 
 class BaseConnector(ABC):
@@ -18,8 +18,8 @@ class BaseConnector(ABC):
         """Stable provider identifier used by the registry."""
 
     @abstractmethod
-    async def fetch_events(self, query: dict) -> list[CanonicalEvent]:
-        """Fetch and normalize provider events into CanonicalEvent objects."""
+    async def fetch_events(self, query: dict) -> list[Envelope]:
+        """Fetch and normalize provider events into Envelope objects."""
 
     @abstractmethod
     async def execute_action(self, action: str, payload: dict) -> dict:

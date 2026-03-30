@@ -30,24 +30,19 @@ class TicketCreationWorkflow:
                 request.ticketing_provider,
                 "create_ticket",
                 {
-                    "project_key": request.ticketing_secrets.project_key or "SOC",
                     "title": request.title,
                     "description": request.description,
                     "issue_type": "Incident",
                 },
-                request.ticketing_secrets,
             ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
         )
 
-        ticket_key = result.data.get("key", "UNKNOWN")
+        ticket_key = str(result.data.payload.get("key") or result.data.payload.get("ticket_id") or "UNKNOWN")
+        ticket_url = str(result.data.payload.get("url") or "")
         return TicketResult(
             ticket_id=ticket_key,
             status="open",
-            url=(
-                f"{request.ticketing_secrets.jira_base_url}/browse/{ticket_key}"
-                if request.ticketing_secrets.jira_base_url
-                else ""
-            ),
+            url=ticket_url,
         )

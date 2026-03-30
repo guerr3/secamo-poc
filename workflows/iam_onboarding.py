@@ -13,7 +13,6 @@ with workflow.unsafe.imports_passed_through():
         LifecycleAction,
         PollingManagerInput,
         TenantConfig,
-        TenantSecrets,
         UserDeprovisioningRequest,
     )
     from shared.models.canonical import Envelope, IamOnboardingEvent
@@ -60,13 +59,10 @@ class IamOnboardingWorkflow:
             f"action={action.value}, user={user_email}"
         )
 
-        config: TenantConfig
-        secrets: TenantSecrets
-        config, secrets = await bootstrap_tenant(
+        config: TenantConfig = await bootstrap_tenant(
             tenant_id=event.tenant_id,
             retry_policy=RETRY_POLICY,
             timeout=TIMEOUT,
-            secret_type="graph",
         )
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
 
@@ -99,7 +95,7 @@ class IamOnboardingWorkflow:
         # 3. Idempotency check — kijk of gebruiker al bestaat
         existing_user: GraphUser | None = await workflow.execute_activity(
             graph_get_user,
-            args=[event.tenant_id, user_email, secrets],
+            args=[event.tenant_id, user_email],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
@@ -116,7 +112,7 @@ class IamOnboardingWorkflow:
             else:
                 new_user: GraphUser = await workflow.execute_activity(
                     graph_create_user,
-                    args=[event.tenant_id, user_data, secrets],
+                    args=[event.tenant_id, user_data],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=runtime_retry,
                 )
@@ -129,7 +125,6 @@ class IamOnboardingWorkflow:
                             event.tenant_id,
                             new_user.user_id,
                             user_data["license_sku"],
-                            secrets,
                         ],
                         start_to_close_timeout=TIMEOUT,
                         retry_policy=runtime_retry,
@@ -153,7 +148,6 @@ class IamOnboardingWorkflow:
                         "department": user_data.get("department", ""),
                         "jobTitle": user_data.get("role", ""),
                     },
-                    secrets,
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,
@@ -171,7 +165,6 @@ class IamOnboardingWorkflow:
                     tenant_id=event.tenant_id,
                     user_id=existing_user.user_id,
                     user_email=existing_user.email,
-                    secrets=secrets,
                 ),
                 id=f"{workflow.info().workflow_id}-deprovision",
                 task_queue="iam-graph",
@@ -189,7 +182,6 @@ class IamOnboardingWorkflow:
                     event.tenant_id,
                     existing_user.user_id,
                     "TempP@ss2025!",  # TODO: genereer veilig wachtwoord
-                    secrets,
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,

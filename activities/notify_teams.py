@@ -5,6 +5,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from activities._activity_errors import application_error_from_http_status, raise_activity_error
+from activities._tenant_secrets import load_tenant_secrets
 from shared.models import NotificationResult
 
 
@@ -15,7 +16,12 @@ def _result(success: bool, channel: str, message_id: str | None = None) -> Notif
 @activity.defn
 async def teams_send_notification(tenant_id: str, channel_webhook_url: str, message: str) -> NotificationResult:
     activity.logger.info(f"[{tenant_id}] teams_send_notification")
-    if not channel_webhook_url:
+    resolved_webhook_url = channel_webhook_url.strip()
+    if not resolved_webhook_url:
+        secrets = load_tenant_secrets(tenant_id, "graph")
+        resolved_webhook_url = str(secrets.teams_webhook_url or "").strip()
+
+    if not resolved_webhook_url:
         raise_activity_error(
             f"[{tenant_id}] teams_send_notification missing webhook url",
             error_type="MissingTeamsWebhook",
@@ -26,7 +32,7 @@ async def teams_send_notification(tenant_id: str, channel_webhook_url: str, mess
     try:
         async with httpx.AsyncClient(timeout=30.0) as client:
             response = await client.post(
-                channel_webhook_url,
+                resolved_webhook_url,
                 headers={"Content-Type": "application/json"},
                 json=payload,
             )

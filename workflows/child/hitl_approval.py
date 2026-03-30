@@ -55,8 +55,6 @@ class HiTLApprovalWorkflow:
             args=[
                 request.tenant_id,
                 child_hitl_request,
-                request.graph_secrets,
-                request.ticketing_secrets,
             ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
@@ -67,11 +65,11 @@ class HiTLApprovalWorkflow:
             [item.channel for item in dispatch_result.channel_results],
         )
 
-        approval_timeout = timedelta(hours=request.config.hitl_timeout_hours)
+        approval_timeout = timedelta(hours=request.hitl_timeout_hours)
         try:
             await workflow.wait_condition(lambda: self._approval is not None, timeout=approval_timeout)
         except TimeoutError:
-            if request.config.auto_isolate_on_timeout and request.device_id:
+            if request.auto_isolate_on_timeout and request.device_id:
                 await workflow.execute_activity(
                     connector_execute_action,
                     args=[
@@ -82,13 +80,12 @@ class HiTLApprovalWorkflow:
                             "device_id": request.device_id,
                             "comment": "Automatic isolation after HITL timeout",
                         },
-                        request.graph_secrets,
                     ],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,
                 )
 
-            if request.config.escalation_enabled and child_hitl_request.ticket_key:
+            if request.escalation_enabled and child_hitl_request.ticket_key:
                 await workflow.execute_activity(
                     connector_execute_action,
                     args=[
@@ -102,7 +99,6 @@ class HiTLApprovalWorkflow:
                                 "note": "Geen beslissing binnen timeout — geescaleerd.",
                             },
                         },
-                        request.ticketing_secrets,
                     ],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,

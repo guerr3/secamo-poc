@@ -9,14 +9,12 @@ with workflow.unsafe.imports_passed_through():
         AlertEnrichmentResult,
         TicketResult,
         TenantConfig,
-        TenantSecrets,
         ThreatIntelEnrichmentRequest,
         ThreatIntelResult,
         TicketCreationRequest,
     )
     from shared.models.canonical import DefenderDetectionFindingEvent, Envelope
     from shared.workflow_helpers import bootstrap_tenant
-    from activities.tenant import get_tenant_secrets
     from activities.notify_teams import teams_send_notification
     from activities.audit import create_audit_log
     from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
@@ -54,44 +52,24 @@ class DefenderAlertEnrichmentWorkflow:
             f"alert={payload.alert_id}, severity={payload.severity}"
         )
 
-        config: TenantConfig
-        graph_secrets: TenantSecrets
-        config, graph_secrets = await bootstrap_tenant(
+        config: TenantConfig = await bootstrap_tenant(
             tenant_id=event.tenant_id,
             retry_policy=RETRY_POLICY,
             timeout=TIMEOUT,
-            secret_type="graph",
         )
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
 
-        ticketing_secrets: TenantSecrets | None = None
-        if config.auto_ticket_creation:
-            ticketing_secrets = await workflow.execute_activity(
-                get_tenant_secrets,
-                args=[event.tenant_id, "ticketing"],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-
-        ti_secrets: TenantSecrets | None = None
-        if config.threat_intel_enabled:
-            ti_secrets = await workflow.execute_activity(
-                get_tenant_secrets,
-                args=[event.tenant_id, "threatintel"],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
+        ticketing_enabled = config.auto_ticket_creation
 
         # 4. Threat intelligence lookup
         indicator = source_ip or destination_ip or ""
-        if config.threat_intel_enabled and ti_secrets:
+        if config.threat_intel_enabled:
             threat_intel = await workflow.execute_child_workflow(
                 ThreatIntelEnrichmentWorkflow.run,
                 ThreatIntelEnrichmentRequest(
                     tenant_id=event.tenant_id,
                     indicator=indicator,
                     providers=config.threat_intel_providers,
-                    ti_secrets=ti_secrets,
                 ),
                 id=f"{workflow.info().workflow_id}-ti",
                 task_queue="soc-defender",
@@ -112,7 +90,6 @@ class DefenderAlertEnrichmentWorkflow:
                 tenant_id=event.tenant_id,
                 alert=payload,
                 edr_provider=config.edr_provider,
-                graph_secrets=graph_secrets,
                 threat_intel=threat_intel,
             ),
             id=f"{workflow.info().workflow_id}-alert-enrichment",
@@ -122,7 +99,7 @@ class DefenderAlertEnrichmentWorkflow:
         risk = enrich_and_risk.risk_score
 
         ticket = TicketResult(ticket_id="NOT-CREATED", status="skipped", url="")
-        if config.auto_ticket_creation and ticketing_secrets:
+        if ticketing_enabled:
             ticket = await workflow.execute_child_workflow(
                 TicketCreationWorkflow.run,
                 TicketCreationRequest(
@@ -141,7 +118,6 @@ class DefenderAlertEnrichmentWorkflow:
                     severity=risk.level,
                     source_workflow="WF-02",
                     ticketing_provider=config.ticketing_provider,
-                    ticketing_secrets=ticketing_secrets,
                 ),
                 id=f"{workflow.info().workflow_id}-ticket",
                 task_queue="soc-defender",
@@ -158,7 +134,7 @@ class DefenderAlertEnrichmentWorkflow:
         try:
             await workflow.execute_activity(
                 teams_send_notification,
-                args=[event.tenant_id, graph_secrets.teams_webhook_url or "", notification_msg],
+                args=[event.tenant_id, "", notification_msg],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,
             )

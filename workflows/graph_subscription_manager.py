@@ -13,13 +13,12 @@ with workflow.unsafe.imports_passed_through():
         load_subscription_metadata,
         renew_graph_subscription,
     )
-    from activities.tenant import get_tenant_config, get_tenant_secrets
+    from activities.tenant import get_tenant_config
     from shared.models import (
         GraphSubscriptionConfig,
         GraphSubscriptionManagerInput,
         GraphSubscriptionState,
         TenantConfig,
-        TenantSecrets,
     )
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -52,12 +51,6 @@ class GraphSubscriptionManagerWorkflow:
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
         )
-        secrets: TenantSecrets = await workflow.execute_activity(
-            get_tenant_secrets,
-            args=[input.tenant_id, input.secret_type],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
-        )
 
         current = await workflow.execute_activity(
             load_subscription_metadata,
@@ -78,7 +71,7 @@ class GraphSubscriptionManagerWorkflow:
                 args=[
                     input.tenant_id,
                     desired_subscription,
-                    secrets,
+                    input.secret_type,
                     input.notification_url,
                     self._client_state(input.tenant_id, desired_subscription),
                 ],
@@ -92,7 +85,7 @@ class GraphSubscriptionManagerWorkflow:
             stale = current_by_resource[resource]
             await workflow.execute_activity(
                 delete_graph_subscription,
-                args=[input.tenant_id, stale.subscription_id, secrets],
+                args=[input.tenant_id, stale.subscription_id, input.secret_type],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
@@ -102,7 +95,7 @@ class GraphSubscriptionManagerWorkflow:
             for subscription in current_by_resource.values():
                 await workflow.execute_activity(
                     delete_graph_subscription,
-                    args=[input.tenant_id, subscription.subscription_id, secrets],
+                    args=[input.tenant_id, subscription.subscription_id, input.secret_type],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,
                 )
@@ -121,7 +114,7 @@ class GraphSubscriptionManagerWorkflow:
                         input.tenant_id,
                         state.subscription_id,
                         desired_subscription.expiration_hours,
-                        secrets,
+                        input.secret_type,
                     ],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,

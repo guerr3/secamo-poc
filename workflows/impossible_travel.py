@@ -12,7 +12,6 @@ with workflow.unsafe.imports_passed_through():
         HiTLRequest,
         IncidentResponseRequest,
         TenantConfig,
-        TenantSecrets,
         ThreatIntelEnrichmentRequest,
         ThreatIntelResult,
         TicketCreationRequest,
@@ -20,7 +19,6 @@ with workflow.unsafe.imports_passed_through():
     )
     from shared.models.canonical import Envelope, ImpossibleTravelEvent
     from shared.workflow_helpers import bootstrap_tenant
-    from activities.tenant import get_tenant_secrets
     from activities.graph_users import graph_get_user
     from activities.connector_dispatch import connector_execute_action
     from workflows.child.hitl_approval import HiTLApprovalWorkflow
@@ -57,51 +55,30 @@ class ImpossibleTravelWorkflow:
             f"user={payload.user_principal_name}, alert={event.event_id}"
         )
 
-        config: TenantConfig
-        graph_secrets: TenantSecrets
-        config, graph_secrets = await bootstrap_tenant(
+        config: TenantConfig = await bootstrap_tenant(
             tenant_id=event.tenant_id,
             retry_policy=RETRY_POLICY,
             timeout=TIMEOUT,
-            secret_type="graph",
         )
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
-
-        ticketing_secrets: TenantSecrets = await workflow.execute_activity(
-            get_tenant_secrets,
-            args=[event.tenant_id, "ticketing"],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=runtime_retry,
-        )
-
-        ti_secrets: TenantSecrets | None = None
-        if config.threat_intel_enabled:
-            ti_secrets = await workflow.execute_activity(
-                get_tenant_secrets,
-                args=[event.tenant_id, "threatintel"],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
 
         # 2. Gebruikersgegevens ophalen
         user: GraphUser | None = await workflow.execute_activity(
             graph_get_user,
-            args=[event.tenant_id, payload.user_principal_name, graph_secrets],
+            args=[event.tenant_id, payload.user_principal_name],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
 
         user_display = user.display_name if user else payload.user_principal_name
 
-                    "user_email": payload.user_principal_name},
-        if config.threat_intel_enabled and ti_secrets:
+        if config.threat_intel_enabled:
             threat_intel = await workflow.execute_child_workflow(
                 ThreatIntelEnrichmentWorkflow.run,
                 ThreatIntelEnrichmentRequest(
                     tenant_id=event.tenant_id,
                     indicator=source_ip or "",
                     providers=config.threat_intel_providers,
-                    ti_secrets=ti_secrets,
                 ),
                 id=f"{workflow.info().workflow_id}-ti",
                 task_queue="soc-defender",
@@ -123,12 +100,11 @@ class ImpossibleTravelWorkflow:
                 config.edr_provider,
                 "get_user_alerts",
                 {"user_email": payload.user_principal_name},
-                graph_secrets,
             ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
-        recent_alerts: list[dict] = alerts_result.data.get("alerts", [])
+        recent_alerts: list[dict] = alerts_result.data.payload.get("alerts", [])
 
         # 5. Ticket aanmaken via child workflow
         ticket: TicketResult = await workflow.execute_child_workflow(
@@ -148,7 +124,6 @@ class ImpossibleTravelWorkflow:
                 severity=(payload.severity or "high"),
                 source_workflow="WF-05",
                 ticketing_provider=config.ticketing_provider,
-                ticketing_secrets=ticketing_secrets,
             ),
             id=f"{workflow.info().workflow_id}-ticket",
             task_queue="soc-defender",
@@ -187,9 +162,9 @@ class ImpossibleTravelWorkflow:
             HiTLApprovalRequest(
                 tenant_id=event.tenant_id,
                 hitl_request=hitl_request,
-                config=config,
-                graph_secrets=graph_secrets,
-                ticketing_secrets=ticketing_secrets,
+                hitl_timeout_hours=config.hitl_timeout_hours,
+                auto_isolate_on_timeout=config.auto_isolate_on_timeout,
+                escalation_enabled=config.escalation_enabled,
                 edr_provider=config.edr_provider,
                 ticketing_provider=config.ticketing_provider,
                 device_id=None,
@@ -215,9 +190,7 @@ class ImpossibleTravelWorkflow:
                 user_email=payload.user_principal_name,
                 device_id=None,
                 ticket_id=ticket.ticket_id,
-                config=config,
-                graph_secrets=graph_secrets,
-                ticketing_secrets=ticketing_secrets,
+                evidence_bundle_enabled=config.evidence_bundle_enabled,
                 edr_provider=config.edr_provider,
                 ticketing_provider=config.ticketing_provider,
                 parent_workflow_id=workflow.info().workflow_id,

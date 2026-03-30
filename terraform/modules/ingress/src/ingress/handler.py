@@ -39,6 +39,7 @@ from shared.models.canonical import (
     VendorExtension,
     derive_event_id,
 )
+from shared.models.mappers import resolve_provider_event_route
 from shared.routing import build_default_route_registry
 from shared.temporal.dispatcher import RouteFanoutDispatcher, WorkflowStarter
 from shared.auth import AuthValidationRequest, CachedSecretResolver, build_default_validator_registry
@@ -242,17 +243,6 @@ async def _validate_provider_authentication(*, event: IngressEvent, tenant_id: s
         validation.details,
     )
     return False
-
-
-PROVIDER_EVENT_ROUTING = {
-    ("microsoft_defender", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
-    ("microsoft_defender", "impossible_travel"): ("ImpossibleTravelWorkflow", "soc-defender"),
-    ("crowdstrike", "detection_summary"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
-    ("crowdstrike", "impossible_travel"): ("ImpossibleTravelWorkflow", "soc-defender"),
-    ("sentinelone", "alert"): ("DefenderAlertEnrichmentWorkflow", "soc-defender"),
-    ("jira", "jira:issue_created"): ("IamOnboardingWorkflow", "iam-graph"),
-    ("jira", "jira:issue_updated"): ("IamOnboardingWorkflow", "iam-graph"),
-}
 
 
 # ── Route: /api/v1/hitl/respond ─────────────────────────────
@@ -676,7 +666,7 @@ def _build_envelope(
 
 
 async def _dispatch_provider_event(*, raw_body: dict, provider: str, event_type: str, tenant_id: str) -> dict:
-    routing = PROVIDER_EVENT_ROUTING.get((provider, event_type))
+    routing = resolve_provider_event_route(provider, event_type)
     if routing is None:
         return response.error(
             400,
@@ -689,6 +679,7 @@ async def _dispatch_provider_event(*, raw_body: dict, provider: str, event_type:
         tenant_id=tenant_id,
         raw_body=raw_body,
     )
+    canonical_event_type = str(normalized.get("event_type") or event_type).strip().lower()
 
     try:
         envelope = _build_envelope(
@@ -696,7 +687,7 @@ async def _dispatch_provider_event(*, raw_body: dict, provider: str, event_type:
             normalized=normalized,
             provider=provider,
             tenant_id=tenant_id,
-            event_type=event_type,
+            event_type=canonical_event_type,
         )
     except Exception as exc:
         return response.error(400, f"Normalized ingress payload failed Envelope validation: {exc}")

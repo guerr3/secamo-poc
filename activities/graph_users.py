@@ -9,8 +9,9 @@ import httpx
 from temporalio import activity
 
 from activities._activity_errors import application_error_from_http_status
+from activities._tenant_secrets import load_tenant_secrets
 from shared.graph_client import get_graph_token
-from shared.models import GraphUser, TenantSecrets
+from shared.models import GraphUser
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -61,8 +62,9 @@ def _generate_password(length: int = 16) -> str:
 
 
 @activity.defn
-async def graph_get_user(tenant_id: str, email: str, secrets: TenantSecrets) -> Optional[GraphUser]:
+async def graph_get_user(tenant_id: str, email: str) -> Optional[GraphUser]:
     activity.logger.info(f"[{tenant_id}] graph_get_user: {email}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     url = f"{GRAPH_BASE}/users/{quote(email)}?$select=id,displayName,mail,userPrincipalName,accountEnabled"
 
@@ -91,7 +93,7 @@ async def graph_get_user(tenant_id: str, email: str, secrets: TenantSecrets) -> 
 
 
 @activity.defn
-async def graph_create_user(tenant_id: str, user_data: dict[str, Any], secrets: TenantSecrets) -> GraphUser:
+async def graph_create_user(tenant_id: str, user_data: dict[str, Any]) -> GraphUser:
     user_email = str(user_data.get("email", ""))
     first_name = str(user_data.get("first_name", ""))
     last_name = str(user_data.get("last_name", ""))
@@ -99,6 +101,7 @@ async def graph_create_user(tenant_id: str, user_data: dict[str, Any], secrets: 
     role = str(user_data.get("role", ""))
 
     activity.logger.info(f"[{tenant_id}] graph_create_user: {user_email}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     temp_password = _generate_password(16)
     url = f"{GRAPH_BASE}/users"
@@ -125,7 +128,7 @@ async def graph_create_user(tenant_id: str, user_data: dict[str, Any], secrets: 
         response_body = {}
     if _is_user_exists_conflict(response.status_code, response_body):
         # Idempotent behavior: retries should resolve to the existing user record.
-        existing_user = await graph_get_user(tenant_id, user_email, secrets)
+        existing_user = await graph_get_user(tenant_id, user_email)
         if existing_user is not None:
             return existing_user
 
@@ -149,8 +152,9 @@ async def graph_create_user(tenant_id: str, user_data: dict[str, Any], secrets: 
 
 
 @activity.defn
-async def graph_update_user(tenant_id: str, user_id: str, updates: dict, secrets: TenantSecrets) -> bool:
+async def graph_update_user(tenant_id: str, user_id: str, updates: dict) -> bool:
     activity.logger.info(f"[{tenant_id}] graph_update_user: {user_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     patch_url = f"{GRAPH_BASE}/users/{quote(user_id)}"
 
@@ -172,8 +176,9 @@ async def graph_update_user(tenant_id: str, user_id: str, updates: dict, secrets
 
 
 @activity.defn
-async def graph_delete_user(tenant_id: str, user_id: str, secrets: TenantSecrets) -> bool:
+async def graph_delete_user(tenant_id: str, user_id: str) -> bool:
     activity.logger.info(f"[{tenant_id}] graph_delete_user: {user_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     url = f"{GRAPH_BASE}/users/{quote(user_id)}"
 
@@ -195,8 +200,9 @@ async def graph_delete_user(tenant_id: str, user_id: str, secrets: TenantSecrets
 
 
 @activity.defn
-async def graph_revoke_sessions(tenant_id: str, user_id: str, secrets: TenantSecrets) -> bool:
+async def graph_revoke_sessions(tenant_id: str, user_id: str) -> bool:
     activity.logger.info(f"[{tenant_id}] graph_revoke_sessions: {user_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     url = f"{GRAPH_BASE}/users/{quote(user_id)}/revokeSignInSessions"
 
@@ -216,8 +222,9 @@ async def graph_revoke_sessions(tenant_id: str, user_id: str, secrets: TenantSec
 
 
 @activity.defn
-async def graph_assign_license(tenant_id: str, user_id: str, sku_id: str, secrets: TenantSecrets) -> bool:
+async def graph_assign_license(tenant_id: str, user_id: str, sku_id: str) -> bool:
     activity.logger.info(f"[{tenant_id}] graph_assign_license: {user_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     url = f"{GRAPH_BASE}/users/{quote(user_id)}/assignLicense"
     payload = {
@@ -241,8 +248,9 @@ async def graph_assign_license(tenant_id: str, user_id: str, sku_id: str, secret
 
 
 @activity.defn
-async def graph_reset_password(tenant_id: str, user_id: str, temp_password: str, secrets: TenantSecrets) -> bool:
+async def graph_reset_password(tenant_id: str, user_id: str, temp_password: str) -> bool:
     activity.logger.info(f"[{tenant_id}] graph_reset_password: {user_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     url = f"{GRAPH_BASE}/users/{quote(user_id)}"
     password_value = temp_password or _generate_password(16)

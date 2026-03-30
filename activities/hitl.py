@@ -15,6 +15,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from activities._activity_errors import application_error_from_http_status, raise_activity_error
+from activities._tenant_secrets import load_tenant_secrets
 from activities.tenant import get_tenant_config
 from shared.config import SECAMO_SENDER_EMAIL
 from shared.graph_client import get_graph_token
@@ -25,7 +26,6 @@ from shared.models import (
     HitlChannelDispatchResult,
     HitlDispatchResult,
     HiTLRequest,
-    TenantSecrets,
 )
 from shared.providers.factory import get_chatops_provider
 from shared.ssm_client import get_secret_bundle
@@ -154,7 +154,6 @@ def _build_callback_binding(request: HiTLRequest) -> HitlCallbackBinding:
 
 async def _dispatch_email(
     request: HiTLRequest,
-    graph_secrets: TenantSecrets,
     binding: HitlCallbackBinding,
 ) -> HitlChannelDispatchResult:
     action_urls = {
@@ -163,6 +162,7 @@ async def _dispatch_email(
     }
 
     email_html = _render_approval_email(request, action_urls)
+    graph_secrets = load_tenant_secrets(request.tenant_id, "graph")
     graph_token = await get_graph_token(graph_secrets)
 
     payload = {
@@ -266,11 +266,7 @@ async def _dispatch_teams(
 async def request_hitl_approval(
     tenant_id: str,
     request: HiTLRequest,
-    graph_secrets: TenantSecrets,
-    jira_secrets: TenantSecrets | None = None,
 ) -> HitlDispatchResult:
-    _ = jira_secrets
-
     activity.logger.info(
         "[%s] request_hitl_approval workflow_id=%s channels=%s",
         tenant_id,
@@ -284,7 +280,7 @@ async def request_hitl_approval(
     async def _dispatch_channel(channel: str) -> HitlChannelDispatchResult:
         normalized = channel.strip().lower()
         if normalized == "email":
-            return await _dispatch_email(request, graph_secrets, binding)
+            return await _dispatch_email(request, binding)
         if normalized == "teams":
             return await _dispatch_teams(request, binding)
         return _dispatch_error(channel, "UnsupportedChannel", f"HiTL channel '{channel}' is not supported")

@@ -36,6 +36,14 @@ async def test_teams_send_notification_happy(mocker):
 
 
 @pytest.mark.asyncio
+async def test_teams_send_notification_loads_fallback_webhook_from_tenant_secrets(mocker):
+    mocker.patch("activities.notify_teams.load_tenant_secrets", return_value=TenantSecrets(client_id="c", client_secret="s", tenant_azure_id="t", teams_webhook_url="https://fallback.webhook"))
+    mocker.patch("activities.notify_teams.httpx.AsyncClient", return_value=_Client(_Resp(200, {"x-ms-request-id": "m2"})))
+    res = await teams_send_notification("t1", "", "hello")
+    assert res.success is True
+
+
+@pytest.mark.asyncio
 async def test_teams_send_adaptive_card_error(mocker):
     mocker.patch("activities.notify_teams.httpx.AsyncClient", return_value=_Client(_Resp(500)))
     with pytest.raises(ApplicationError):

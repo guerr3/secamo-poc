@@ -143,3 +143,24 @@ async def test_graph_isolate_uses_defender_token(mocker, graph_secrets):
     defender_token.assert_awaited_once()
     graph_token.assert_not_awaited()
     assert calls[0]["headers"]["Authorization"] == "Bearer defender-tok"
+
+
+@pytest.mark.asyncio
+async def test_jira_create_ticket_uses_secret_project_key_fallback(mocker, jira_secrets):
+    queue = [_Resp(201, body={"key": "SOC-101"}, content=b'{"key":"SOC-101"}')]
+    calls: list[dict[str, Any]] = []
+
+    secrets_with_project = jira_secrets.model_copy(update={"project_key": "TENANTSOC"})
+    mocker.patch(
+        "connectors.jira.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = JiraConnector(tenant_id="tenant-1", secrets=secrets_with_project)
+    result = await connector.execute_action(
+        "create_ticket",
+        {"title": "Example", "description": "Desc", "issue_type": "Incident"},
+    )
+
+    assert result["key"] == "SOC-101"
+    assert calls[0]["json"]["fields"]["project"]["key"] == "TENANTSOC"

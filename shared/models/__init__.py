@@ -13,9 +13,13 @@ from shared.models.domain import (
     AlertEnrichmentResult,
     ApprovalDecision,
     ChatOpsConfig,
+    ConnectorActionData,
     ConnectorActionResult,
+    ConnectorFetchData,
     ConnectorFetchResult,
+    ConnectorHealthData,
     ConnectorHealthResult,
+    ConnectorResult,
     EnrichedAlert,
     EvidenceBundle,
     DeviceDetail,
@@ -62,19 +66,13 @@ from shared.models.provider_events import (
 
 # ── Canonical event ──────────────────────────────────────────
 from shared.models.canonical import (
-    AlertData,
-    CanonicalEvent,
     Correlation,
     DefenderDetectionFindingEvent,
-    DeviceContext,
     Envelope,
     HitlApprovalEvent,
     IamOnboardingEvent,
     ImpossibleTravelEvent,
-    NetworkContext,
-    SecurityEvent,
     StoragePartition,
-    UserContext,
     VendorExtension,
     VendorExtensions,
     derive_event_id,
@@ -95,20 +93,18 @@ def _legacy_mapper_unavailable(*_args, **_kwargs):
 try:
     from shared.models.mappers import (
         build_provider_event,
-        iam_request_to_canonical,
+        iam_request_to_envelope,
         resolve_webhook_route,
         to_approval_decision,
-        to_canonical_event,
-        to_security_event,
+        to_envelope,
         to_workflow_command,
     )
 except Exception:
     build_provider_event = _legacy_mapper_unavailable
-    iam_request_to_canonical = _legacy_mapper_unavailable
+    iam_request_to_envelope = _legacy_mapper_unavailable
     resolve_webhook_route = _legacy_mapper_unavailable
     to_approval_decision = _legacy_mapper_unavailable
-    to_canonical_event = _legacy_mapper_unavailable
-    to_security_event = _legacy_mapper_unavailable
+    to_envelope = _legacy_mapper_unavailable
     to_workflow_command = _legacy_mapper_unavailable
 
 __all__ = [
@@ -123,9 +119,13 @@ __all__ = [
     "ChatOpsAction",
     "ChatOpsMessage",
     "ChatOpsProvider",
+    "ConnectorActionData",
     "ConnectorActionResult",
+    "ConnectorFetchData",
     "ConnectorFetchResult",
+    "ConnectorHealthData",
     "ConnectorHealthResult",
+    "ConnectorResult",
     "DeviceDetail",
     "EnrichedAlert",
     "EvidenceBundle",
@@ -166,19 +166,13 @@ __all__ = [
     "ProviderEvent",
     "TeamsApprovalCallback",
     # canonical
-    "AlertData",
-    "CanonicalEvent",
     "Correlation",
     "DefenderDetectionFindingEvent",
-    "DeviceContext",
     "Envelope",
     "HitlApprovalEvent",
     "IamOnboardingEvent",
     "ImpossibleTravelEvent",
-    "NetworkContext",
-    "SecurityEvent",
     "StoragePartition",
-    "UserContext",
     "VendorExtension",
     "VendorExtensions",
     "derive_event_id",
@@ -188,10 +182,9 @@ __all__ = [
     "WorkflowCommand",
     # legacy mapper symbols kept during transition
     "build_provider_event",
-    "iam_request_to_canonical",
+    "iam_request_to_envelope",
     "resolve_webhook_route",
     "to_approval_decision",
-    "to_canonical_event",
-    "to_security_event",
+    "to_envelope",
     "to_workflow_command",
 ]

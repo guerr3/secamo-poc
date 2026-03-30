@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta, timezone
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
@@ -9,73 +9,13 @@ with workflow.unsafe.imports_passed_through():
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
     from activities.connector_dispatch import connector_fetch_events
-    from activities.tenant import get_tenant_config, get_tenant_secrets
-    from shared.models import PollingManagerInput, TenantConfig, TenantSecrets
-    from shared.models.canonical import Correlation, Envelope, SecamoEventVariantAdapter, StoragePartition, derive_event_id
+    from activities.tenant import get_tenant_config
+    from shared.models import PollingManagerInput, TenantConfig
+    from shared.models.canonical import Envelope
     from shared.models.mappers import resolve_polling_route
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
-
-
-def _canonical_event_to_envelope(event) -> Envelope:
-    payload_data = {
-        "event_type": event.event_type,
-        "activity_id": 2004 if event.event_type == "defender.alert" else 3002,
-        "activity_name": "polled_event",
-        "alert_id": event.external_event_id or "",
-        "title": event.subject,
-        "description": str((event.payload or {}).get("description") or ""),
-        "severity_id": 40,
-        "severity": str(event.severity or "medium"),
-    }
-
-    if event.event_type == "defender.impossible_travel":
-        payload_data = {
-            "event_type": "defender.impossible_travel",
-            "activity_id": 3002,
-            "activity_name": "polled_event",
-            "user_principal_name": str((event.payload or {}).get("user_email") or "unknown@example.com"),
-            "source_ip": str((event.payload or {}).get("source_ip") or "0.0.0.0"),
-            "destination_ip": (event.payload or {}).get("destination_ip"),
-            "severity_id": 40,
-            "severity": str(event.severity or "medium"),
-        }
-
-    payload = SecamoEventVariantAdapter.validate_python(payload_data)
-    occurred_at = event.occurred_at or datetime.now(timezone.utc)
-    correlation_id = event.request_id or event.external_event_id or "poller"
-
-    return Envelope(
-        event_id=derive_event_id(
-            tenant_id=event.tenant_id,
-            event_type=payload.event_type,
-            occurred_at=occurred_at,
-            correlation_id=correlation_id,
-            provider_event_id=event.external_event_id,
-        ),
-        tenant_id=event.tenant_id,
-        source_provider=event.provider,
-        event_name=payload.event_type,
-        schema_version="1.0.0",
-        event_version="1.0.0",
-        ocsf_version="1.1.0",
-        occurred_at=occurred_at,
-        correlation=Correlation(
-            correlation_id=correlation_id,
-            causation_id=correlation_id,
-            request_id=correlation_id,
-            trace_id=correlation_id,
-            storage_partition=StoragePartition(
-                ddb_pk=f"TENANT#{event.tenant_id}",
-                ddb_sk=f"EVENT#{payload.event_type.replace('.', '#')}#{event.external_event_id or 'poll'}",
-                s3_bucket=f"secamo-events-{event.tenant_id}",
-                s3_key_prefix=f"raw/{payload.event_type}/{event.external_event_id or 'poll'}",
-            ),
-        ),
-        payload=payload,
-        metadata={"provider_event_id": event.external_event_id or ""},
-    )
 
 @workflow.defn
 class PollingManagerWorkflow:
@@ -115,13 +55,6 @@ class PollingManagerWorkflow:
                 effective_secret_type = provider_cfg.secret_type
                 effective_poll_interval = provider_cfg.poll_interval_seconds
 
-        secrets: TenantSecrets = await workflow.execute_activity(
-            get_tenant_secrets,
-            args=[input.tenant_id, effective_secret_type],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=RETRY_POLICY,
-        )
-
         fetch_result = await workflow.execute_activity(
             connector_fetch_events,
             args=[
@@ -132,14 +65,13 @@ class PollingManagerWorkflow:
                     "resource_type": input.resource_type,
                     "top": 100,
                 },
-                secrets,
             ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
         )
 
         new_cursor = input.cursor
-        for event in fetch_result.events:
+        for event in fetch_result.data.events:
             if event.occurred_at is not None:
                 occurred = event.occurred_at
                 if occurred.tzinfo is None:
@@ -158,13 +90,13 @@ class PollingManagerWorkflow:
                     "No polling route configured for provider=%s resource_type=%s event_id=%s",
                     input.provider,
                     input.resource_type,
-                    event.external_event_id,
+                    event.event_id,
                 )
                 continue
 
             workflow_name, task_queue = route
-            envelope = _canonical_event_to_envelope(event)
-            event_id = event.external_event_id or envelope.event_id
+            envelope = event
+            event_id = envelope.event_id
             child_workflow_id = f"{input.provider}-{input.resource_type}-{input.tenant_id}-{event_id}"
 
             try:

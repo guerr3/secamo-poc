@@ -45,7 +45,6 @@ class IncidentResponseWorkflow:
                             ),
                         },
                     },
-                    request.ticketing_secrets,
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
@@ -64,7 +63,6 @@ class IncidentResponseWorkflow:
                         "device_id": resolved_device_id,
                         "comment": f"Isolated by {request.decision.reviewer} from WF-05",
                     },
-                    request.graph_secrets,
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
@@ -85,7 +83,6 @@ class IncidentResponseWorkflow:
                             ),
                         },
                     },
-                    request.ticketing_secrets,
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
@@ -96,13 +93,13 @@ class IncidentResponseWorkflow:
             if request.user:
                 await workflow.execute_activity(
                     graph_revoke_sessions,
-                    args=[request.tenant_id, request.user.user_id, request.graph_secrets],
+                    args=[request.tenant_id, request.user.user_id],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,
                 )
                 await workflow.execute_activity(
                     graph_delete_user,
-                    args=[request.tenant_id, request.user.user_id, request.graph_secrets],
+                    args=[request.tenant_id, request.user.user_id],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,
                 )
@@ -122,7 +119,6 @@ class IncidentResponseWorkflow:
                             ),
                         },
                     },
-                    request.ticketing_secrets,
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
@@ -130,7 +126,7 @@ class IncidentResponseWorkflow:
             action_result = f"Gebruiker '{request.user_email}' uitgeschakeld."
 
         evidence_url = "disabled-by-config"
-        if request.config.evidence_bundle_enabled:
+        if request.evidence_bundle_enabled:
             evidence: EvidenceBundle = await workflow.execute_activity(
                 collect_evidence_bundle,
                 args=[

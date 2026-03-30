@@ -25,13 +25,13 @@ class UserDeprovisioningWorkflow:
 
         await workflow.execute_activity(
             graph_revoke_sessions,
-            args=[request.tenant_id, request.user_id, request.secrets],
+            args=[request.tenant_id, request.user_id],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
         )
         deleted = await workflow.execute_activity(
             graph_delete_user,
-            args=[request.tenant_id, request.user_id, request.secrets],
+            args=[request.tenant_id, request.user_id],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
         )

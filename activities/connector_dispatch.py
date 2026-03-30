@@ -3,16 +3,35 @@ from __future__ import annotations
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from connectors.errors import ConnectorPermanentError, ConnectorTransientError
+from activities._tenant_secrets import load_tenant_secrets
+from connectors.errors import ConnectorConfigurationError, ConnectorPermanentError, ConnectorTransientError
 from connectors.registry import get_connector
 from shared.models import (
-    CanonicalEvent,
+    ConnectorActionData,
     ConnectorActionResult,
+    ConnectorFetchData,
     ConnectorFetchResult,
+    ConnectorHealthData,
     ConnectorHealthResult,
     TenantSecrets,
     ThreatIntelResult,
 )
+
+
+def _secret_type_for_provider(provider: str) -> str:
+    normalized = provider.strip().lower()
+    if normalized in {"microsoft_defender", "crowdstrike", "sentinelone", "defender", "microsoft_graph"}:
+        return "graph"
+    if normalized in {"jira", "halo_itsm", "servicenow"}:
+        return "ticketing"
+    if normalized in {"virustotal", "abuseipdb", "misp"}:
+        return "threatintel"
+    raise ConnectorConfigurationError(f"No secret type mapping defined for provider '{provider}'")
+
+
+def _load_connector_secrets(tenant_id: str, provider: str) -> TenantSecrets:
+    secret_type = _secret_type_for_provider(provider)
+    return load_tenant_secrets(tenant_id, secret_type)
 
 
 def _raise_connector_activity_error(operation: str, provider: str, error: Exception) -> None:
@@ -45,13 +64,18 @@ async def connector_fetch_events(
     tenant_id: str,
     provider: str,
     query: dict,
-    secrets: TenantSecrets,
 ) -> ConnectorFetchResult:
     activity.logger.info("[%s] Connector fetch events via provider '%s'", tenant_id, provider)
     try:
+        secrets = _load_connector_secrets(tenant_id, provider)
         connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
         events = await connector.fetch_events(query)
-        return ConnectorFetchResult(provider=provider, events=events, raw_count=len(events))
+        return ConnectorFetchResult(
+            provider=provider,
+            success=True,
+            details="fetch completed",
+            data=ConnectorFetchData(events=events, raw_count=len(events)),
+        )
     except Exception as exc:
         activity.logger.exception(
             "[%s] Connector fetch events failed for provider '%s'",
@@ -67,10 +91,10 @@ async def connector_execute_action(
     provider: str,
     action: str,
     payload: dict,
-    secrets: TenantSecrets,
 ) -> ConnectorActionResult:
     activity.logger.info("[%s] Connector action '%s' via provider '%s'", tenant_id, action, provider)
     try:
+        secrets = _load_connector_secrets(tenant_id, provider)
         connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
         data = await connector.execute_action(action=action, payload=payload)
 
@@ -89,10 +113,10 @@ async def connector_execute_action(
 
         return ConnectorActionResult(
             provider=provider,
-            action=action,
+            operation_type="action",
             success=True,
             details=details,
-            data=data if isinstance(data, dict) else {},
+            data=ConnectorActionData(action=action, payload=data if isinstance(data, dict) else {}),
         )
     except ApplicationError:
         raise
@@ -110,16 +134,17 @@ async def connector_execute_action(
 async def connector_health_check(
     tenant_id: str,
     provider: str,
-    secrets: TenantSecrets,
 ) -> ConnectorHealthResult:
     activity.logger.info("[%s] Connector health check via provider '%s'", tenant_id, provider)
     try:
+        secrets = _load_connector_secrets(tenant_id, provider)
         connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
         result = await connector.health_check()
         return ConnectorHealthResult(
             provider=provider,
-            healthy=bool(result.get("healthy", False)),
+            success=bool(result.get("healthy", False)),
             details=str(result),
+            data=ConnectorHealthData(healthy=bool(result.get("healthy", False))),
         )
     except Exception as exc:
         activity.logger.exception(
@@ -135,7 +160,6 @@ async def connector_threat_intel_fanout(
     tenant_id: str,
     providers: list[str],
     indicator: str,
-    secrets: TenantSecrets,
 ) -> ThreatIntelResult:
     """Fan-out TI lookups; return the strongest malicious score."""
     activity.logger.info(
@@ -155,6 +179,7 @@ async def connector_threat_intel_fanout(
 
     for provider in providers:
         try:
+            secrets = _load_connector_secrets(tenant_id, provider)
             connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
             response = await connector.execute_action("lookup_indicator", {"indicator": indicator})
             score = float(response.get("reputation_score", 0.0))

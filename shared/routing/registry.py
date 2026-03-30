@@ -42,23 +42,18 @@ class RouteRegistry:
     """In-memory route registry with explicit rule priority and event fallback."""
 
     def __init__(self, logger: logging.Logger | None = None) -> None:
-        self._fallback_routes: dict[str, tuple[WorkflowRoute, ...]] = {}
+        self._fallback_routes: dict[tuple[str, str], tuple[WorkflowRoute, ...]] = {}
         self._rules: list[_RouteRule] = []
         self._logger = logger or logging.getLogger("routing.registry")
 
     @staticmethod
-    def _event_key(event_type: str) -> str:
-        return event_type.strip().lower()
+    def _route_key(provider: str, event_type: str) -> tuple[str, str]:
+        return provider.strip().lower(), event_type.strip().lower()
 
     def register(self, provider: str, event_type: str, routes: tuple[WorkflowRoute, ...]) -> None:
-        """Register fallback routes for an event type.
+        """Register fallback routes for a provider + event-type pair."""
 
-        The provider argument is retained for API compatibility with existing callers,
-        but fallback resolution is intentionally keyed by envelope payload event_type only.
-        """
-
-        _ = provider
-        self._fallback_routes[self._event_key(event_type)] = routes
+        self._fallback_routes[self._route_key(provider, event_type)] = routes
 
     def register_rule(self, name: str, predicate: RoutePredicate, routes: tuple[WorkflowRoute, ...]) -> None:
         """Register an explicit expression rule evaluated before fallback routes."""
@@ -79,12 +74,18 @@ class RouteRegistry:
         if matched_routes:
             return tuple(matched_routes)
 
-        fallback = self._fallback_routes.get(self._event_key(envelope.payload.event_type), ())
+        fallback = self._fallback_routes.get(
+            self._route_key(envelope.source_provider, envelope.payload.event_type),
+            (),
+        )
         if fallback:
             return fallback
 
         raise UnroutableEventError(
-            f"no_route_for_event_type:{envelope.payload.event_type} tenant={envelope.tenant_id}"
+            (
+                f"no_route_for_provider_event:{envelope.source_provider}:{envelope.payload.event_type} "
+                f"tenant={envelope.tenant_id}"
+            )
         )
 
     async def dispatch_best_effort(self, envelope: Envelope, dispatcher: RouteDispatcher) -> DispatchReport:

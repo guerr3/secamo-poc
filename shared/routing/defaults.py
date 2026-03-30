@@ -76,10 +76,5 @@ def build_default_route_registry() -> RouteRegistry:
         "iam.onboarding",
         (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue="iam-graph"),),
     )
-    registry.register(
-        "microsoft_graph",
-        "hitl.approval",
-        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue="soc-defender"),),
-    )
 
     return registry

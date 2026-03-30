@@ -15,9 +15,11 @@ from shared.models.canonical import (
     Correlation,
     DefenderDetectionFindingEvent,
     Envelope,
+    HitlApprovalEvent,
     ImpossibleTravelEvent,
     StoragePartition,
 )
+from shared.routing.defaults import build_default_route_registry
 from shared.routing.contracts import WorkflowRoute
 from shared.routing.registry import RouteRegistry, UnroutableEventError
 
@@ -81,6 +83,29 @@ def test_route_registry_resolves_multiple_routes() -> None:
     assert len(resolved) == 2
     assert resolved[0].workflow_name == "DefenderAlertEnrichmentWorkflow"
     assert resolved[1].workflow_name == "IncidentCorrelatorWorkflow"
+
+
+def test_route_registry_resolves_provider_specific_fallbacks() -> None:
+    registry = RouteRegistry()
+    registry.register(
+        "microsoft_defender",
+        "defender.alert",
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+    )
+    registry.register(
+        "crowdstrike",
+        "defender.alert",
+        (WorkflowRoute(workflow_name="CrowdStrikeSpecificWorkflow", task_queue="soc-defender"),),
+    )
+
+    defender_envelope = _sample_envelope()
+    crowdstrike_envelope = defender_envelope.model_copy(update={"source_provider": "crowdstrike"})
+
+    defender_route = registry.resolve(defender_envelope)
+    crowdstrike_route = registry.resolve(crowdstrike_envelope)
+
+    assert defender_route[0].workflow_name == "DefenderAlertEnrichmentWorkflow"
+    assert crowdstrike_route[0].workflow_name == "CrowdStrikeSpecificWorkflow"
 
 
 @pytest.mark.asyncio
@@ -154,3 +179,41 @@ async def test_unknown_route_key_raises_unroutable_error() -> None:
         await registry.dispatch_best_effort(envelope, dispatcher)
 
     assert dispatcher.calls == []
+
+
+def test_default_registry_does_not_start_workflow_for_hitl_approval() -> None:
+    registry = build_default_route_registry()
+    envelope = Envelope(
+        event_id="evt-hitl-1",
+        tenant_id="tenant-1",
+        source_provider="microsoft_graph",
+        event_name="hitl.approval",
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=datetime.now(timezone.utc),
+        correlation=Correlation(
+            correlation_id="corr-hitl-1",
+            causation_id="corr-hitl-1",
+            request_id="req-hitl-1",
+            trace_id="trace-hitl-1",
+            storage_partition=StoragePartition(
+                ddb_pk="TENANT#tenant-1",
+                ddb_sk="EVENT#hitl#approval#evt-hitl-1",
+                s3_bucket="secamo-events-tenant-1",
+                s3_key_prefix="raw/hitl.approval/evt-hitl-1",
+            ),
+        ),
+        payload=HitlApprovalEvent(
+            event_type="hitl.approval",
+            activity_id=9001,
+            activity_name="hitl_response",
+            approval_id="wf-123",
+            decision="approved",
+            channel="web",
+            responder="analyst@example.com",
+        ),
+    )
+
+    with pytest.raises(UnroutableEventError):
+        registry.resolve(envelope)

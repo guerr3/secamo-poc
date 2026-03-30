@@ -6,8 +6,9 @@ import httpx
 from temporalio import activity
 
 from activities._activity_errors import application_error_from_http_status
+from activities._tenant_secrets import load_tenant_secrets
 from shared.graph_client import get_defender_token, get_graph_token
-from shared.models import ConnectorActionResult, DeviceDetail, TenantSecrets
+from shared.models import ConnectorActionData, ConnectorActionResult, DeviceDetail
 
 DEFENDER_BASE = "https://api.security.microsoft.com/api"
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
@@ -67,8 +68,9 @@ async def _paged_get(
 
 
 @activity.defn
-async def graph_isolate_device(tenant_id: str, device_id: str, secrets: TenantSecrets) -> bool:
+async def graph_isolate_device(tenant_id: str, device_id: str) -> bool:
     activity.logger.info(f"[{tenant_id}] graph_isolate_device: {device_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_defender_token(secrets)
     payload = {"Comment": "Isolated by Secamo orchestrator", "IsolationType": "Full"}
 
@@ -86,8 +88,9 @@ async def graph_isolate_device(tenant_id: str, device_id: str, secrets: TenantSe
 
 
 @activity.defn
-async def graph_unisolate_device(tenant_id: str, device_id: str, secrets: TenantSecrets) -> bool:
+async def graph_unisolate_device(tenant_id: str, device_id: str) -> bool:
     activity.logger.info(f"[{tenant_id}] graph_unisolate_device: {device_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_defender_token(secrets)
     payload = {"Comment": "Released from isolation by Secamo orchestrator"}
 
@@ -105,8 +108,9 @@ async def graph_unisolate_device(tenant_id: str, device_id: str, secrets: Tenant
 
 
 @activity.defn
-async def graph_get_device_details(tenant_id: str, device_id: str, secrets: TenantSecrets) -> DeviceDetail | None:
+async def graph_get_device_details(tenant_id: str, device_id: str) -> DeviceDetail | None:
     activity.logger.info(f"[{tenant_id}] graph_get_device_details: {device_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_defender_token(secrets)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -154,10 +158,10 @@ async def graph_get_device_details(tenant_id: str, device_id: str, secrets: Tena
 async def graph_run_antivirus_scan(
     tenant_id: str,
     device_id: str,
-    secrets: TenantSecrets,
     scan_type: str = "Quick",
 ) -> ConnectorActionResult:
     activity.logger.info(f"[{tenant_id}] graph_run_antivirus_scan: {device_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_defender_token(secrets)
     normalized_scan = "Full" if str(scan_type).lower() == "full" else "Quick"
     payload = {
@@ -175,10 +179,13 @@ async def graph_run_antivirus_scan(
     if response.status_code == 404:
         return ConnectorActionResult(
             provider="microsoft_defender",
-            action="run_antivirus_scan",
+            operation_type="action",
             success=False,
             details="device not found",
-            data={"device_id": device_id, "scan_type": normalized_scan},
+            data=ConnectorActionData(
+                action="run_antivirus_scan",
+                payload={"device_id": device_id, "scan_type": normalized_scan},
+            ),
         )
 
     _handle_http_error(tenant_id, "microsoft_defender", response, "graph_run_antivirus_scan")
@@ -193,16 +200,17 @@ async def graph_run_antivirus_scan(
 
     return ConnectorActionResult(
         provider="microsoft_defender",
-        action="run_antivirus_scan",
+        operation_type="action",
         success=True,
         details="scan action submitted",
-        data=response.json(),
+        data=ConnectorActionData(action="run_antivirus_scan", payload=response.json()),
     )
 
 
 @activity.defn
-async def graph_list_noncompliant_devices(tenant_id: str, secrets: TenantSecrets) -> list[dict]:
+async def graph_list_noncompliant_devices(tenant_id: str) -> list[dict]:
     activity.logger.info(f"[{tenant_id}] graph_list_noncompliant_devices")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     graph_token = await get_graph_token(secrets)
 
     async with httpx.AsyncClient(timeout=30.0) as client:

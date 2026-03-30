@@ -9,8 +9,9 @@ from boto3.dynamodb.conditions import Attr
 from temporalio import activity
 
 from activities._activity_errors import application_error_from_http_status, raise_activity_error
+from activities._tenant_secrets import load_tenant_secrets
 from shared.graph_client import get_graph_client
-from shared.models import GraphSubscriptionConfig, GraphSubscriptionState, TenantSecrets
+from shared.models import GraphSubscriptionConfig, GraphSubscriptionState
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 MIN_SUBSCRIPTION_MINUTES = 45
@@ -114,7 +115,7 @@ def _raise_graph_error(
 async def create_graph_subscription(
     tenant_id: str,
     subscription: GraphSubscriptionConfig,
-    secrets: TenantSecrets,
+    secret_type: str,
     notification_url: str,
     client_state: str,
 ) -> GraphSubscriptionState:
@@ -148,6 +149,7 @@ async def create_graph_subscription(
     if lifecycle_url:
         body["lifecycleNotificationUrl"] = lifecycle_url
 
+    secrets = load_tenant_secrets(tenant_id, secret_type)
     async with get_graph_client(secrets) as client:
         response = await client.post(f"{GRAPH_BASE}/subscriptions", json=body)
 
@@ -178,7 +180,7 @@ async def renew_graph_subscription(
     tenant_id: str,
     subscription_id: str,
     expiration_hours: int,
-    secrets: TenantSecrets,
+    secret_type: str,
 ) -> GraphSubscriptionState:
     """Renew an existing Graph webhook subscription."""
     existing = await lookup_subscription_metadata(subscription_id)
@@ -189,6 +191,7 @@ async def renew_graph_subscription(
         include_resource_data=False,
     )
 
+    secrets = load_tenant_secrets(tenant_id, secret_type)
     async with get_graph_client(secrets) as client:
         response = await client.patch(
             f"{GRAPH_BASE}/subscriptions/{subscription_id}",
@@ -218,8 +221,9 @@ async def renew_graph_subscription(
 
 
 @activity.defn
-async def delete_graph_subscription(tenant_id: str, subscription_id: str, secrets: TenantSecrets) -> bool:
+async def delete_graph_subscription(tenant_id: str, subscription_id: str, secret_type: str) -> bool:
     """Delete a Graph subscription and remove local metadata."""
+    secrets = load_tenant_secrets(tenant_id, secret_type)
     async with get_graph_client(secrets) as client:
         response = await client.delete(f"{GRAPH_BASE}/subscriptions/{subscription_id}")
 
@@ -252,8 +256,9 @@ async def delete_graph_subscription(tenant_id: str, subscription_id: str, secret
 
 
 @activity.defn
-async def list_graph_subscriptions(tenant_id: str, secrets: TenantSecrets) -> list[GraphSubscriptionState]:
+async def list_graph_subscriptions(tenant_id: str, secret_type: str) -> list[GraphSubscriptionState]:
     """List active Graph subscriptions for the app and filter by tenant marker."""
+    secrets = load_tenant_secrets(tenant_id, secret_type)
     async with get_graph_client(secrets) as client:
         response = await client.get(f"{GRAPH_BASE}/subscriptions")
 

@@ -7,7 +7,7 @@ from activities.graph_alerts import graph_enrich_alert, graph_get_alerts
 from activities.graph_devices import graph_isolate_device
 from activities.risk import calculate_risk_score
 from activities.threat_intel import threat_intel_lookup
-from shared.models import AlertData, EnrichedAlert, TenantSecrets, ThreatIntelResult
+from shared.models import DefenderDetectionFindingEvent, EnrichedAlert, TenantSecrets, ThreatIntelResult, VendorExtension
 
 
 class _Resp:
@@ -37,15 +37,20 @@ class _Client:
 
 
 @pytest.fixture
-def alert() -> AlertData:
-    return AlertData(
+def alert() -> DefenderDetectionFindingEvent:
+    return DefenderDetectionFindingEvent(
+        event_type="defender.alert",
+        activity_id=2004,
         alert_id="a1",
+        severity_id=60,
         severity="high",
         title="Test",
         description="Desc",
-        user_email="user@example.com",
-        device_id="d1",
-        source_ip="1.1.1.1",
+        vendor_extensions={
+            "user_email": VendorExtension(source="test", value="user@example.com"),
+            "device_id": VendorExtension(source="test", value="d1"),
+            "source_ip": VendorExtension(source="test", value="1.1.1.1"),
+        },
     )
 
 
@@ -57,13 +62,14 @@ def secrets() -> TenantSecrets:
 @pytest.mark.asyncio
 async def test_graph_enrich_alert_happy(mocker, alert, secrets):
     mocker.patch("activities.graph_alerts.get_graph_token", return_value="tok")
+    mocker.patch("activities.graph_alerts.load_tenant_secrets", return_value=secrets)
     responses = [
         _Resp(200, {"severity": "high", "title": "Alert", "description": "Body"}),
         _Resp(200, {"displayName": "User One", "department": "Finance"}),
         _Resp(200, {"deviceName": "LAPTOP-1", "osPlatform": "Windows", "isCompliant": False}),
     ]
     mocker.patch("activities.graph_alerts.httpx.AsyncClient", return_value=_Client(responses))
-    enriched = await graph_enrich_alert("t1", alert, secrets)
+    enriched = await graph_enrich_alert("t1", alert)
     assert enriched.user_display_name == "User One"
     assert enriched.device_compliance == "noncompliant"
 
@@ -71,20 +77,22 @@ async def test_graph_enrich_alert_happy(mocker, alert, secrets):
 @pytest.mark.asyncio
 async def test_graph_get_alerts_happy_and_error(mocker, secrets):
     mocker.patch("activities.graph_alerts.get_graph_token", return_value="tok")
+    mocker.patch("activities.graph_alerts.load_tenant_secrets", return_value=secrets)
     mocker.patch("activities.graph_alerts.httpx.AsyncClient", return_value=_Client([_Resp(200, {"value": [{"id": "a1"}]})]))
-    alerts = await graph_get_alerts("t1", "user@example.com", secrets)
+    alerts = await graph_get_alerts("t1", "user@example.com")
     assert len(alerts) == 1
 
     mocker.patch("activities.graph_alerts.httpx.AsyncClient", return_value=_Client([_Resp(404)]))
     with pytest.raises(ApplicationError):
-        await graph_get_alerts("t1", "user@example.com", secrets)
+        await graph_get_alerts("t1", "user@example.com")
 
 
 @pytest.mark.asyncio
 async def test_graph_isolate_device_happy(mocker, secrets):
     mocker.patch("activities.graph_devices.get_defender_token", return_value="tok")
+    mocker.patch("activities.graph_devices.load_tenant_secrets", return_value=secrets)
     mocker.patch("activities.graph_devices.httpx.AsyncClient", return_value=_Client([_Resp(201)]))
-    assert await graph_isolate_device("t1", "d1", secrets) is True
+    assert await graph_isolate_device("t1", "d1") is True
 
 
 @pytest.mark.asyncio

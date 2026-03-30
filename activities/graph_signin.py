@@ -5,8 +5,9 @@ from temporalio import activity
 from urllib.parse import quote
 
 from activities._activity_errors import application_error_from_http_status
+from activities._tenant_secrets import load_tenant_secrets
 from shared.graph_client import get_graph_token
-from shared.models import RiskyUserResult, TenantSecrets
+from shared.models import RiskyUserResult
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -89,8 +90,9 @@ def _to_risky_user_result(payload: dict) -> RiskyUserResult:
 
 
 @activity.defn
-async def graph_get_risky_user(tenant_id: str, risky_user_id: str, secrets: TenantSecrets) -> RiskyUserResult | None:
+async def graph_get_risky_user(tenant_id: str, risky_user_id: str) -> RiskyUserResult | None:
     activity.logger.info(f"[{tenant_id}] graph_get_risky_user: {risky_user_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
 
     async with httpx.AsyncClient(timeout=30.0) as client:
@@ -115,8 +117,9 @@ async def graph_get_risky_user(tenant_id: str, risky_user_id: str, secrets: Tena
 
 
 @activity.defn
-async def graph_confirm_user_compromised(tenant_id: str, user_id: str, secrets: TenantSecrets) -> bool:
+async def graph_confirm_user_compromised(tenant_id: str, user_id: str) -> bool:
     activity.logger.info(f"[{tenant_id}] graph_confirm_user_compromised: {user_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     payload = {"userIds": [user_id]}
 
@@ -132,8 +135,9 @@ async def graph_confirm_user_compromised(tenant_id: str, user_id: str, secrets: 
 
 
 @activity.defn
-async def graph_dismiss_risky_user(tenant_id: str, user_id: str, secrets: TenantSecrets) -> bool:
+async def graph_dismiss_risky_user(tenant_id: str, user_id: str) -> bool:
     activity.logger.info(f"[{tenant_id}] graph_dismiss_risky_user: {user_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     payload = {"userIds": [user_id]}
 
@@ -152,10 +156,10 @@ async def graph_dismiss_risky_user(tenant_id: str, user_id: str, secrets: Tenant
 async def graph_get_signin_history(
     tenant_id: str,
     user_principal_name: str,
-    secrets: TenantSecrets,
     top: int = 20,
 ) -> list[dict]:
     activity.logger.info(f"[{tenant_id}] graph_get_signin_history: {user_principal_name}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
     capped_top = min(max(int(top), 1), 1000)
     user_filter = f"userPrincipalName eq '{_escape_odata_literal(user_principal_name)}'"
@@ -183,9 +187,9 @@ async def graph_get_signin_history(
 async def graph_list_risky_users(
     tenant_id: str,
     min_risk_level: str,
-    secrets: TenantSecrets,
 ) -> list[RiskyUserResult]:
     activity.logger.info(f"[{tenant_id}] graph_list_risky_users min={min_risk_level}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     token = await get_graph_token(secrets)
 
     risk_levels = ["low", "medium", "high"]

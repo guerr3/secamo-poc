@@ -8,8 +8,9 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from activities._activity_errors import application_error_from_http_status, raise_activity_error
+from activities._tenant_secrets import load_tenant_secrets
 from shared.graph_client import get_graph_token
-from shared.models import AlertData, EnrichedAlert, TenantSecrets
+from shared.models import DefenderDetectionFindingEvent, EnrichedAlert
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 SECURITY_BASE = "https://graph.microsoft.com/v1.0/security"
@@ -53,12 +54,17 @@ async def _paged_get(
 
 
 @activity.defn
-async def graph_enrich_alert(tenant_id: str, alert: AlertData, secrets: TenantSecrets) -> EnrichedAlert:
+async def graph_enrich_alert(tenant_id: str, alert: DefenderDetectionFindingEvent) -> EnrichedAlert:
     activity.logger.info(f"[{tenant_id}] graph_enrich_alert: {alert.alert_id}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     alert_id = alert.alert_id
     severity = (alert.severity or "medium").lower()
     title = alert.title
-    description = alert.description
+    description = alert.description or ""
+    user_email_ext = alert.vendor_extensions.get("user_email")
+    device_id_ext = alert.vendor_extensions.get("device_id")
+    user_email = str(user_email_ext.value) if user_email_ext and user_email_ext.value else None
+    device_id = str(device_id_ext.value) if device_id_ext and device_id_ext.value else None
     user_display_name = None
     user_department = None
     device_display_name = None
@@ -95,9 +101,9 @@ async def graph_enrich_alert(tenant_id: str, alert: AlertData, secrets: TenantSe
             title = alert_body.get("title") or title
             description = alert_body.get("description") or description
 
-        if alert.user_email:
+        if user_email:
             user_resp = await client.get(
-                f"{GRAPH_BASE}/users/{quote(alert.user_email)}?$select=displayName,department",
+                f"{GRAPH_BASE}/users/{quote(user_email)}?$select=displayName,department",
                 headers=_auth_headers(graph_token),
             )
             if user_resp.status_code >= 400 and user_resp.status_code != 404:
@@ -112,9 +118,9 @@ async def graph_enrich_alert(tenant_id: str, alert: AlertData, secrets: TenantSe
                 user_display_name = user_body.get("displayName")
                 user_department = user_body.get("department")
 
-        if alert.device_id:
+        if device_id:
             device_resp = await client.get(
-                f"{GRAPH_BASE}/deviceManagement/managedDevices/{quote(alert.device_id)}?$select=deviceName,operatingSystem,complianceState",
+                f"{GRAPH_BASE}/deviceManagement/managedDevices/{quote(device_id)}?$select=deviceName,operatingSystem,complianceState",
                 headers=_auth_headers(graph_token),
             )
             if device_resp.status_code >= 400 and device_resp.status_code != 404:
@@ -148,8 +154,9 @@ async def graph_enrich_alert(tenant_id: str, alert: AlertData, secrets: TenantSe
 
 
 @activity.defn
-async def graph_get_alerts(tenant_id: str, user_email: str, secrets: TenantSecrets) -> list[dict]:
+async def graph_get_alerts(tenant_id: str, user_email: str) -> list[dict]:
     activity.logger.info(f"[{tenant_id}] graph_get_alerts: {user_email}")
+    secrets = load_tenant_secrets(tenant_id, "graph")
     graph_token = await get_graph_token(secrets)
     async with httpx.AsyncClient(timeout=30.0) as client:
         # alerts_v2 doesn't document userStates as a filterable property; fetch

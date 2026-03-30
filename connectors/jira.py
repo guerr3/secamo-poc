@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -13,7 +13,7 @@ from connectors.errors import (
     ConnectorTransientError,
     ConnectorUnsupportedActionError,
 )
-from shared.models import CanonicalEvent
+from shared.models import Correlation, Envelope, IamOnboardingEvent, LifecycleAction, StoragePartition, VendorExtension, derive_event_id
 
 
 class JiraConnector(BaseConnector):
@@ -123,7 +123,7 @@ class JiraConnector(BaseConnector):
         except ValueError:
             return None
 
-    async def fetch_events(self, query: dict) -> list[CanonicalEvent]:
+    async def fetch_events(self, query: dict) -> list[Envelope]:
         since = query.get("since")
         if since:
             jql = f'updated > "{since}" ORDER BY updated ASC'
@@ -139,26 +139,58 @@ class JiraConnector(BaseConnector):
         )
         body = response.json()
 
-        events: list[CanonicalEvent] = []
+        events: list[Envelope] = []
         for issue in body.get("issues", []):
             fields = issue.get("fields", {})
             occurred_at = self._parse_iso_datetime(fields.get("updated") or fields.get("created"))
+            if occurred_at is None:
+                occurred_at = datetime.now(timezone.utc)
+            issue_id = str(issue.get("id") or "")
+            issue_key = str(issue.get("key") or issue_id)
+            user_email = str(((fields.get("reporter") or {}).get("emailAddress") or "unknown@example.com"))
+            payload = IamOnboardingEvent(
+                event_type="iam.onboarding",
+                activity_id=3001,
+                activity_name="jira.issue",
+                user_email=user_email,
+                action=LifecycleAction.UPDATE,
+                user_data={"email": user_email, "display_name": str((fields.get("reporter") or {}).get("displayName") or "")},
+                vendor_extensions={
+                    "issue_key": VendorExtension(source="jira", value=issue_key),
+                    "status": VendorExtension(source="jira", value=(fields.get("status") or {}).get("name")),
+                },
+            )
+            correlation_id = issue_id or issue_key
             events.append(
-                CanonicalEvent(
-                    event_type="jira.issue",
+                Envelope(
+                    event_id=derive_event_id(
+                        tenant_id=self.tenant_id,
+                        event_type=payload.event_type,
+                        occurred_at=occurred_at,
+                        correlation_id=correlation_id,
+                        provider_event_id=issue_id,
+                    ),
                     tenant_id=self.tenant_id,
-                    provider=self.provider,
-                    external_event_id=issue.get("id"),
-                    subject=issue.get("key"),
-                    severity=(fields.get("priority") or {}).get("name"),
+                    source_provider=self.provider,
+                    event_name=payload.event_type,
+                    schema_version="1.0.0",
+                    event_version="1.0.0",
+                    ocsf_version="1.1.0",
                     occurred_at=occurred_at,
-                    payload={
-                        "issue_id": issue.get("id"),
-                        "issue_key": issue.get("key"),
-                        "summary": fields.get("summary"),
-                        "status": (fields.get("status") or {}).get("name"),
-                        "provider_event_type": "jira:issue_updated",
-                    },
+                    correlation=Correlation(
+                        correlation_id=correlation_id,
+                        causation_id=correlation_id,
+                        request_id=correlation_id,
+                        trace_id=correlation_id,
+                        storage_partition=StoragePartition(
+                            ddb_pk=f"TENANT#{self.tenant_id}",
+                            ddb_sk=f"EVENT#{payload.event_type.replace('.', '#')}#{issue_key}",
+                            s3_bucket=f"secamo-events-{self.tenant_id}",
+                            s3_key_prefix=f"raw/{payload.event_type}/{issue_key}",
+                        ),
+                    ),
+                    payload=payload,
+                    metadata={"provider_event_type": "jira:issue_updated", "summary": fields.get("summary") or ""},
                 )
             )
         return events
@@ -197,12 +229,15 @@ class JiraConnector(BaseConnector):
         base_url = self._base_url()
 
         if action in ("create_ticket", "create_issue"):
+            project_key = str(payload.get("project_key") or self.secrets.project_key or "SOC").strip()
+            if not project_key:
+                raise ConnectorPermanentError("Missing Jira project key for ticket creation")
             response = await self._request_with_retry(
                 "POST",
                 f"{base_url}/rest/api/3/issue",
                 json={
                     "fields": {
-                        "project": {"key": payload["project_key"]},
+                        "project": {"key": project_key},
                         "summary": payload["title"],
                         "description": self._adf_text(payload.get("description", "")),
                         "issuetype": {"name": payload.get("issue_type", "Task")},
