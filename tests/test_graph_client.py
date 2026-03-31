@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from shared.graph_client import clear_token_cache, get_defender_token, get_graph_token
-from shared.models import TenantSecrets
+from shared.providers.contracts import TenantSecrets
 
 
 class _Resp:

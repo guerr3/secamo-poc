@@ -6,7 +6,7 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from activities.connector_dispatch import connector_execute_action
     from activities.evidence import collect_evidence_bundle
-    from activities.graph_users import graph_delete_user, graph_revoke_sessions
+    from activities.identity import identity_delete_user, identity_revoke_sessions
     from shared.models import EvidenceBundle, IncidentResponseRequest
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -92,13 +92,13 @@ class IncidentResponseWorkflow:
         elif request.decision.action == "disable_user":
             if request.user:
                 await workflow.execute_activity(
-                    graph_revoke_sessions,
+                    identity_revoke_sessions,
                     args=[request.tenant_id, request.user.user_id],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,
                 )
                 await workflow.execute_activity(
-                    graph_delete_user,
+                    identity_delete_user,
                     args=[request.tenant_id, request.user.user_id],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,

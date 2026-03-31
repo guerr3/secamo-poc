@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import secrets
+import string
 from typing import Any
 from urllib.parse import quote
 
@@ -161,6 +163,31 @@ class MicrosoftGraphConnector(BaseConnector):
     def _escape_odata_literal(value: str) -> str:
         return value.replace("'", "''")
 
+    @staticmethod
+    def _connector_error_status(error: Exception) -> int | None:
+        text = str(error)
+        marker = "status="
+        if marker not in text:
+            return None
+        suffix = text.split(marker, 1)[1]
+        digits = []
+        for char in suffix:
+            if char.isdigit():
+                digits.append(char)
+            else:
+                break
+        if not digits:
+            return None
+        try:
+            return int("".join(digits))
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _generate_password(length: int = 16) -> str:
+        alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
+        return "".join(secrets.choice(alphabet) for _ in range(length))
+
     def _map_event(self, item: dict[str, Any], resource_type: str, occurred_field: str, event_type: str, provider_event_type: str) -> Envelope:
         occurred_at = self._parse_iso_datetime(item.get(occurred_field))
         if occurred_at is None:
@@ -293,6 +320,462 @@ class MicrosoftGraphConnector(BaseConnector):
         return events
 
     async def execute_action(self, action: str, payload: dict) -> dict:
+        if action == "enrich_alert_context":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            alert_id = str(payload.get("alert_id") or "").strip()
+            severity = str(payload.get("severity") or "medium").lower()
+            title = str(payload.get("title") or "")
+            description = str(payload.get("description") or "")
+            user_email = str(payload.get("user_email") or "").strip() or None
+            device_id = str(payload.get("device_id") or "").strip() or None
+
+            if alert_id:
+                alert_url = f"https://graph.microsoft.com/v1.0/security/alerts_v2/{quote(alert_id)}"
+                try:
+                    alert_response = await self._request_with_retry("GET", alert_url, headers=headers)
+                    alert_body = alert_response.json()
+                    severity = str(alert_body.get("severity") or severity).lower()
+                    title = str(alert_body.get("title") or title)
+                    description = str(alert_body.get("description") or description)
+                    if user_email is None:
+                        states = alert_body.get("userStates") or []
+                        if states:
+                            user_email = str((states[0] or {}).get("userPrincipalName") or "").strip() or None
+                    if device_id is None:
+                        evidence = alert_body.get("deviceEvidence") or []
+                        if evidence:
+                            device_id = str((evidence[0] or {}).get("deviceId") or "").strip() or None
+                except ConnectorPermanentError as exc:
+                    if self._connector_error_status(exc) != 404:
+                        raise
+
+            user_display_name = None
+            user_department = None
+            if user_email:
+                user_url = f"https://graph.microsoft.com/v1.0/users/{quote(user_email)}?$select=displayName,department"
+                try:
+                    user_response = await self._request_with_retry("GET", user_url, headers=headers)
+                    user_body = user_response.json()
+                    user_display_name = user_body.get("displayName")
+                    user_department = user_body.get("department")
+                except ConnectorPermanentError as exc:
+                    if self._connector_error_status(exc) != 404:
+                        raise
+
+            device_display_name = None
+            device_os = None
+            device_compliance = None
+            if device_id:
+                device_url = (
+                    "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/"
+                    f"{quote(device_id)}?$select=deviceName,operatingSystem,complianceState,isCompliant"
+                )
+                try:
+                    device_response = await self._request_with_retry("GET", device_url, headers=headers)
+                    device_body = device_response.json()
+                    device_display_name = device_body.get("deviceName")
+                    device_os = device_body.get("operatingSystem") or device_body.get("osPlatform")
+                    compliance_state = str(device_body.get("complianceState") or "").lower()
+                    if compliance_state in {"compliant", "noncompliant"}:
+                        device_compliance = compliance_state
+                    elif "isCompliant" in device_body:
+                        device_compliance = "compliant" if bool(device_body.get("isCompliant")) else "noncompliant"
+                except ConnectorPermanentError as exc:
+                    if self._connector_error_status(exc) != 404:
+                        raise
+
+            return {
+                "success": True,
+                "provider": self.provider,
+                "details": "alert context enriched",
+                "alert_id": alert_id,
+                "severity": severity,
+                "title": title,
+                "description": description,
+                "user_display_name": user_display_name,
+                "user_department": user_department,
+                "device_display_name": device_display_name,
+                "device_os": device_os,
+                "device_compliance": device_compliance,
+            }
+
+        if action in {"list_user_alerts", "get_user_alerts"}:
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_email = str(payload.get("user_email") or "").strip()
+            if not user_email:
+                raise ConnectorUnsupportedActionError("list_user_alerts requires payload.user_email")
+
+            escaped_email = self._escape_odata_literal(user_email)
+            filt = f"userStates/any(u:u/userPrincipalName eq '{escaped_email}')"
+            url = "https://graph.microsoft.com/v1.0/security/alerts_v2"
+            response = await self._request_with_retry("GET", url, headers=headers, params={"$filter": filt})
+            body = response.json()
+            return {
+                "success": True,
+                "provider": self.provider,
+                "details": "alerts listed",
+                "alerts": body.get("value", []),
+            }
+
+        if action == "list_risky_users":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            lookup_key = str(payload.get("lookup_key") or "").strip()
+            min_risk_level = str(payload.get("min_risk_level") or "low").lower()
+            risk_levels = ["low", "medium", "high"]
+            if min_risk_level not in risk_levels:
+                min_risk_level = "low"
+
+            allowed = risk_levels[risk_levels.index(min_risk_level):]
+            filter_parts = [f"riskLevel eq '{level}'" for level in allowed]
+            if lookup_key and "@" in lookup_key:
+                escaped_lookup = self._escape_odata_literal(lookup_key)
+                filter_parts.append(f"userPrincipalName eq '{escaped_lookup}'")
+            query_filter = " and ".join(["(" + " or ".join(filter_parts[:-1]) + ")", filter_parts[-1]]) if len(filter_parts) > 1 and lookup_key and "@" in lookup_key else " or ".join(filter_parts)
+
+            if lookup_key and "@" not in lookup_key:
+                url = f"https://graph.microsoft.com/v1.0/identityProtection/riskyUsers/{quote(lookup_key)}"
+                try:
+                    response = await self._request_with_retry("GET", url, headers=headers)
+                except ConnectorPermanentError as exc:
+                    if self._connector_error_status(exc) == 404:
+                        return {
+                            "success": True,
+                            "provider": self.provider,
+                            "details": "risky users listed",
+                            "users": [],
+                        }
+                    raise
+                return {
+                    "success": True,
+                    "provider": self.provider,
+                    "details": "risky users listed",
+                    "users": [response.json()],
+                }
+
+            url = "https://graph.microsoft.com/v1.0/identityProtection/riskyUsers"
+            users: list[dict[str, Any]] = []
+            next_url: str | None = url
+            next_params: dict[str, str] | None = {"$filter": query_filter, "$top": "500"}
+            while next_url and len(users) < 500:
+                response = await self._request_with_retry("GET", next_url, headers=headers, params=next_params)
+                body = response.json()
+                users.extend(body.get("value", []))
+                next_url = body.get("@odata.nextLink")
+                next_params = None
+            return {
+                "success": True,
+                "provider": self.provider,
+                "details": "risky users listed",
+                "users": users[:500],
+            }
+
+        if action == "get_signin_history":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            user_principal_name = str(payload.get("user_principal_name") or "").strip()
+            if not user_principal_name:
+                raise ConnectorUnsupportedActionError("get_signin_history requires payload.user_principal_name")
+
+            top = min(max(int(payload.get("top", 20)), 1), 1000)
+            escaped = self._escape_odata_literal(user_principal_name)
+            signins: list[dict[str, Any]] = []
+
+            next_url: str | None = "https://graph.microsoft.com/v1.0/auditLogs/signIns"
+            next_params: dict[str, str] | None = {
+                "$filter": f"userPrincipalName eq '{escaped}'",
+                "$top": str(min(top, 100)),
+            }
+
+            while next_url and len(signins) < top:
+                response = await self._request_with_retry("GET", next_url, headers=headers, params=next_params)
+                body = response.json()
+                batch = body.get("value", [])
+                remaining = top - len(signins)
+                signins.extend(batch[:remaining])
+                next_url = body.get("@odata.nextLink")
+                next_params = None
+
+            return {
+                "success": True,
+                "provider": self.provider,
+                "details": "sign-in history listed",
+                "signins": signins,
+            }
+
+        if action == "confirm_user_compromised":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_id = str(payload.get("user_id") or "").strip()
+            if not user_id:
+                raise ConnectorUnsupportedActionError("confirm_user_compromised requires payload.user_id")
+
+            response = await self._request_with_retry(
+                "POST",
+                "https://graph.microsoft.com/v1.0/identityProtection/riskyUsers/confirmCompromised",
+                headers=headers,
+                json={"userIds": [user_id]},
+            )
+            confirmed = response.status_code == 204
+            return {
+                "success": confirmed,
+                "provider": self.provider,
+                "details": "user marked compromised" if confirmed else "unexpected status",
+                "confirmed": confirmed,
+                "user_id": user_id,
+            }
+
+        if action == "dismiss_risky_user":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_id = str(payload.get("user_id") or "").strip()
+            if not user_id:
+                raise ConnectorUnsupportedActionError("dismiss_risky_user requires payload.user_id")
+
+            response = await self._request_with_retry(
+                "POST",
+                "https://graph.microsoft.com/v1.0/identityProtection/riskyUsers/dismiss",
+                headers=headers,
+                json={"userIds": [user_id]},
+            )
+            dismissed = response.status_code == 204
+            return {
+                "success": dismissed,
+                "provider": self.provider,
+                "details": "risky user dismissed" if dismissed else "unexpected status",
+                "dismissed": dismissed,
+                "user_id": user_id,
+            }
+
+        if action == "run_antivirus_scan":
+            token = await get_defender_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            device_id = str(payload.get("device_id") or "").strip()
+            if not device_id:
+                raise ConnectorUnsupportedActionError("run_antivirus_scan requires payload.device_id")
+
+            scan_type = "Full" if str(payload.get("scan_type") or "Quick").lower() == "full" else "Quick"
+            body = {
+                "Comment": f"Secamo orchestrator {scan_type.lower()} antivirus scan",
+                "ScanType": scan_type,
+            }
+
+            try:
+                response = await self._request_with_retry(
+                    "POST",
+                    f"https://api.securitycenter.microsoft.com/api/machines/{quote(device_id)}/runAntiVirusScan",
+                    headers=headers,
+                    json=body,
+                )
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) == 404:
+                    return {
+                        "success": True,
+                        "provider": self.provider,
+                        "details": "device not found",
+                        "submitted": False,
+                        "found": False,
+                        "device_id": device_id,
+                        "scan_type": scan_type,
+                    }
+                raise
+
+            return {
+                "success": True,
+                "provider": self.provider,
+                "details": "scan action submitted",
+                "submitted": response.status_code in {200, 201, 202, 204},
+                "found": True,
+                "device_id": device_id,
+                "scan_type": scan_type,
+                "response": response.json() if response.content else {},
+            }
+
+        if action == "list_noncompliant_devices":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            url = "https://graph.microsoft.com/v1.0/deviceManagement/managedDevices"
+            params = {
+                "$filter": "complianceState eq 'noncompliant'",
+                "$select": "id,deviceName,userPrincipalName,operatingSystem,osVersion,complianceState,lastSyncDateTime,azureADDeviceId",
+                "$top": "200",
+            }
+
+            devices: list[dict[str, Any]] = []
+            next_url: str | None = url
+            next_params: dict[str, str] | None = params
+            while next_url:
+                response = await self._request_with_retry("GET", next_url, headers=headers, params=next_params)
+                body = response.json()
+                devices.extend(body.get("value", []))
+                next_url = body.get("@odata.nextLink")
+                next_params = None
+
+            return {
+                "success": True,
+                "provider": self.provider,
+                "details": "noncompliant devices listed",
+                "devices": devices,
+            }
+
+        if action == "create_subscription":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            resource = str(payload.get("resource") or "").strip()
+            notification_url = str(payload.get("notification_url") or "").strip()
+            client_state = str(payload.get("client_state") or "").strip()
+            if not resource or not notification_url or not client_state:
+                raise ConnectorUnsupportedActionError(
+                    "create_subscription requires payload.resource, payload.notification_url and payload.client_state"
+                )
+
+            expiration_minutes = max(int(payload.get("expiration_minutes") or 60), 45)
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=expiration_minutes)
+            body: dict[str, Any] = {
+                "changeType": str(payload.get("change_type") or ",".join(payload.get("change_types") or ["created", "updated"])),
+                "notificationUrl": notification_url,
+                "resource": resource,
+                "expirationDateTime": self._format_odata_datetime(expires_at),
+                "clientState": client_state,
+            }
+
+            include_resource_data = bool(payload.get("include_resource_data", False))
+            if include_resource_data:
+                certificate = str(payload.get("encryption_certificate") or "").strip()
+                certificate_id = str(payload.get("encryption_certificate_id") or "").strip()
+                if certificate and certificate_id:
+                    body["includeResourceData"] = True
+                    body["encryptionCertificate"] = certificate
+                    body["encryptionCertificateId"] = certificate_id
+            lifecycle_url = str(payload.get("lifecycle_notification_url") or "").strip()
+            if lifecycle_url:
+                body["lifecycleNotificationUrl"] = lifecycle_url
+
+            response = await self._request_with_retry(
+                "POST",
+                "https://graph.microsoft.com/v1.0/subscriptions",
+                headers=headers,
+                json=body,
+            )
+            result = response.json()
+            result.setdefault("success", True)
+            result.setdefault("provider", self.provider)
+            result.setdefault("details", "subscription created")
+            return result
+
+        if action == "renew_subscription":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            subscription_id = str(payload.get("subscription_id") or "").strip()
+            if not subscription_id:
+                raise ConnectorUnsupportedActionError("renew_subscription requires payload.subscription_id")
+
+            expiration_minutes = max(int(payload.get("expiration_minutes") or 60), 45)
+            expires_at = datetime.now(timezone.utc) + timedelta(minutes=expiration_minutes)
+            response = await self._request_with_retry(
+                "PATCH",
+                f"https://graph.microsoft.com/v1.0/subscriptions/{quote(subscription_id)}",
+                headers=headers,
+                json={"expirationDateTime": self._format_odata_datetime(expires_at)},
+            )
+            result = response.json()
+            result.setdefault("success", True)
+            result.setdefault("provider", self.provider)
+            result.setdefault("details", "subscription renewed")
+            return result
+
+        if action == "delete_subscription":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            subscription_id = str(payload.get("subscription_id") or "").strip()
+            if not subscription_id:
+                raise ConnectorUnsupportedActionError("delete_subscription requires payload.subscription_id")
+
+            try:
+                await self._request_with_retry(
+                    "DELETE",
+                    f"https://graph.microsoft.com/v1.0/subscriptions/{quote(subscription_id)}",
+                    headers=headers,
+                )
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) == 404:
+                    return {
+                        "success": True,
+                        "provider": self.provider,
+                        "details": "subscription not found",
+                        "deleted": False,
+                        "subscription_id": subscription_id,
+                    }
+                raise
+            return {
+                "success": True,
+                "provider": self.provider,
+                "details": "subscription deleted",
+                "deleted": True,
+                "subscription_id": subscription_id,
+            }
+
+        if action == "list_subscriptions":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            response = await self._request_with_retry(
+                "GET",
+                "https://graph.microsoft.com/v1.0/subscriptions",
+                headers=headers,
+            )
+            body = response.json()
+            return {
+                "success": True,
+                "provider": self.provider,
+                "details": "subscriptions listed",
+                "subscriptions": body.get("value", []),
+            }
+
+        if action == "send_email":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+
+            sender = str(payload.get("sender") or "").strip()
+            to = str(payload.get("to") or "").strip()
+            subject = str(payload.get("subject") or "")
+            body_content = str(payload.get("body") or "")
+            content_type = str(payload.get("content_type") or "Text")
+
+            if not sender or not to:
+                raise ConnectorUnsupportedActionError("send_email requires payload.sender and payload.to")
+
+            response = await self._request_with_retry(
+                "POST",
+                f"https://graph.microsoft.com/v1.0/users/{quote(sender)}/sendMail",
+                headers=headers,
+                json={
+                    "message": {
+                        "subject": subject,
+                        "body": {"contentType": content_type, "content": body_content},
+                        "toRecipients": [{"emailAddress": {"address": to}}],
+                    },
+                    "saveToSentItems": "false",
+                },
+            )
+            sent = response.status_code in {200, 202}
+            return {
+                "success": sent,
+                "provider": self.provider,
+                "details": "email sent" if sent else "unexpected status",
+                "sent": sent,
+                "message_id": response.headers.get("x-ms-request-id"),
+                "recipient": to,
+            }
+
         if action == "enrich_alert":
             token = await get_graph_token(self.secrets)
             headers = {"Authorization": f"Bearer {token}"}
@@ -312,6 +795,251 @@ class MicrosoftGraphConnector(BaseConnector):
             body = response.json()
             return {"alerts": body.get("value", [])}
 
+        if action == "get_user":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            email = str(payload.get("email") or "").strip()
+            if not email:
+                raise ConnectorUnsupportedActionError("get_user requires payload.email")
+
+            url = f"https://graph.microsoft.com/v1.0/users/{quote(email)}?$select=id,displayName,mail,userPrincipalName,accountEnabled"
+            try:
+                response = await self._request_with_retry("GET", url, headers=headers)
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) == 404:
+                    return {"found": False, "email": email}
+                raise
+
+            body = response.json()
+            return {
+                "found": True,
+                "user_id": str(body.get("id") or ""),
+                "email": str(body.get("mail") or body.get("userPrincipalName") or email),
+                "display_name": str(body.get("displayName") or ""),
+                "account_enabled": bool(body.get("accountEnabled", False)),
+            }
+
+        if action == "create_user":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_data = payload.get("user_data") if isinstance(payload.get("user_data"), dict) else {}
+            user_email = str(user_data.get("email") or "").strip()
+            if not user_email:
+                raise ConnectorUnsupportedActionError("create_user requires payload.user_data.email")
+
+            first_name = str(user_data.get("first_name") or "").strip()
+            last_name = str(user_data.get("last_name") or "").strip()
+            temp_password = str(user_data.get("temp_password") or self._generate_password())
+            body = {
+                "accountEnabled": True,
+                "displayName": f"{first_name} {last_name}".strip() or user_email,
+                "mailNickname": user_email.split("@")[0] if "@" in user_email else user_email,
+                "userPrincipalName": user_email,
+                "department": str(user_data.get("department") or ""),
+                "jobTitle": str(user_data.get("role") or ""),
+                "passwordProfile": {
+                    "forceChangePasswordNextSignIn": True,
+                    "password": temp_password,
+                },
+            }
+
+            try:
+                response = await self._request_with_retry(
+                    "POST",
+                    "https://graph.microsoft.com/v1.0/users",
+                    headers=headers,
+                    json=body,
+                )
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) == 409:
+                    return await self.execute_action("get_user", {"email": user_email})
+                raise
+
+            created = response.json()
+            return {
+                "found": True,
+                "user_id": str(created.get("id") or ""),
+                "email": str(created.get("mail") or created.get("userPrincipalName") or user_email),
+                "display_name": str(created.get("displayName") or body["displayName"]),
+                "account_enabled": bool(created.get("accountEnabled", True)),
+            }
+
+        if action == "update_user":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_id = str(payload.get("user_id") or "").strip()
+            updates = payload.get("updates") if isinstance(payload.get("updates"), dict) else {}
+            if not user_id:
+                raise ConnectorUnsupportedActionError("update_user requires payload.user_id")
+
+            try:
+                await self._request_with_retry(
+                    "PATCH",
+                    f"https://graph.microsoft.com/v1.0/users/{quote(user_id)}",
+                    headers=headers,
+                    json=updates,
+                )
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) == 404:
+                    return {"updated": False, "user_id": user_id}
+                raise
+
+            return {"updated": True, "user_id": user_id}
+
+        if action == "delete_user":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_id = str(payload.get("user_id") or "").strip()
+            if not user_id:
+                raise ConnectorUnsupportedActionError("delete_user requires payload.user_id")
+
+            try:
+                await self._request_with_retry(
+                    "DELETE",
+                    f"https://graph.microsoft.com/v1.0/users/{quote(user_id)}",
+                    headers=headers,
+                )
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) == 404:
+                    return {"deleted": False, "user_id": user_id}
+                raise
+
+            return {"deleted": True, "user_id": user_id}
+
+        if action == "revoke_sessions":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_id = str(payload.get("user_id") or "").strip()
+            if not user_id:
+                raise ConnectorUnsupportedActionError("revoke_sessions requires payload.user_id")
+
+            await self._request_with_retry(
+                "POST",
+                f"https://graph.microsoft.com/v1.0/users/{quote(user_id)}/revokeSignInSessions",
+                headers=headers,
+            )
+            return {"revoked": True, "user_id": user_id}
+
+        if action == "assign_license":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_id = str(payload.get("user_id") or "").strip()
+            sku_id = str(payload.get("sku_id") or "").strip()
+            if not user_id or not sku_id:
+                raise ConnectorUnsupportedActionError("assign_license requires payload.user_id and payload.sku_id")
+
+            await self._request_with_retry(
+                "POST",
+                f"https://graph.microsoft.com/v1.0/users/{quote(user_id)}/assignLicense",
+                headers=headers,
+                json={"addLicenses": [{"skuId": sku_id}], "removeLicenses": []},
+            )
+            return {"assigned": True, "user_id": user_id, "sku_id": sku_id}
+
+        if action == "reset_password":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            user_id = str(payload.get("user_id") or "").strip()
+            temp_password = str(payload.get("temp_password") or self._generate_password())
+            if not user_id:
+                raise ConnectorUnsupportedActionError("reset_password requires payload.user_id")
+
+            try:
+                await self._request_with_retry(
+                    "PATCH",
+                    f"https://graph.microsoft.com/v1.0/users/{quote(user_id)}",
+                    headers=headers,
+                    json={
+                        "passwordProfile": {
+                            "forceChangePasswordNextSignIn": True,
+                            "password": temp_password,
+                        }
+                    },
+                )
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) == 404:
+                    return {"reset": False, "user_id": user_id}
+                raise
+
+            return {"reset": True, "user_id": user_id}
+
+        if action == "get_device_context":
+            token = await get_defender_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            device_id = str(payload.get("device_id") or "").strip()
+            if not device_id:
+                raise ConnectorUnsupportedActionError("get_device_context requires payload.device_id")
+
+            url = f"https://api.securitycenter.microsoft.com/api/machines/{quote(device_id)}"
+            try:
+                response = await self._request_with_retry("GET", url, headers=headers)
+            except ConnectorPermanentError as exc:
+                if "status=404" in str(exc):
+                    return {
+                        "provider": self.provider,
+                        "found": False,
+                        "device_id": device_id,
+                    }
+                raise
+
+            body = response.json()
+            return {
+                "provider": self.provider,
+                "found": True,
+                "device_id": str(body.get("id") or device_id),
+                "display_name": body.get("computerDnsName"),
+                "os_platform": body.get("osPlatform"),
+                "compliance_state": body.get("healthStatus"),
+                "risk_score": body.get("riskScore"),
+            }
+
+        if action == "get_identity_risk":
+            token = await get_graph_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            lookup_key = str(payload.get("lookup_key") or "").strip()
+            if not lookup_key:
+                raise ConnectorUnsupportedActionError("get_identity_risk requires payload.lookup_key")
+
+            if "@" in lookup_key:
+                escaped_lookup = self._escape_odata_literal(lookup_key)
+                url = "https://graph.microsoft.com/v1.0/identityProtection/riskyUsers"
+                response = await self._request_with_retry(
+                    "GET",
+                    url,
+                    headers=headers,
+                    params={"$filter": f"userPrincipalName eq '{escaped_lookup}'", "$top": "1"},
+                )
+                body = response.json()
+                item = (body.get("value") or [None])[0]
+                if item is None:
+                    return {
+                        "provider": self.provider,
+                        "found": False,
+                        "subject": lookup_key,
+                    }
+            else:
+                url = f"https://graph.microsoft.com/v1.0/identityProtection/riskyUsers/{quote(lookup_key)}"
+                try:
+                    response = await self._request_with_retry("GET", url, headers=headers)
+                except ConnectorPermanentError as exc:
+                    if "status=404" in str(exc):
+                        return {
+                            "provider": self.provider,
+                            "found": False,
+                            "subject": lookup_key,
+                        }
+                    raise
+                item = response.json()
+
+            return {
+                "provider": self.provider,
+                "found": True,
+                "subject": item.get("userPrincipalName") or lookup_key,
+                "risk_level": item.get("riskLevel"),
+                "risk_state": item.get("riskState"),
+                "risk_detail": item.get("riskDetail"),
+            }
+
         if action == "isolate_device":
             # TODO: validate tenant API permissions for Defender isolate endpoint.
             token = await get_defender_token(self.secrets)
@@ -320,8 +1048,64 @@ class MicrosoftGraphConnector(BaseConnector):
             comment = payload.get("comment", "Isolated by Secamo workflow")
             body = {"Comment": comment, "IsolationType": "Full"}
             url = f"https://api.securitycenter.microsoft.com/api/machines/{quote(device_id)}/isolate"
-            response = await self._request_with_retry("POST", url, headers=headers, json=body)
-            return response.json() if response.content else {"status": "submitted"}
+            try:
+                response = await self._request_with_retry("POST", url, headers=headers, json=body)
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) == 404:
+                    return {
+                        "success": True,
+                        "provider": self.provider,
+                        "details": "device not found",
+                        "submitted": False,
+                        "found": False,
+                        "device_id": device_id,
+                    }
+                raise
+            if response.content:
+                result = response.json()
+                result.setdefault("submitted", True)
+                result.setdefault("found", True)
+            else:
+                result = {"submitted": True, "found": True, "device_id": device_id}
+            result.setdefault("success", True)
+            result.setdefault("provider", self.provider)
+            result.setdefault("details", "device isolation submitted")
+            return result
+
+        if action == "unisolate_device":
+            token = await get_defender_token(self.secrets)
+            headers = {"Authorization": f"Bearer {token}"}
+            device_id = str(payload.get("device_id") or "").strip()
+            if not device_id:
+                raise ConnectorUnsupportedActionError("unisolate_device requires payload.device_id")
+
+            comment = str(payload.get("comment") or "Released from isolation by Secamo workflow")
+            body = {"Comment": comment}
+            url = f"https://api.securitycenter.microsoft.com/api/machines/{quote(device_id)}/unisolate"
+            try:
+                response = await self._request_with_retry("POST", url, headers=headers, json=body)
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) == 404:
+                    return {
+                        "success": True,
+                        "provider": self.provider,
+                        "details": "device not found",
+                        "submitted": False,
+                        "found": False,
+                        "device_id": device_id,
+                    }
+                raise
+
+            if response.content:
+                result = response.json()
+                result.setdefault("submitted", True)
+                result.setdefault("found", True)
+            else:
+                result = {"submitted": True, "found": True, "device_id": device_id}
+            result.setdefault("success", True)
+            result.setdefault("provider", self.provider)
+            result.setdefault("details", "device unisolation submitted")
+            return result
 
         raise ConnectorUnsupportedActionError(
             f"Unsupported action '{action}' for provider '{self.provider}'"

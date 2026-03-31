@@ -8,7 +8,7 @@ import boto3
 import httpx
 
 from connectors.errors import ConnectorConfigurationError, ConnectorPermanentError, ConnectorTransientError
-from shared.models import TenantSecrets
+from shared.providers.contracts import TenantSecrets
 from shared.ssm_client import get_secret, put_secret
 
 

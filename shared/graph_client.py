@@ -5,7 +5,7 @@ import time
 
 import httpx
 
-from shared.models import TenantSecrets
+from shared.providers.contracts import TenantSecrets
 
 
 _TOKEN_CACHE: dict[str, dict[str, float | str]] = {}

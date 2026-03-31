@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from shared.approval.contracts import ApprovalSignal
+from shared.models.domain import ApprovalDecision
 
 
 def _required_text(payload: dict[str, Any], key: str) -> str:
@@ -87,3 +88,18 @@ def normalize_approval_callback(channel: str, payload: dict[str, Any]) -> Approv
     if normalized_channel in {"teams", "ms_teams"}:
         return _normalize_teams(payload)
     raise ValueError(f"unsupported_channel:{channel}")
+
+
+def approval_signal_to_decision(signal: ApprovalSignal) -> ApprovalDecision:
+    """Convert an ingress ApprovalSignal to the workflow ApprovalDecision model.
+
+    This bridges the ingress callback pipeline (which produces ApprovalSignal)
+    with the HiTLApprovalWorkflow signal handler (which expects ApprovalDecision).
+    The key mapping is ``signal.actor`` → ``decision.reviewer``.
+    """
+    return ApprovalDecision(
+        approved=signal.approved,
+        reviewer=signal.actor,
+        action=signal.action,
+        comments=signal.comments,
+    )

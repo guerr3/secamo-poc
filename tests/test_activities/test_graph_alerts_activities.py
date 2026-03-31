@@ -3,11 +3,20 @@ from __future__ import annotations
 import pytest
 from temporalio.exceptions import ApplicationError
 
-from activities.graph_alerts import graph_enrich_alert, graph_get_alerts
-from activities.graph_devices import graph_isolate_device
+from activities.connector_dispatch import (
+    graph_confirm_user_compromised,
+    graph_enrich_alert,
+    graph_get_alerts,
+    graph_get_signin_history,
+    graph_isolate_device,
+    graph_list_noncompliant_devices,
+    graph_list_risky_users,
+    graph_run_antivirus_scan,
+)
 from activities.risk import calculate_risk_score
 from activities.threat_intel import threat_intel_lookup
-from shared.models import DefenderDetectionFindingEvent, EnrichedAlert, TenantSecrets, ThreatIntelResult, VendorExtension
+from shared.models import ConnectorActionData, ConnectorActionResult, DefenderDetectionFindingEvent, EnrichedAlert, ThreatIntelResult, VendorExtension
+from shared.providers.contracts import TenantSecrets
 
 
 class _Resp:
@@ -61,14 +70,31 @@ def secrets() -> TenantSecrets:
 
 @pytest.mark.asyncio
 async def test_graph_enrich_alert_happy(mocker, alert, secrets):
-    mocker.patch("activities.graph_alerts.get_graph_token", return_value="tok")
-    mocker.patch("activities.graph_alerts.load_tenant_secrets", return_value=secrets)
-    responses = [
-        _Resp(200, {"severity": "high", "title": "Alert", "description": "Body"}),
-        _Resp(200, {"displayName": "User One", "department": "Finance"}),
-        _Resp(200, {"deviceName": "LAPTOP-1", "osPlatform": "Windows", "isCompliant": False}),
-    ]
-    mocker.patch("activities.graph_alerts.httpx.AsyncClient", return_value=_Client(responses))
+    mocker.patch(
+        "activities.connector_dispatch.connector_execute_action",
+        new=mocker.AsyncMock(
+            return_value=ConnectorActionResult(
+                provider="microsoft_defender",
+                operation_type="action",
+                success=True,
+                details="ok",
+                data=ConnectorActionData(
+                    action="enrich_alert_context",
+                    payload={
+                        "alert_id": "a1",
+                        "severity": "high",
+                        "title": "Alert",
+                        "description": "Body",
+                        "user_display_name": "User One",
+                        "user_department": "Finance",
+                        "device_display_name": "LAPTOP-1",
+                        "device_os": "Windows",
+                        "device_compliance": "noncompliant",
+                    },
+                ),
+            )
+        ),
+    )
     enriched = await graph_enrich_alert("t1", alert)
     assert enriched.user_display_name == "User One"
     assert enriched.device_compliance == "noncompliant"
@@ -76,23 +102,94 @@ async def test_graph_enrich_alert_happy(mocker, alert, secrets):
 
 @pytest.mark.asyncio
 async def test_graph_get_alerts_happy_and_error(mocker, secrets):
-    mocker.patch("activities.graph_alerts.get_graph_token", return_value="tok")
-    mocker.patch("activities.graph_alerts.load_tenant_secrets", return_value=secrets)
-    mocker.patch("activities.graph_alerts.httpx.AsyncClient", return_value=_Client([_Resp(200, {"value": [{"id": "a1"}]})]))
+    mocker.patch(
+        "activities.connector_dispatch.connector_execute_action",
+        new=mocker.AsyncMock(
+            return_value=ConnectorActionResult(
+                provider="microsoft_defender",
+                operation_type="action",
+                success=True,
+                details="ok",
+                data=ConnectorActionData(action="list_user_alerts", payload={"alerts": [{"id": "a1"}]}),
+            )
+        ),
+    )
     alerts = await graph_get_alerts("t1", "user@example.com")
     assert len(alerts) == 1
 
-    mocker.patch("activities.graph_alerts.httpx.AsyncClient", return_value=_Client([_Resp(404)]))
+    mocker.patch(
+        "activities.connector_dispatch.connector_execute_action",
+        new=mocker.AsyncMock(side_effect=ApplicationError("boom")),
+    )
     with pytest.raises(ApplicationError):
         await graph_get_alerts("t1", "user@example.com")
 
 
 @pytest.mark.asyncio
 async def test_graph_isolate_device_happy(mocker, secrets):
-    mocker.patch("activities.graph_devices.get_defender_token", return_value="tok")
-    mocker.patch("activities.graph_devices.load_tenant_secrets", return_value=secrets)
-    mocker.patch("activities.graph_devices.httpx.AsyncClient", return_value=_Client([_Resp(201)]))
+    mocker.patch(
+        "activities.connector_dispatch.connector_execute_action",
+        new=mocker.AsyncMock(
+            return_value=ConnectorActionResult(
+                provider="microsoft_defender",
+                operation_type="action",
+                success=True,
+                details="ok",
+                data=ConnectorActionData(action="isolate_device", payload={"submitted": True, "found": True}),
+            )
+        ),
+    )
     assert await graph_isolate_device("t1", "d1") is True
+
+
+@pytest.mark.asyncio
+async def test_signin_and_device_facades_use_connector_actions(mocker):
+    connector = mocker.AsyncMock()
+    connector.side_effect = [
+        ConnectorActionResult(
+            provider="microsoft_defender",
+            operation_type="action",
+            success=True,
+            data=ConnectorActionData(action="confirm_user_compromised", payload={"confirmed": True}),
+        ),
+        ConnectorActionResult(
+            provider="microsoft_defender",
+            operation_type="action",
+            success=True,
+            data=ConnectorActionData(action="get_signin_history", payload={"signins": [{"id": "s1"}]}),
+        ),
+        ConnectorActionResult(
+            provider="microsoft_defender",
+            operation_type="action",
+            success=True,
+            data=ConnectorActionData(action="list_risky_users", payload={"users": [{"id": "r1", "riskLevel": "high"}]}),
+        ),
+        ConnectorActionResult(
+            provider="microsoft_defender",
+            operation_type="action",
+            success=True,
+            data=ConnectorActionData(action="run_antivirus_scan", payload={"submitted": True, "found": True}),
+        ),
+        ConnectorActionResult(
+            provider="microsoft_defender",
+            operation_type="action",
+            success=True,
+            data=ConnectorActionData(action="list_noncompliant_devices", payload={"devices": [{"id": "dev-1"}]}),
+        ),
+    ]
+
+    mocker.patch("activities.connector_dispatch.connector_execute_action", new=connector)
+
+    assert await graph_confirm_user_compromised("t1", "u1") is True
+    assert await graph_get_signin_history("t1", "user@example.com") == [{"id": "s1"}]
+    risky = await graph_list_risky_users("t1", "medium")
+    assert len(risky) == 1
+    assert risky[0].riskLevel == "high"
+
+    scan_result = await graph_run_antivirus_scan("t1", "dev-1", "quick")
+    assert scan_result.success is True
+    assert scan_result.data.payload["submitted"] is True
+    assert await graph_list_noncompliant_devices("t1") == [{"id": "dev-1"}]
 
 
 @pytest.mark.asyncio

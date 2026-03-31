@@ -15,7 +15,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from shared.models.canonical import DefenderDetectionFindingEvent, Envelope
     from shared.workflow_helpers import bootstrap_tenant
-    from activities.notify_teams import teams_send_notification
+    from activities.communications import teams_send_notification
     from activities.audit import create_audit_log
     from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
     from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
@@ -90,6 +90,7 @@ class DefenderAlertEnrichmentWorkflow:
                 tenant_id=event.tenant_id,
                 alert=payload,
                 edr_provider=config.edr_provider,
+                identity_provider=config.iam_provider,
                 threat_intel=threat_intel,
             ),
             id=f"{workflow.info().workflow_id}-alert-enrichment",

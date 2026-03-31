@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 
-from shared.models import Envelope, TenantSecrets
+from shared.models import Envelope
+from shared.providers.contracts import TenantSecrets
 
 
 class BaseConnector(ABC):

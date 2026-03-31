@@ -4,7 +4,7 @@ Responsibility: expose typed discriminated signal payload models used across cal
 This package must not contain provider webhook parsing implementations or Temporal SDK calls.
 """
 
-from .callbacks import normalize_approval_callback
+from .callbacks import approval_signal_to_decision, normalize_approval_callback
 from .contracts import ApprovalSignal, GenericActionSignal, SignalPayload
 from .token_store import DEFAULT_HITL_TOKEN_TTL_SECONDS, HITL_TOKEN_TTL_ENV_VAR, DynamoDbHitlTokenStore, get_hitl_token_ttl_seconds
 
@@ -15,6 +15,7 @@ __all__ = [
 	"GenericActionSignal",
 	"HITL_TOKEN_TTL_ENV_VAR",
 	"SignalPayload",
+	"approval_signal_to_decision",
 	"get_hitl_token_ttl_seconds",
 	"normalize_approval_callback",
 ]

@@ -101,6 +101,109 @@ For new connectors, always do all three:
 2. Register it in the connector registry.
 3. Add tests under `tests/`.
 
+## Architecture Pattern Baseline (Use This As Source Of Truth)
+
+When selecting patterns for new code in `shared/`, follow this priority order.
+Do not infer architecture direction from legacy or partially adopted modules.
+
+Pattern sources to treat as authoritative:
+
+1. Contract-first typed boundaries:
+
+- [shared/models/canonical.py](../shared/models/canonical.py)
+- [shared/ingress/contracts.py](../shared/ingress/contracts.py)
+- [shared/routing/contracts.py](../shared/routing/contracts.py)
+- [shared/auth/contracts.py](../shared/auth/contracts.py)
+
+2. Registry-driven policy resolution:
+
+- [shared/routing/registry.py](../shared/routing/registry.py)
+- [shared/auth/registry.py](../shared/auth/registry.py)
+
+3. Capability-first provider interfaces and adapters:
+
+- [shared/models/capabilities.py](../shared/models/capabilities.py)
+- [shared/providers/factory.py](../shared/providers/factory.py)
+- [shared/providers/identity_access.py](../shared/providers/identity_access.py)
+- [shared/providers/ticketing.py](../shared/providers/ticketing.py)
+
+4. Temporal transport abstraction:
+
+- [shared/temporal/dispatcher.py](../shared/temporal/dispatcher.py)
+- [shared/temporal/signal_gateway.py](../shared/temporal/signal_gateway.py)
+
+Do not use these modules as architectural baseline for new work:
+
+- `shared/models/chatops.py`
+- `shared/models/triage.py`
+- `shared/providers/ai/*`
+- `shared/providers/chatops/*`
+
+They may remain in the repository for transitional reasons, but they are not the pattern source for new abstractions.
+
+## Anti-Parallel Implementation Rules (Mandatory)
+
+To prevent duplicate implementations for the same business capability:
+
+1. One capability, one interface:
+
+- Define capability contracts only in [shared/models/capabilities.py](../shared/models/capabilities.py).
+- Do not create alternate Protocols for the same capability in other model files.
+
+2. One activity surface per capability:
+
+- Activities must call one capability provider path (via factory), not a second direct provider path in parallel.
+
+3. No shadow routing or dispatch paths:
+
+- Routing decisions must stay in [shared/routing/defaults.py](../shared/routing/defaults.py) + [shared/routing/registry.py](../shared/routing/registry.py).
+- Do not add side-route logic in handlers, activities, or connectors.
+
+4. No parallel legacy + new execution for same use case:
+
+- If replacing a flow, remove old call sites in the same change set.
+- Keep temporary aliases only when explicitly required by a migration task.
+
+5. Canonical contracts over ad-hoc dicts:
+
+- When a Pydantic contract exists, use it instead of introducing a raw dict boundary.
+
+## Decision Matrix For New Work In Shared
+
+Before adding code, classify the change and place it in exactly one layer:
+
+1. New boundary contract:
+
+- Add/update model in `shared/models/*` or `shared/*/contracts.py`.
+
+2. Provider/channel/route selection rule:
+
+- Add/update registry/factory logic; do not hardcode in activities/workflows.
+
+3. Provider-specific API translation:
+
+- Implement in connector or provider adapter, not in workflow code.
+
+4. Temporal start/signal transport:
+
+- Implement behind Protocols in `shared/temporal/*`.
+
+5. Auth verification behavior:
+
+- Implement validator in `shared/auth/validators/*` and register centrally.
+
+If a change seems to belong to multiple layers, split it into separate commits by layer (contracts -> registry/factory -> adapter -> call sites).
+
+## Compatibility And Cleanup Policy
+
+Default policy for this repository:
+
+- Do not preserve backward compatibility unless explicitly required by the task.
+- Prefer replacement over coexistence when introducing new capability paths.
+- Remove obsolete exports/usages/tests in the same PR when practical.
+
+This policy exists specifically to avoid long-lived parallel implementations and architecture drift.
+
 ## Temporal Engineering Rules
 
 Workflow code must remain deterministic:

@@ -8,11 +8,11 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 from connectors.jira_provisioner import JiraProvisioner
 from shared.models import (
-    GraphSubscriptionConfig,
     PollingProviderConfig,
     TenantConfig,
-    TenantSecrets,
 )
+from shared.models.subscriptions import SubscriptionConfig
+from shared.providers.contracts import TenantSecrets
 
 
 ssm_client = None
@@ -203,7 +203,7 @@ def _parse_polling_providers(raw_value: str | None) -> list[PollingProviderConfi
     return providers
 
 
-def _parse_graph_subscriptions(raw_value: str | None) -> list[GraphSubscriptionConfig]:
+def _parse_graph_subscriptions(raw_value: str | None) -> list[SubscriptionConfig]:
     if not raw_value:
         return []
 
@@ -216,15 +216,15 @@ def _parse_graph_subscriptions(raw_value: str | None) -> list[GraphSubscriptionC
         parsed_json = None
 
     if parsed_json is not None:
-        configs: list[GraphSubscriptionConfig] = []
+        configs: list[SubscriptionConfig] = []
         for item in parsed_json:
             try:
-                configs.append(GraphSubscriptionConfig.model_validate(item))
+                configs.append(SubscriptionConfig.model_validate(item))
             except Exception:
                 activity.logger.warning("Ongeldige graph_subscriptions JSON entry overgeslagen: %s", item)
         return configs
 
-    providers: list[GraphSubscriptionConfig] = []
+    providers: list[SubscriptionConfig] = []
     for entry in raw_value.split(","):
         chunk = entry.strip()
         if not chunk:
@@ -240,7 +240,7 @@ def _parse_graph_subscriptions(raw_value: str | None) -> list[GraphSubscriptionC
         expiration_hours = _parse_int(parts[3] if len(parts) > 3 else None, 24)
 
         providers.append(
-            GraphSubscriptionConfig(
+            SubscriptionConfig(
                 resource=resource,
                 change_types=change_types,
                 include_resource_data=include_resource_data,
@@ -288,6 +288,7 @@ async def get_tenant_config(tenant_id: str) -> TenantConfig:
     config = TenantConfig(
         tenant_id=tenant_id,
         display_name=parameters.get("display_name") or tenant_registry.get(tenant_id, {}).get("name", "Unknown Tenant"),
+        iam_provider=parameters.get("iam_provider", "microsoft_graph"),
         edr_provider=parameters.get("edr_provider", "microsoft_defender"),
         ticketing_provider=parameters.get("ticketing_provider", "jira"),
         threat_intel_providers=[

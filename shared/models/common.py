@@ -10,3 +10,9 @@ class LifecycleAction(str, Enum):
     UPDATE = "update"
     DELETE = "delete"
     PASSWORD_RESET = "password_reset"
+
+
+# Canonical signal name used by HiTLApprovalWorkflow and all callers that
+# dispatch approval signals.  Defined here to guarantee a single source of
+# truth for the workflow signal method name and the SignalGateway mapping.
+HITL_APPROVAL_SIGNAL_NAME = "approve"

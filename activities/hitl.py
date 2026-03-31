@@ -6,19 +6,16 @@ import hashlib
 import os
 import time
 from urllib.parse import urlencode
-from urllib.parse import quote
 
 import boto3
-import httpx
 from botocore.exceptions import ClientError
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from activities._activity_errors import application_error_from_http_status, raise_activity_error
-from activities._tenant_secrets import load_tenant_secrets
+from activities._activity_errors import raise_activity_error
+from activities.connector_dispatch import connector_execute_action
 from activities.tenant import get_tenant_config
 from shared.config import SECAMO_SENDER_EMAIL
-from shared.graph_client import get_graph_token
 from shared.models import (
     ChatOpsAction,
     ChatOpsMessage,
@@ -29,7 +26,52 @@ from shared.models import (
 )
 from shared.providers.factory import get_chatops_provider
 from shared.ssm_client import get_secret_bundle
-from activities.hitl_renderers import _render_approval_email
+
+
+def _render_metadata_rows(metadata: dict) -> str:
+    return "".join(
+        f"<tr><td style='padding:6px 8px;border:1px solid #e5e7eb;'><b>{key}</b></td>"
+        f"<td style='padding:6px 8px;border:1px solid #e5e7eb;'>{value}</td></tr>"
+        for key, value in metadata.items()
+    )
+
+
+def _render_action_buttons(action_urls: dict[str, str]) -> str:
+    return "".join(
+        f"<a href='{url}' style='display:inline-block;margin:8px 8px 0 0;padding:10px 16px;"
+        f"background:#0b5ed7;color:#ffffff;text-decoration:none;border-radius:6px;'>"
+        f"{action.replace('_', ' ').title()}</a>"
+        for action, url in action_urls.items()
+    )
+
+
+def _render_metadata_section(metadata_rows: str) -> str:
+    if not metadata_rows:
+        return ""
+    return (
+        "<h3 style='margin:16px 0 8px 0;font-family:Segoe UI,Arial,sans-serif;'>Context</h3>"
+        "<table style='border-collapse:collapse;font-family:Segoe UI,Arial,sans-serif;font-size:14px;'>"
+        f"{metadata_rows}</table>"
+    )
+
+
+def _render_approval_email(request: HiTLRequest, action_urls: dict[str, str]) -> str:
+    metadata_rows = _render_metadata_rows(request.metadata)
+    action_buttons = _render_action_buttons(action_urls)
+    metadata_section = _render_metadata_section(metadata_rows)
+
+    return (
+        "<html><body style='font-family:Segoe UI,Arial,sans-serif;color:#111827;'>"
+        f"<h2 style='margin:0 0 12px 0;'>{request.title}</h2>"
+        f"<p style='line-height:1.5;'>{request.description}</p>"
+        f"{metadata_section}"
+        "<h3 style='margin:18px 0 8px 0;'>Choose an action</h3>"
+        f"<div>{action_buttons}</div>"
+        "<p style='margin-top:14px;font-size:12px;color:#6b7280;'>"
+        f"This link expires in {request.timeout_hours} hour(s) and can only be used once."
+        "</p>"
+        "</body></html>"
+    )
 
 
 class _LazyBotoClient:
@@ -54,7 +96,11 @@ _dynamo = _LazyBotoClient("dynamodb", "eu-west-1")
 def _token_table_name() -> str:
     table_name = os.environ.get("HITL_TOKEN_TABLE", "").strip()
     if not table_name:
-        raise ValueError("HITL_TOKEN_TABLE is not configured")
+        raise ApplicationError(
+            "HITL_TOKEN_TABLE environment variable is not configured",
+            type="MissingHitlTableConfig",
+            non_retryable=True,
+        )
     return table_name
 
 
@@ -162,46 +208,26 @@ async def _dispatch_email(
     }
 
     email_html = _render_approval_email(request, action_urls)
-    graph_secrets = load_tenant_secrets(request.tenant_id, "graph")
-    graph_token = await get_graph_token(graph_secrets)
+    if not SECAMO_SENDER_EMAIL:
+        raise_activity_error(
+            f"[{request.tenant_id}] SECAMO_SENDER_EMAIL is not configured",
+            error_type="MissingSenderEmail",
+            non_retryable=True,
+        )
 
-    payload = {
-        "message": {
+    action_result = await connector_execute_action(
+        request.tenant_id,
+        "microsoft_defender",
+        "send_email",
+        {
+            "sender": SECAMO_SENDER_EMAIL,
+            "to": request.reviewer_email,
             "subject": f"[Secamo Approval] {request.title}",
-            "body": {
-                "contentType": "HTML",
-                "content": email_html,
-            },
-            "toRecipients": [{"emailAddress": {"address": request.reviewer_email}}],
+            "body": email_html,
+            "content_type": "HTML",
         },
-        "saveToSentItems": "false",
-    }
-
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.post(
-            f"https://graph.microsoft.com/v1.0/users/{quote(SECAMO_SENDER_EMAIL)}/sendMail",
-            headers={
-                "Authorization": f"Bearer {graph_token}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-        )
-
-    if response.status_code >= 400:
-        retry_after_seconds: int | None = None
-        retry_after = response.headers.get("Retry-After")
-        if retry_after:
-            try:
-                retry_after_seconds = int(retry_after)
-            except ValueError:
-                retry_after_seconds = None
-        raise application_error_from_http_status(
-            request.tenant_id,
-            "microsoft_graph",
-            "hitl_dispatch_email",
-            response.status_code,
-            retry_after_seconds=retry_after_seconds,
-        )
+    )
+    result_payload = action_result.data.payload
 
     activity.logger.info(
         "[%s] HiTL email dispatched token=%s... recipient=%s",
@@ -209,7 +235,7 @@ async def _dispatch_email(
         binding.token[:8],
         request.reviewer_email,
     )
-    return _dispatch_ok("email", message_id=response.headers.get("x-ms-request-id"))
+    return _dispatch_ok("email", message_id=str(result_payload.get("message_id") or "") or None)
 
 
 async def _dispatch_teams(
@@ -225,7 +251,7 @@ async def _dispatch_teams(
     if not secrets:
         return _dispatch_error("teams", "MissingTenantSecrets", "No ChatOps secrets found")
 
-    provider = await get_chatops_provider(request.tenant_id, secrets)
+    provider = await get_chatops_provider(request.tenant_id, secrets, cfg)
 
     resolved_channel = cfg.chatops_config.default_channel
     if not resolved_channel and cfg.chatops_config.default_channels:

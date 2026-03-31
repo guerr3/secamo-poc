@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Protocol, runtime_checkable
 
+from shared.approval.callbacks import approval_signal_to_decision
 from shared.approval.contracts import ApprovalSignal, GenericActionSignal, SignalPayload
 
 
@@ -42,11 +43,21 @@ class SignalGateway:
         raise ValueError("unsupported_signal_payload")
 
     async def dispatch(self, workflow_id: str, payload: SignalPayload, run_id: str | None = None) -> None:
-        """Dispatch typed signal payload through configured transport."""
+        """Dispatch typed signal payload through configured transport.
+
+        ApprovalSignal payloads are converted to ApprovalDecision-compatible
+        dicts so the HiTLApprovalWorkflow signal handler receives the expected
+        field names (actor → reviewer).
+        """
+        if isinstance(payload, ApprovalSignal):
+            decision = approval_signal_to_decision(payload)
+            signal_payload = decision.model_dump(mode="json")
+        else:
+            signal_payload = payload.model_dump(mode="json")
 
         await self._transport.send(
             workflow_id=workflow_id,
             run_id=run_id,
             signal_name=self.signal_name(payload),
-            payload=payload.model_dump(mode="json"),
+            payload=signal_payload,
         )

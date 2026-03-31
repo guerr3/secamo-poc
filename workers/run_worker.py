@@ -49,67 +49,72 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
-        from activities.graph_subscriptions import (
-            create_graph_subscription,
-            delete_graph_subscription,
-            list_graph_subscriptions,
-            load_subscription_metadata,
-            lookup_subscription_metadata,
-            renew_graph_subscription,
-            store_subscription_metadata,
+        from activities.connector_dispatch import (
+            subscription_create,
+            subscription_delete,
+            subscription_list,
+            subscription_metadata_load,
+            subscription_metadata_lookup,
+            subscription_metadata_store,
+            subscription_renew,
         )
         soc_activities.extend([
-            create_graph_subscription,
-            renew_graph_subscription,
-            delete_graph_subscription,
-            list_graph_subscriptions,
-            store_subscription_metadata,
-            load_subscription_metadata,
-            lookup_subscription_metadata,
+            subscription_create,
+            subscription_renew,
+            subscription_delete,
+            subscription_list,
+            subscription_metadata_store,
+            subscription_metadata_load,
+            subscription_metadata_lookup,
         ])
-        logger.info("✓ Graph subscription activities geladen")
+        logger.info("✓ Subscription capability activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Graph subscription activities: {e}")
         sys.exit(1)
 
     try:
-        from activities.graph_users import (
-            graph_get_user, graph_create_user, graph_update_user,
-            graph_delete_user, graph_revoke_sessions,
-            graph_assign_license, graph_reset_password,
+        from activities.identity import (
+            identity_assign_license,
+            identity_create_user,
+            identity_delete_user,
+            identity_get_user,
+            identity_reset_password,
+            identity_revoke_sessions,
+            identity_update_user,
         )
         iam_activities.extend([
-            graph_get_user, graph_create_user, graph_update_user,
-            graph_delete_user, graph_revoke_sessions,
-            graph_assign_license, graph_reset_password,
+            identity_get_user,
+            identity_create_user,
+            identity_update_user,
+            identity_delete_user,
+            identity_revoke_sessions,
+            identity_assign_license,
+            identity_reset_password,
         ])
         soc_activities.extend([
-            graph_get_user,
-            graph_delete_user,
-            graph_revoke_sessions,
+            identity_get_user,
+            identity_delete_user,
+            identity_revoke_sessions,
         ])
-        logger.info("✓ Graph Users activities geladen")
+        logger.info("✓ Identity activities geladen")
     except ImportError as e:
-        logger.error(f"✗ Fout bij het laden van Graph Users activities: {e}")
+        logger.error(f"✗ Fout bij het laden van Identity activities: {e}")
         sys.exit(1)
 
     try:
-        from activities.graph_alerts import (
-            graph_enrich_alert, graph_get_alerts,
-        )
-        from activities.graph_devices import (
-            graph_get_device_details,
-            graph_isolate_device,
-            graph_list_noncompliant_devices,
-            graph_run_antivirus_scan,
-            graph_unisolate_device,
-        )
-        from activities.graph_signin import (
+        from activities.connector_dispatch import (
+            device_get_context,
             graph_confirm_user_compromised,
             graph_dismiss_risky_user,
-            graph_get_risky_user,
+            graph_enrich_alert,
+            graph_get_alerts,
             graph_get_signin_history,
+            graph_isolate_device,
+            graph_list_noncompliant_devices,
             graph_list_risky_users,
+            graph_run_antivirus_scan,
+            graph_unisolate_device,
+            identity_get_risk_context,
         )
         from activities.threat_intel import threat_intel_lookup
         from activities.risk import calculate_risk_score
@@ -118,17 +123,17 @@ def load_activities_by_queue() -> dict[str, list]:
             graph_get_alerts,
             graph_isolate_device,
             graph_unisolate_device,
-            graph_get_device_details,
+            device_get_context,
             graph_run_antivirus_scan,
             graph_list_noncompliant_devices,
-            graph_get_risky_user,
+            identity_get_risk_context,
             graph_confirm_user_compromised,
             graph_dismiss_risky_user,
             graph_get_signin_history,
             graph_list_risky_users,
             threat_intel_lookup, calculate_risk_score,
         ])
-        logger.info("✓ Graph Alerts activities geladen")
+        logger.info("✓ SOC capability activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Graph Alerts activities: {e}")
         sys.exit(1)
@@ -144,12 +149,11 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
-        from activities.notify_teams import teams_send_notification, teams_send_adaptive_card
-        from activities.notify_email import email_send
+        from activities.communications import teams_send_notification, teams_send_adaptive_card, email_send
         soc_activities.extend([teams_send_notification, teams_send_adaptive_card, email_send])
-        logger.info("✓ Notifications activities geladen")
+        logger.info("✓ Communications activities geladen")
     except ImportError as e:
-        logger.error(f"✗ Fout bij het laden van Notifications activities: {e}")
+        logger.error(f"✗ Fout bij het laden van Communications activities: {e}")
         sys.exit(1)
 
     try:
@@ -158,15 +162,6 @@ def load_activities_by_queue() -> dict[str, list]:
         logger.info("✓ HiTL activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van HiTL activities: {e}")
-        sys.exit(1)
-
-    try:
-        from activities.triage import perform_ai_triage
-        from activities.chatops import send_interactive_alert
-        soc_activities.extend([perform_ai_triage, send_interactive_alert])
-        logger.info("✓ AI triage/ChatOps activities geladen")
-    except ImportError as e:
-        logger.error(f"✗ Fout bij het laden van AI triage/ChatOps activities: {e}")
         sys.exit(1)
 
     try:

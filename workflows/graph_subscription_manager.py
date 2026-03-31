@@ -7,19 +7,15 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from activities.graph_subscriptions import (
-        create_graph_subscription,
-        delete_graph_subscription,
-        load_subscription_metadata,
-        renew_graph_subscription,
+    from activities.connector_dispatch import (
+        subscription_create,
+        subscription_delete,
+        subscription_metadata_load,
+        subscription_renew,
     )
     from activities.tenant import get_tenant_config
-    from shared.models import (
-        GraphSubscriptionConfig,
-        GraphSubscriptionManagerInput,
-        GraphSubscriptionState,
-        TenantConfig,
-    )
+    from shared.models import TenantConfig
+    from shared.models.subscriptions import SubscriptionConfig, SubscriptionManagerInput, SubscriptionState
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
@@ -44,7 +40,7 @@ class GraphSubscriptionManagerWorkflow:
         self._offboard_tenant = True
 
     @workflow.run
-    async def run(self, input: GraphSubscriptionManagerInput) -> str:
+    async def run(self, input: SubscriptionManagerInput) -> str:
         config: TenantConfig = await workflow.execute_activity(
             get_tenant_config,
             args=[input.tenant_id],
@@ -53,7 +49,7 @@ class GraphSubscriptionManagerWorkflow:
         )
 
         current = await workflow.execute_activity(
-            load_subscription_metadata,
+            subscription_metadata_load,
             args=[input.tenant_id],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
@@ -66,8 +62,8 @@ class GraphSubscriptionManagerWorkflow:
             if desired_subscription.resource in current_by_resource:
                 continue
 
-            created: GraphSubscriptionState = await workflow.execute_activity(
-                create_graph_subscription,
+            created: SubscriptionState = await workflow.execute_activity(
+                subscription_create,
                 args=[
                     input.tenant_id,
                     desired_subscription,
@@ -84,7 +80,7 @@ class GraphSubscriptionManagerWorkflow:
         for resource in stale_resources:
             stale = current_by_resource[resource]
             await workflow.execute_activity(
-                delete_graph_subscription,
+                subscription_delete,
                 args=[input.tenant_id, stale.subscription_id, input.secret_type],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
@@ -94,7 +90,7 @@ class GraphSubscriptionManagerWorkflow:
         if self._offboard_tenant:
             for subscription in current_by_resource.values():
                 await workflow.execute_activity(
-                    delete_graph_subscription,
+                    subscription_delete,
                     args=[input.tenant_id, subscription.subscription_id, input.secret_type],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,
@@ -109,7 +105,7 @@ class GraphSubscriptionManagerWorkflow:
                 continue
             if state.expires_at <= renewal_deadline:
                 renewed = await workflow.execute_activity(
-                    renew_graph_subscription,
+                    subscription_renew,
                     args=[
                         input.tenant_id,
                         state.subscription_id,
@@ -129,7 +125,7 @@ class GraphSubscriptionManagerWorkflow:
 
         await workflow.wait_condition(workflow.all_handlers_finished)
         workflow.continue_as_new(
-            GraphSubscriptionManagerInput(
+            SubscriptionManagerInput(
                 tenant_id=input.tenant_id,
                 notification_url=input.notification_url,
                 secret_type=input.secret_type,
@@ -141,7 +137,7 @@ class GraphSubscriptionManagerWorkflow:
 
     def _next_wait_duration(
         self,
-        subscriptions: Iterable[GraphSubscriptionState],
+        subscriptions: Iterable[SubscriptionState],
         now,
     ) -> timedelta:
         items = list(subscriptions)
@@ -156,6 +152,6 @@ class GraphSubscriptionManagerWorkflow:
             return timedelta(hours=6)
         return delta
 
-    def _client_state(self, tenant_id: str, subscription: GraphSubscriptionConfig) -> str:
+    def _client_state(self, tenant_id: str, subscription: SubscriptionConfig) -> str:
         safe_resource = subscription.resource.replace("/", "-")
         return f"secamo:{tenant_id}:{safe_resource}"

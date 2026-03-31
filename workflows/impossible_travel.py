@@ -7,7 +7,7 @@ with workflow.unsafe.imports_passed_through():
     from shared.models import (
         ApprovalDecision,
         ConnectorActionResult,
-        GraphUser,
+        IdentityUser,
         HiTLApprovalRequest,
         HiTLRequest,
         IncidentResponseRequest,
@@ -19,7 +19,7 @@ with workflow.unsafe.imports_passed_through():
     )
     from shared.models.canonical import Envelope, ImpossibleTravelEvent
     from shared.workflow_helpers import bootstrap_tenant
-    from activities.graph_users import graph_get_user
+    from activities.identity import identity_get_user
     from activities.connector_dispatch import connector_execute_action
     from workflows.child.hitl_approval import HiTLApprovalWorkflow
     from workflows.child.incident_response import IncidentResponseWorkflow
@@ -36,7 +36,7 @@ class ImpossibleTravelWorkflow:
     WF-05 — Impossible Travel Alert Triage (Advanced HITL).
     Task Queue: soc-defender
 
-    Flow: graph_get_user → threat_intel_lookup → graph_get_alerts →
+    Flow: identity_get_user → threat_intel_lookup → provider_get_alerts →
           ticket_create → teams_send_adaptive_card → wait_for_approval →
           [action based on decision] → collect_evidence_bundle
     """
@@ -63,8 +63,8 @@ class ImpossibleTravelWorkflow:
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
 
         # 2. Gebruikersgegevens ophalen
-        user: GraphUser | None = await workflow.execute_activity(
-            graph_get_user,
+        user: IdentityUser | None = await workflow.execute_activity(
+            identity_get_user,
             args=[event.tenant_id, payload.user_principal_name],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,

@@ -15,7 +15,7 @@ from connectors.stub_providers import (
     ServiceNowConnector,
     VirusTotalConnector,
 )
-from shared.models import TenantSecrets
+from shared.providers.contracts import TenantSecrets
 
 ConnectorFactory = Callable[[str, TenantSecrets], BaseConnector]
 
@@ -29,6 +29,7 @@ def _factory(cls: type[BaseConnector]) -> ConnectorFactory:
 
 _CONNECTOR_FACTORIES: dict[str, ConnectorFactory] = {
     "microsoft_defender": _factory(MicrosoftGraphConnector),
+    "microsoft_graph": _factory(MicrosoftGraphConnector),
     "jira": _factory(JiraConnector),
     "crowdstrike": _factory(CrowdStrikeConnector),
     "sentinelone": _factory(SentinelOneConnector),

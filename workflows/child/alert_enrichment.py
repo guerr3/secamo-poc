@@ -5,14 +5,14 @@ from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
     from activities.connector_dispatch import connector_execute_action
-    from activities.graph_devices import graph_get_device_details
-    from activities.graph_signin import graph_get_risky_user
     from activities.risk import calculate_risk_score
     from shared.models import (
         AlertEnrichmentRequest,
         AlertEnrichmentResult,
         ConnectorActionResult,
+        DeviceContext,
         EnrichedAlert,
+        IdentityRiskContext,
         ThreatIntelResult,
     )
 
@@ -72,20 +72,31 @@ class AlertEnrichmentWorkflow:
         )
 
         if device_id:
-            device_details = await workflow.execute_activity(
-                graph_get_device_details,
-                args=[request.tenant_id, device_id],
+            device_context_result: ConnectorActionResult = await workflow.execute_activity(
+                connector_execute_action,
+                args=[
+                    request.tenant_id,
+                    request.edr_provider,
+                    "get_device_context",
+                    {"device_id": device_id},
+                ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
-            if device_details:
+            device_payload = dict(device_context_result.data.payload)
+            device_payload.setdefault("device_id", device_id)
+            device_context = DeviceContext.model_validate(device_payload)
+
+            if device_context:
                 description = enriched.description
                 if not enriched.device_display_name:
-                    enriched = enriched.model_copy(update={"device_display_name": device_details.computerDnsName})
-                if not enriched.device_os and device_details.osPlatform:
-                    enriched = enriched.model_copy(update={"device_os": device_details.osPlatform})
-                if device_details.riskScore:
-                    description = f"{description}\nDevice risk score: {device_details.riskScore}"
+                    enriched = enriched.model_copy(update={"device_display_name": device_context.display_name})
+                if not enriched.device_os and device_context.os_platform:
+                    enriched = enriched.model_copy(update={"device_os": device_context.os_platform})
+                if not enriched.device_compliance and device_context.compliance_state:
+                    enriched = enriched.model_copy(update={"device_compliance": device_context.compliance_state})
+                if device_context.risk_score:
+                    description = f"{description}\nDevice risk score: {device_context.risk_score}"
                 if description != enriched.description:
                     enriched = enriched.model_copy(update={"description": description})
 
@@ -96,16 +107,27 @@ class AlertEnrichmentWorkflow:
         ) or user_email
 
         if risky_lookup_key:
-            risky_user = await workflow.execute_activity(
-                graph_get_risky_user,
-                args=[request.tenant_id, risky_lookup_key],
+            identity_provider = request.identity_provider or request.edr_provider
+            identity_risk_result: ConnectorActionResult = await workflow.execute_activity(
+                connector_execute_action,
+                args=[
+                    request.tenant_id,
+                    identity_provider,
+                    "get_identity_risk",
+                    {"lookup_key": str(risky_lookup_key)},
+                ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
-            if risky_user and risky_user.riskLevel:
+
+            risk_payload = dict(identity_risk_result.data.payload)
+            risk_payload.setdefault("subject", str(risky_lookup_key))
+            identity_risk = IdentityRiskContext.model_validate(risk_payload)
+
+            if identity_risk.risk_level:
                 enriched = enriched.model_copy(
                     update={
-                        "description": f"{enriched.description}\nIdentity Protection risk level: {risky_user.riskLevel}"
+                        "description": f"{enriched.description}\nIdentity risk level: {identity_risk.risk_level}"
                     }
                 )
 

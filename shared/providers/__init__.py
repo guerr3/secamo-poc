@@ -1,5 +1,8 @@
-"""Provider implementations for AI triage and ChatOps transports.
+"""Provider implementations for capability-based activity integrations.
 
-This package contains concrete provider adapters used by activity-level
-factory functions to resolve tenant-specific implementations.
+This package contains concrete provider adapters resolved by
+``shared.providers.factory``. Providers expose business capabilities and may
+delegate execution to connector adapters.
 """
+
+__all__: list[str] = []

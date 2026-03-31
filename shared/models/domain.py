@@ -8,55 +8,12 @@ backwards compatibility.
 
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Annotated, Literal, Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.models.canonical import DefenderDetectionFindingEvent, Envelope
-
-
-class TenantSecrets(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True)
-
-    client_id: str
-    client_secret: str = Field(repr=False)
-    tenant_azure_id: str
-    teams_webhook_url: Optional[str] = Field(default=None, repr=False)
-    jira_base_url: Optional[str] = None
-    jira_email: Optional[str] = None
-    jira_api_token: Optional[str] = Field(default=None, repr=False)
-    project_key: Optional[str] = None
-    project_type: Literal["jsm", "standard"] = "standard"
-    jsm_service_desk_id: Optional[str] = None
-    virustotal_api_key: Optional[str] = Field(default=None, repr=False)
-    abuseipdb_api_key: Optional[str] = Field(default=None, repr=False)
-
-
-class GraphSubscriptionConfig(BaseModel):
-    """Declarative per-tenant Graph subscription configuration."""
-    model_config = ConfigDict(from_attributes=True, frozen=True)
-
-    resource: str
-    change_types: list[str] = Field(default_factory=lambda: ["created", "updated"])
-    include_resource_data: bool = False
-    expiration_hours: int = 24
-    encryption_certificate: Optional[str] = Field(default=None, repr=False)
-    encryption_certificate_id: Optional[str] = None
-    lifecycle_notification_url: Optional[str] = None
-
-
-class GraphSubscriptionState(BaseModel):
-    """Persisted runtime state for a Graph subscription."""
-    model_config = ConfigDict(from_attributes=True, frozen=True)
-
-    subscription_id: str
-    tenant_id: str
-    resource: str
-    change_types: list[str] = Field(default_factory=list)
-    expires_at: datetime
-    notification_url: str
-    client_state: str = Field(repr=False)
+from shared.models.subscriptions import SubscriptionConfig
 
 
 class AITriageConfig(BaseModel):
@@ -109,6 +66,7 @@ class TenantConfig(BaseModel):
     tenant_id: str
     display_name: str = "Unknown Tenant"
 
+    iam_provider: Literal["microsoft_graph", "okta", "entra_id", "custom"] = "microsoft_graph"
     edr_provider: Literal["microsoft_defender", "crowdstrike", "sentinelone"] = "microsoft_defender"
     ticketing_provider: Literal["jira", "halo_itsm", "servicenow"] = "jira"
     threat_intel_providers: list[Literal["virustotal", "abuseipdb", "misp"]] = Field(default_factory=lambda: ["virustotal"])
@@ -128,7 +86,7 @@ class TenantConfig(BaseModel):
     ai_triage_config: AITriageConfig = Field(default_factory=AITriageConfig)
     chatops_config: ChatOpsConfig = Field(default_factory=ChatOpsConfig)
     polling_providers: list["PollingProviderConfig"] = Field(default_factory=list)
-    graph_subscriptions: list[GraphSubscriptionConfig] = Field(default_factory=list)
+    graph_subscriptions: list[SubscriptionConfig] = Field(default_factory=list)
 
 
 class PollingProviderConfig(BaseModel):
@@ -140,52 +98,37 @@ class PollingProviderConfig(BaseModel):
     poll_interval_seconds: int = 300
 
 
-class GraphUser(BaseModel):
+class IdentityUser(BaseModel):
     model_config = ConfigDict(from_attributes=True, frozen=True)
 
+    identity_provider: str = "microsoft_graph"
     user_id: str
     email: str
     display_name: str
     account_enabled: bool
 
 
-class DeviceDetail(BaseModel):
-    """Defender for Endpoint machine entity fields from get-machine-by-id."""
+class DeviceContext(BaseModel):
+    """Provider-agnostic device enrichment context used by SOC workflows."""
     model_config = ConfigDict(from_attributes=True, frozen=True)
 
-    id: str
-    computerDnsName: str | None = None
-    firstSeen: str | None = None
-    lastSeen: str | None = None
-    osPlatform: str | None = None
-    version: str | None = None
-    osProcessor: str | None = None
-    lastIpAddress: str | None = None
-    lastExternalIpAddress: str | None = None
-    osBuild: int | None = None
-    healthStatus: str | None = None
-    rbacGroupId: int | None = None
-    rbacGroupName: str | None = None
-    riskScore: str | None = None
-    exposureLevel: str | None = None
-    isAadJoined: bool | None = None
-    aadDeviceId: str | None = None
-    machineTags: list[str] = Field(default_factory=list)
+    provider: str = "unknown"
+    device_id: str
+    display_name: str | None = None
+    os_platform: str | None = None
+    compliance_state: str | None = None
+    risk_score: str | None = None
 
 
-class RiskyUserResult(BaseModel):
-    """Identity Protection riskyUser resource fields from Graph v1.0."""
+class IdentityRiskContext(BaseModel):
+    """Provider-agnostic identity risk context used by SOC workflows."""
     model_config = ConfigDict(from_attributes=True, frozen=True)
 
-    id: str
-    isDeleted: bool | None = None
-    isProcessing: bool | None = None
-    riskLastUpdatedDateTime: str | None = None
-    riskLevel: str | None = None
-    riskState: str | None = None
-    riskDetail: str | None = None
-    userDisplayName: str | None = None
-    userPrincipalName: str | None = None
+    provider: str = "unknown"
+    subject: str | None = None
+    risk_level: str | None = None
+    risk_state: str | None = None
+    risk_detail: str | None = None
 
 
 # ──────────────────────────────────────────────
@@ -315,12 +258,6 @@ class ConnectorHealthResult(BaseModel):
     data: ConnectorHealthData
 
 
-ConnectorResult = Annotated[
-    ConnectorFetchResult | ConnectorActionResult | ConnectorHealthResult,
-    Field(discriminator="operation_type"),
-]
-
-
 class ApprovalDecision(BaseModel):
     """Signal payload for the HITL approval step in WF-05."""
     model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
@@ -411,6 +348,7 @@ class AlertEnrichmentRequest(BaseModel):
     tenant_id: str
     alert: DefenderDetectionFindingEvent
     edr_provider: str
+    identity_provider: str | None = None
     threat_intel: ThreatIntelResult | None = None
 
 
@@ -440,8 +378,8 @@ class HiTLApprovalRequest(BaseModel):
     hitl_timeout_hours: int = 8
     auto_isolate_on_timeout: bool = False
     escalation_enabled: bool = True
-    edr_provider: str = "microsoft_defender"
-    ticketing_provider: str = "jira"
+    edr_provider: str
+    ticketing_provider: str
     device_id: str | None = None
 
 
@@ -450,13 +388,13 @@ class IncidentResponseRequest(BaseModel):
 
     tenant_id: str
     decision: ApprovalDecision
-    user: GraphUser | None = None
+    user: IdentityUser | None = None
     user_email: str
     device_id: str | None = None
     ticket_id: str
     evidence_bundle_enabled: bool = True
-    edr_provider: str = "microsoft_defender"
-    ticketing_provider: str = "jira"
+    edr_provider: str
+    ticketing_provider: str
     parent_workflow_id: str
     alert_id: str
     threat_intel: ThreatIntelResult
@@ -483,10 +421,3 @@ class PollingManagerInput(BaseModel):
     iteration: int = 0
 
 
-class GraphSubscriptionManagerInput(BaseModel):
-    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
-
-    tenant_id: str
-    notification_url: str
-    secret_type: str = "graph"
-    iteration: int = 0

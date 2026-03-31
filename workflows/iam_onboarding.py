@@ -1,7 +1,27 @@
+import secrets
+import string
 from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
+
+
+def _generate_temp_password(length: int = 16) -> str:
+    """Generate a cryptographically random temporary password."""
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    # Guarantee at least one of each required class
+    password = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
+        secrets.choice("!@#$%^&*"),
+    ]
+    password += [secrets.choice(alphabet) for _ in range(length - len(password))]
+    # Shuffle to avoid predictable prefix
+    shuffled = list(password)
+    secrets_module = secrets.SystemRandom()
+    secrets_module.shuffle(shuffled)
+    return "".join(shuffled)
 
 
 
@@ -9,7 +29,7 @@ with workflow.unsafe.imports_passed_through():
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
     from shared.models import (
-        GraphUser,
+        IdentityUser,
         LifecycleAction,
         PollingManagerInput,
         TenantConfig,
@@ -17,12 +37,12 @@ with workflow.unsafe.imports_passed_through():
     )
     from shared.models.canonical import Envelope, IamOnboardingEvent
     from shared.workflow_helpers import bootstrap_tenant
-    from activities.graph_users import (
-        graph_get_user,
-        graph_create_user,
-        graph_update_user,
-        graph_assign_license,
-        graph_reset_password,
+    from activities.identity import (
+        identity_assign_license,
+        identity_create_user,
+        identity_get_user,
+        identity_reset_password,
+        identity_update_user,
     )
     from activities.audit import create_audit_log
     from workflows.polling_manager import PollingManagerWorkflow
@@ -36,7 +56,7 @@ TIMEOUT = timedelta(seconds=30)
 @workflow.defn
 class IamOnboardingWorkflow:
     """
-    WF-01 — User Lifecycle Management (IAM / Entra ID CRUD via Graph API).
+    WF-01 — User Lifecycle Management (IAM provider-agnostic identity CRUD).
     Task Queue: iam-graph
     Actions: create | update | delete | password_reset
     """
@@ -93,8 +113,8 @@ class IamOnboardingWorkflow:
                 )
 
         # 3. Idempotency check — kijk of gebruiker al bestaat
-        existing_user: GraphUser | None = await workflow.execute_activity(
-            graph_get_user,
+        existing_user: IdentityUser | None = await workflow.execute_activity(
+            identity_get_user,
             args=[event.tenant_id, user_email],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
@@ -110,8 +130,8 @@ class IamOnboardingWorkflow:
                     f"(id={existing_user.user_id}). Overgeslagen."
                 )
             else:
-                new_user: GraphUser = await workflow.execute_activity(
-                    graph_create_user,
+                new_user: IdentityUser = await workflow.execute_activity(
+                    identity_create_user,
                     args=[event.tenant_id, user_data],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=runtime_retry,
@@ -120,7 +140,7 @@ class IamOnboardingWorkflow:
                 # Optioneel: licentie toekennen
                 if user_data.get("license_sku"):
                     await workflow.execute_activity(
-                        graph_assign_license,
+                        identity_assign_license,
                         args=[
                             event.tenant_id,
                             new_user.user_id,
@@ -140,7 +160,7 @@ class IamOnboardingWorkflow:
                     f"Gebruiker '{user_email}' niet gevonden voor update."
                 )
             await workflow.execute_activity(
-                graph_update_user,
+                identity_update_user,
                 args=[
                     event.tenant_id,
                     existing_user.user_id,
@@ -177,11 +197,11 @@ class IamOnboardingWorkflow:
                     f"Gebruiker '{user_email}' niet gevonden voor password reset."
                 )
             await workflow.execute_activity(
-                graph_reset_password,
+                identity_reset_password,
                 args=[
                     event.tenant_id,
                     existing_user.user_id,
-                    "TempP@ss2025!",  # TODO: genereer veilig wachtwoord
+                    _generate_temp_password(),
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,

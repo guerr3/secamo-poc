@@ -1,146 +1,40 @@
-"""Tenant-aware provider factory for AI triage and ChatOps integrations.
+"""Tenant-aware provider factory for capability-based integrations.
 
 The factory resolves concrete provider implementations dynamically from tenant
 configuration and returns protocol-compatible instances. Provider instances are
 cached to reduce repeated object construction and HTTP client churn.
+
+IMPORTANT: Callers must supply a ``TenantConfig`` obtained from the canonical
+``activities.tenant.get_tenant_config`` activity.  The factory does NOT load
+configuration from SSM itself — this eliminates the config-divergence bug where
+the factory and activities disagreed on field parsing.
 """
 
 from __future__ import annotations
 
 import asyncio
-import json
 from typing import Any
 
-import boto3
-
+from connectors.registry import get_connector
 from shared.models import (
-    AITriageConfig,
     AITriageProvider,
-    ChatOpsConfig,
     ChatOpsProvider,
+    IdentityAccessProvider,
     TenantConfig,
+    TicketingProvider,
 )
+from shared.providers.contracts import TenantSecrets
 from shared.providers.ai import AzureOpenAITriageProvider
 from shared.providers.chatops import MSTeamsChatOpsProvider, SlackChatOpsProvider
+from shared.providers.identity_access import ConnectorIdentityAccessProvider
+from shared.providers.ticketing import ConnectorTicketingProvider
 
 
-_REGION = "eu-west-1"
-_CONFIG_CACHE: dict[str, TenantConfig] = {}
 _AI_PROVIDER_CACHE: dict[str, AITriageProvider] = {}
 _CHATOPS_PROVIDER_CACHE: dict[str, ChatOpsProvider] = {}
+_IDENTITY_PROVIDER_CACHE: dict[str, IdentityAccessProvider] = {}
+_TICKETING_PROVIDER_CACHE: dict[str, TicketingProvider] = {}
 _CACHE_LOCK = asyncio.Lock()
-_SSM_CLIENT = None
-
-
-def _get_ssm_client():
-    """Return a lazily created SSM client to avoid import-time side effects."""
-    global _SSM_CLIENT
-    if _SSM_CLIENT is None:
-        _SSM_CLIENT = boto3.client("ssm", region_name=_REGION)
-    return _SSM_CLIENT
-
-
-def _config_path(tenant_id: str) -> str:
-    """Build tenant configuration SSM base path."""
-    return f"/secamo/tenants/{tenant_id}/config/"
-
-
-def _safe_json_object(value: str | None) -> dict[str, Any]:
-    """Parse a JSON object string and return an empty object on failure."""
-    if not value:
-        return {}
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError:
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
-async def _load_tenant_config_from_ssm(tenant_id: str) -> TenantConfig:
-    """Load tenant configuration from SSM and map provider-specific config keys."""
-    path = _config_path(tenant_id)
-
-    def _fetch_parameters() -> dict[str, str]:
-        response = _get_ssm_client().get_parameters_by_path(Path=path, WithDecryption=False)
-        return {item["Name"].split("/")[-1]: item["Value"] for item in response.get("Parameters", [])}
-
-    parameters = await asyncio.to_thread(_fetch_parameters)
-
-    ai_json = _safe_json_object(parameters.get("ai_triage_config"))
-    chatops_json = _safe_json_object(parameters.get("chatops_config"))
-
-    ai_config = AITriageConfig.model_validate(
-        {
-            "provider_type": parameters.get("ai_triage_provider_type")
-            or parameters.get("ai_triage_provider")
-            or ai_json.get("provider_type")
-            or "azure_openai",
-            "credentials_path": parameters.get("ai_triage_credentials_path")
-            or ai_json.get("credentials_path")
-            or "/secamo/tenants/{tenant_id}/ai_triage",
-            "default_channel": parameters.get("ai_triage_default_channel") or ai_json.get("default_channel"),
-            "model_name": parameters.get("ai_triage_model_name") or ai_json.get("model_name"),
-            "temperature": float(parameters.get("ai_triage_temperature", ai_json.get("temperature", 0.0))),
-            "max_tokens": int(parameters.get("ai_triage_max_tokens", ai_json.get("max_tokens", 512))),
-            "enabled": str(parameters.get("ai_triage_enabled", ai_json.get("enabled", "true"))).lower()
-            in {"1", "true", "yes", "on"},
-        }
-    )
-
-    default_channels_raw = parameters.get("chatops_default_channels")
-    if default_channels_raw:
-        default_channels = [chunk.strip() for chunk in default_channels_raw.split(",") if chunk.strip()]
-    else:
-        default_channels = chatops_json.get("default_channels", [])
-
-    chatops_config = ChatOpsConfig.model_validate(
-        {
-            "provider_type": parameters.get("chatops_provider_type")
-            or parameters.get("chatops_provider")
-            or chatops_json.get("provider_type")
-            or "ms_teams",
-            "credentials_path": parameters.get("chatops_credentials_path")
-            or chatops_json.get("credentials_path")
-            or "/secamo/tenants/{tenant_id}/chatops",
-            "default_channel": parameters.get("chatops_default_channel")
-            or chatops_json.get("default_channel"),
-            "default_channels": default_channels,
-            "enabled": str(parameters.get("chatops_enabled", chatops_json.get("enabled", "true"))).lower()
-            in {"1", "true", "yes", "on"},
-        }
-    )
-
-    return TenantConfig(
-        tenant_id=tenant_id,
-        display_name=parameters.get("display_name", "Unknown Tenant"),
-        ai_triage_config=ai_config,
-        chatops_config=chatops_config,
-    )
-
-
-async def _get_tenant_config_cached(tenant_id: str) -> TenantConfig:
-    """Retrieve tenant configuration from cache or SSM."""
-    cached = _CONFIG_CACHE.get(tenant_id)
-    if cached is not None:
-        return cached
-
-    async with _CACHE_LOCK:
-        cached = _CONFIG_CACHE.get(tenant_id)
-        if cached is not None:
-            return cached
-        loaded = await _load_tenant_config_from_ssm(tenant_id)
-        _CONFIG_CACHE[tenant_id] = loaded
-        return loaded
-
-
-async def get_tenant_runtime_config(tenant_id: str) -> TenantConfig:
-    """Return tenant runtime configuration from cache or SSM.
-
-    This helper is intended for non-activity callers (for example ingress
-    handlers) that require the same tenant config resolution behavior used by
-    provider factory methods.
-    """
-    return await _get_tenant_config_cached(tenant_id)
 
 
 def _resolve_secret(secrets: dict[str, Any], *names: str) -> str | None:
@@ -152,17 +46,39 @@ def _resolve_secret(secrets: dict[str, Any], *names: str) -> str | None:
     return None
 
 
-async def get_ai_provider(tenant_id: str, secrets: dict[str, Any]) -> AITriageProvider:
+def _to_tenant_secrets(secrets: dict[str, Any]) -> TenantSecrets:
+    """Normalize loose secret dictionaries into connector-ready tenant secrets."""
+    return TenantSecrets(
+        client_id=_resolve_secret(secrets, "client_id") or "",
+        client_secret=_resolve_secret(secrets, "client_secret") or "",
+        tenant_azure_id=_resolve_secret(secrets, "tenant_azure_id") or "",
+        teams_webhook_url=_resolve_secret(secrets, "teams_webhook_url", "webhook_url"),
+        jira_base_url=_resolve_secret(secrets, "jira_base_url", "base_url"),
+        jira_email=_resolve_secret(secrets, "jira_email"),
+        jira_api_token=_resolve_secret(secrets, "jira_api_token", "api_token"),
+        project_key=_resolve_secret(secrets, "project_key"),
+        project_type=(_resolve_secret(secrets, "project_type") or "standard").lower(),
+        jsm_service_desk_id=_resolve_secret(secrets, "jsm_service_desk_id"),
+        virustotal_api_key=_resolve_secret(secrets, "virustotal_api_key"),
+        abuseipdb_api_key=_resolve_secret(secrets, "abuseipdb_api_key"),
+    )
+
+
+async def get_ai_provider(
+    tenant_id: str,
+    secrets: dict[str, Any],
+    config: TenantConfig,
+) -> AITriageProvider:
     """Resolve and cache the AI triage provider for a tenant.
 
     Args:
-        tenant_id: Tenant identifier used for config lookup and cache keying.
+        tenant_id: Tenant identifier used for cache keying.
         secrets: Tenant-scoped secret dictionary (already retrieved from SSM).
+        config: TenantConfig obtained from the canonical get_tenant_config activity.
 
     Returns:
         A protocol-compatible AI triage provider instance.
     """
-    config = await _get_tenant_config_cached(tenant_id)
     provider_type = config.ai_triage_config.provider_type
 
     cache_key = f"ai:{tenant_id}:{provider_type}:{config.ai_triage_config.model_name or 'default'}"
@@ -205,17 +121,21 @@ async def get_ai_provider(tenant_id: str, secrets: dict[str, Any]) -> AITriagePr
     return provider
 
 
-async def get_chatops_provider(tenant_id: str, secrets: dict[str, Any]) -> ChatOpsProvider:
+async def get_chatops_provider(
+    tenant_id: str,
+    secrets: dict[str, Any],
+    config: TenantConfig,
+) -> ChatOpsProvider:
     """Resolve and cache the ChatOps provider for a tenant.
 
     Args:
-        tenant_id: Tenant identifier used for config lookup and cache keying.
+        tenant_id: Tenant identifier used for cache keying.
         secrets: Tenant-scoped secret dictionary (already retrieved from SSM).
+        config: TenantConfig obtained from the canonical get_tenant_config activity.
 
     Returns:
         A protocol-compatible ChatOps provider instance.
     """
-    config = await _get_tenant_config_cached(tenant_id)
     provider_type = config.chatops_config.provider_type
 
     cache_key = f"chatops:{tenant_id}:{provider_type}:{config.chatops_config.default_channel or 'default'}"
@@ -253,8 +173,75 @@ async def get_chatops_provider(tenant_id: str, secrets: dict[str, Any]) -> ChatO
     return provider
 
 
+async def get_identity_access_provider(
+    tenant_id: str,
+    secrets: dict[str, Any],
+    config: TenantConfig,
+) -> IdentityAccessProvider:
+    """Resolve and cache the identity access provider for a tenant."""
+    provider_type = config.iam_provider
+    cache_key = f"identity:{tenant_id}:{provider_type}"
+    cached = _IDENTITY_PROVIDER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if provider_type in {"microsoft_graph", "entra_id"}:
+        connector_provider = "microsoft_graph"
+    elif provider_type in {"okta", "custom"}:
+        raise NotImplementedError(f"Identity provider '{provider_type}' is not implemented yet")
+    else:
+        raise ValueError(f"Unsupported iam_provider '{provider_type}'")
+
+    tenant_secrets = _to_tenant_secrets(secrets)
+    connector = get_connector(connector_provider, tenant_id, tenant_secrets)
+    provider: IdentityAccessProvider = ConnectorIdentityAccessProvider(
+        identity_provider=provider_type,
+        connector=connector,
+    )
+
+    async with _CACHE_LOCK:
+        existing = _IDENTITY_PROVIDER_CACHE.get(cache_key)
+        if existing is not None:
+            return existing
+        _IDENTITY_PROVIDER_CACHE[cache_key] = provider
+    return provider
+
+
+async def get_ticketing_provider(
+    tenant_id: str,
+    secrets: dict[str, Any],
+    config: TenantConfig,
+) -> TicketingProvider:
+    """Resolve and cache the ticketing provider for a tenant."""
+    provider_type = config.ticketing_provider
+    cache_key = f"ticketing:{tenant_id}:{provider_type}:{config.display_name}"
+    cached = _TICKETING_PROVIDER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    if provider_type not in {"jira", "halo_itsm", "servicenow"}:
+        raise ValueError(f"Unsupported ticketing_provider '{provider_type}'")
+
+    tenant_secrets = _to_tenant_secrets(secrets)
+    connector = get_connector(provider_type, tenant_id, tenant_secrets)
+    provider: TicketingProvider = ConnectorTicketingProvider(
+        ticketing_provider=provider_type,
+        connector=connector,
+        ticket_base_url=tenant_secrets.jira_base_url,
+        default_project_key=tenant_secrets.project_key or "SOC",
+    )
+
+    async with _CACHE_LOCK:
+        existing = _TICKETING_PROVIDER_CACHE.get(cache_key)
+        if existing is not None:
+            return existing
+        _TICKETING_PROVIDER_CACHE[cache_key] = provider
+    return provider
+
+
 def clear_provider_caches() -> None:
     """Clear factory caches; intended for unit tests."""
-    _CONFIG_CACHE.clear()
     _AI_PROVIDER_CACHE.clear()
     _CHATOPS_PROVIDER_CACHE.clear()
+    _IDENTITY_PROVIDER_CACHE.clear()
+    _TICKETING_PROVIDER_CACHE.clear()

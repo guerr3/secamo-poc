@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from connectors.jira_provisioner import JiraProvisioner
-from shared.models import TenantSecrets
+from shared.providers.contracts import TenantSecrets
 
 
 @pytest.fixture

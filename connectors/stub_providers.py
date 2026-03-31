@@ -150,6 +150,32 @@ class _StubConnector(BaseConnector):
                 "echo": payload,
             }
 
+        if action == "get_device_context":
+            device_id = str(payload.get("device_id") or "stub-device")
+            return {
+                "success": True,
+                "provider": self.provider,
+                "found": True,
+                "device_id": device_id,
+                "display_name": f"{self.provider}-{device_id}",
+                "os_platform": "windows",
+                "compliance_state": "compliant",
+                "risk_score": "Low",
+            }
+
+        if action == "get_identity_risk":
+            lookup_key = str(payload.get("lookup_key") or "unknown@example.com")
+            high_risk = any(token in lookup_key.lower() for token in ["admin", "priv", "risk"])
+            return {
+                "success": True,
+                "provider": self.provider,
+                "found": True,
+                "subject": lookup_key,
+                "risk_level": "high" if high_risk else "low",
+                "risk_state": "atRisk" if high_risk else "none",
+                "risk_detail": "stub identity risk result",
+            }
+
         return {
             "success": True,
             "action": action,

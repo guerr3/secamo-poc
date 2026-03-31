@@ -3,8 +3,8 @@
 Exports current canonical/domain contracts used by workflows, ingress, and activities.
 """
 
-# ── Common enums ──────────────────────────────────────────────
-from shared.models.common import LifecycleAction
+# ── Common enums & constants ────────────────────────────────
+from shared.models.common import HITL_APPROVAL_SIGNAL_NAME, LifecycleAction
 
 # ── Domain contracts (Temporal workflows) ─────────────────────
 from shared.models.domain import (
@@ -19,26 +19,21 @@ from shared.models.domain import (
     ConnectorFetchResult,
     ConnectorHealthData,
     ConnectorHealthResult,
-    ConnectorResult,
+    DeviceContext,
     EnrichedAlert,
     EvidenceBundle,
-    DeviceDetail,
-    GraphSubscriptionManagerInput,
-    GraphSubscriptionConfig,
-    GraphSubscriptionState,
-    GraphUser,
+    IdentityUser,
     HitlCallbackBinding,
     HitlChannelDispatchResult,
     HitlDispatchResult,
     HiTLApprovalRequest,
     HiTLRequest,
     IncidentResponseRequest,
+    IdentityRiskContext,
     NotificationResult,
     PollingManagerInput,
     PollingProviderConfig,
-    RiskyUserResult,
     RiskScore,
-    TenantSecrets,
     TenantConfig,
     TicketData,
     TicketCreationRequest,
@@ -47,22 +42,16 @@ from shared.models.domain import (
     ThreatIntelResult,
     UserDeprovisioningRequest,
 )
+from shared.models.subscriptions import SubscriptionConfig, SubscriptionManagerInput, SubscriptionState
 
 # ── AI triage and ChatOps contracts ─────────────────────────
 from shared.models.chatops import ChatOpsAction, ChatOpsMessage, ChatOpsProvider
+from shared.models.capabilities import IdentityAccessProvider, TicketingProvider
 from shared.models.triage import AITriageProvider, TriageRequest, TriageResult
 
 # ── Ingress transport models ─────────────────────────────────
-from shared.models.ingress import IamIngressRequest, RawIngressEnvelope
+from shared.models.ingress import IamIngressRequest
 from shared.models.ingress import GraphNotificationEnvelope, GraphNotificationItem
-
-# ── Provider event models ────────────────────────────────────
-from shared.models.provider_events import (
-    DefenderWebhook,
-    JiraIssueWebhook,
-    ProviderEvent,
-    TeamsApprovalCallback,
-)
 
 # ── Canonical event ──────────────────────────────────────────
 from shared.models.canonical import (
@@ -78,41 +67,17 @@ from shared.models.canonical import (
     derive_event_id,
 )
 
-# ── Workflow commands ────────────────────────────────────────
-from shared.models.commands import (
-    SignalWorkflowCommand,
-    StartWorkflowCommand,
-    WorkflowCommand,
+# ── Canonical mappers ────────────────────────────────────────
+from shared.models.mappers import (
+    build_connector_correlation,
+    build_envelope,
+    build_storage_partition,
+    to_approval_decision,
 )
-
-
-def _legacy_mapper_unavailable(*_args, **_kwargs):
-    raise RuntimeError("legacy canonical mappers are not available with strict envelope models")
-
-
-try:
-    from shared.models.mappers import (
-        build_connector_correlation,
-        build_envelope,
-        build_provider_event,
-        build_storage_partition,
-        iam_request_to_envelope,
-        to_approval_decision,
-        to_envelope,
-        to_workflow_command,
-    )
-except Exception:
-    build_connector_correlation = _legacy_mapper_unavailable
-    build_envelope = _legacy_mapper_unavailable
-    build_provider_event = _legacy_mapper_unavailable
-    build_storage_partition = _legacy_mapper_unavailable
-    iam_request_to_envelope = _legacy_mapper_unavailable
-    to_approval_decision = _legacy_mapper_unavailable
-    to_envelope = _legacy_mapper_unavailable
-    to_workflow_command = _legacy_mapper_unavailable
 
 __all__ = [
     # common
+    "HITL_APPROVAL_SIGNAL_NAME",
     "LifecycleAction",
     # domain
     "AITriageConfig",
@@ -123,22 +88,23 @@ __all__ = [
     "ChatOpsAction",
     "ChatOpsMessage",
     "ChatOpsProvider",
+    "IdentityAccessProvider",
     "ConnectorActionData",
     "ConnectorActionResult",
     "ConnectorFetchData",
     "ConnectorFetchResult",
     "ConnectorHealthData",
     "ConnectorHealthResult",
-    "ConnectorResult",
-    "DeviceDetail",
+    "DeviceContext",
     "EnrichedAlert",
     "EvidenceBundle",
+    "IdentityUser",
+    "IdentityRiskContext",
     "GraphNotificationEnvelope",
     "GraphNotificationItem",
-    "GraphSubscriptionManagerInput",
-    "GraphSubscriptionConfig",
-    "GraphSubscriptionState",
-    "GraphUser",
+    "SubscriptionManagerInput",
+    "SubscriptionConfig",
+    "SubscriptionState",
     "HitlCallbackBinding",
     "HitlChannelDispatchResult",
     "HitlDispatchResult",
@@ -148,13 +114,12 @@ __all__ = [
     "NotificationResult",
     "PollingManagerInput",
     "PollingProviderConfig",
-    "RiskyUserResult",
     "RiskScore",
-    "TenantSecrets",
     "TenantConfig",
     "TicketData",
     "TicketCreationRequest",
     "TicketResult",
+    "TicketingProvider",
     "ThreatIntelEnrichmentRequest",
     "ThreatIntelResult",
     "TriageRequest",
@@ -163,12 +128,6 @@ __all__ = [
     "UserDeprovisioningRequest",
     # ingress
     "IamIngressRequest",
-    "RawIngressEnvelope",
-    # provider events
-    "DefenderWebhook",
-    "JiraIssueWebhook",
-    "ProviderEvent",
-    "TeamsApprovalCallback",
     # canonical
     "Correlation",
     "DefenderDetectionFindingEvent",
@@ -180,17 +139,9 @@ __all__ = [
     "VendorExtension",
     "VendorExtensions",
     "derive_event_id",
-    # commands
-    "SignalWorkflowCommand",
-    "StartWorkflowCommand",
-    "WorkflowCommand",
-    # legacy mapper symbols kept during transition
+    # canonical helper mappers
     "build_connector_correlation",
     "build_envelope",
-    "build_provider_event",
     "build_storage_partition",
-    "iam_request_to_envelope",
     "to_approval_decision",
-    "to_envelope",
-    "to_workflow_command",
 ]
