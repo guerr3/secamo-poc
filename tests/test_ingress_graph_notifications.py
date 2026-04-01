@@ -77,9 +77,9 @@ async def test_handle_graph_notification_dispatches_supported_items(monkeypatch)
     monkeypatch.setattr(module, "_validate_provider_authentication", _always_valid)
 
     async def _fake_dispatch_provider_event(*, raw_body, provider, event_type, tenant_id):
-        assert provider == "microsoft_defender"
+        assert provider == "microsoft_graph"
         assert tenant_id == "tenant-demo-001"
-        assert event_type in {"alert", "impossible_travel"}
+        assert event_type in {"defender.alert", "defender.impossible_travel"}
         assert isinstance(raw_body, dict)
         return {"statusCode": 202, "body": {"ok": True}}
 

@@ -6,7 +6,7 @@ validation are consistently applied regardless of the caller.
 
 IMPORTANT: Prefer calling ``get_tenant_secrets`` directly as a Temporal activity
 when inside a workflow.  Use this helper only in synchronous code paths (e.g.
-connector_dispatch) that already run inside an activity context.
+provider capability adapters) that already run inside an activity context.
 """
 
 from __future__ import annotations

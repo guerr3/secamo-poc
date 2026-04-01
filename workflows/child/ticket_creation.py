@@ -4,8 +4,8 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from activities.connector_dispatch import connector_execute_action
-    from shared.models import ConnectorActionResult, TicketCreationRequest, TicketResult
+    from activities.ticketing import ticket_create
+    from shared.models import TicketCreationRequest, TicketData, TicketResult
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
@@ -23,26 +23,19 @@ class TicketCreationWorkflow:
             request.source_workflow,
         )
 
-        result: ConnectorActionResult = await workflow.execute_activity(
-            connector_execute_action,
+        return await workflow.execute_activity(
+            ticket_create,
             args=[
                 request.tenant_id,
                 request.ticketing_provider,
-                "create_ticket",
-                {
-                    "title": request.title,
-                    "description": request.description,
-                    "issue_type": "Incident",
-                },
+                TicketData(
+                    tenant_id=request.tenant_id,
+                    title=request.title,
+                    description=request.description,
+                    severity=request.severity,
+                    source_workflow=request.source_workflow,
+                ),
             ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
-        )
-
-        ticket_key = str(result.data.payload.get("key") or result.data.payload.get("ticket_id") or "UNKNOWN")
-        ticket_url = str(result.data.payload.get("url") or "")
-        return TicketResult(
-            ticket_id=ticket_key,
-            status="open",
-            url=ticket_url,
         )

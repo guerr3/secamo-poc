@@ -11,30 +11,30 @@
 
 ## File Reference
 
-| File                     | Responsibility                                                      |
-| ------------------------ | ------------------------------------------------------------------- |
-| `__init__.py`            | Lazy export surface for activity symbols.                           |
-| `_activity_errors.py`    | Shared activity error helpers and classification utilities.         |
-| `audit.py`               | Persist audit records to DynamoDB.                                  |
-| `chatops.py`             | Send interactive ChatOps notifications.                             |
-| `connector_dispatch.py`  | Provider-agnostic dispatch for connector actions and event fetches. |
-| `evidence.py`            | Persist evidence bundles to S3.                                     |
-| `graph_alerts.py`        | Query and enrich Defender alert data via Graph.                     |
-| `graph_devices.py`       | Execute device-level actions and lookups.                           |
-| `graph_signin.py`        | Query risky sign-in and identity risk context.                      |
-| `graph_subscriptions.py` | Manage Graph webhook subscription lifecycle and metadata.           |
-| `graph_users.py`         | Execute user lifecycle operations in Graph.                         |
-| `hitl.py`                | Issue HiTL approvals and manage callback token flow.                |
-| `hitl_renderers.py`      | Render HiTL email/body content templates.                           |
-| `notify_email.py`        | Send email notifications through Graph mail APIs.                   |
-| `notify_teams.py`        | Send Teams notifications and adaptive cards.                        |
-| `README.md`              | Module documentation.                                               |
-| `risk.py`                | Compute risk scores from enrichment context.                        |
-| `tenant.py`              | Resolve tenant config, secrets, and tenant validity.                |
-| `threat_intel.py`        | Execute threat intel lookups.                                       |
-| `ticketing.py`           | Create/update/close/get ticket operations through connectors.       |
-| `triage.py`              | Execute AI triage provider analysis.                                |
-| `__pycache__/`           | Generated Python bytecode cache directory.                          |
+| File                       | Responsibility                                                                    |
+| -------------------------- | --------------------------------------------------------------------------------- |
+| `__init__.py`              | Lazy export surface for activity symbols.                                         |
+| `_activity_errors.py`      | Shared activity error helpers and classification utilities.                       |
+| `audit.py`                 | Persist audit records to DynamoDB.                                                |
+| `chatops.py`               | Send interactive ChatOps notifications.                                           |
+| `provider_capabilities.py` | Provider-agnostic capability bridge for connector fetch/action/health operations. |
+| `evidence.py`              | Persist evidence bundles to S3.                                                   |
+| `graph_alerts.py`          | Query and enrich Defender alert data via Graph.                                   |
+| `graph_devices.py`         | Execute device-level actions and lookups.                                         |
+| `graph_signin.py`          | Query risky sign-in and identity risk context.                                    |
+| `graph_subscriptions.py`   | Manage Graph webhook subscription lifecycle and metadata.                         |
+| `graph_users.py`           | Execute user lifecycle operations in Graph.                                       |
+| `hitl.py`                  | Issue HiTL approvals and manage callback token flow.                              |
+| `hitl_renderers.py`        | Render HiTL email/body content templates.                                         |
+| `notify_email.py`          | Send email notifications through Graph mail APIs.                                 |
+| `notify_teams.py`          | Send Teams notifications and adaptive cards.                                      |
+| `README.md`                | Module documentation.                                                             |
+| `risk.py`                  | Compute risk scores from enrichment context.                                      |
+| `tenant.py`                | Resolve tenant config, secrets, and tenant validity.                              |
+| `threat_intel.py`          | Execute threat intel lookups.                                                     |
+| `ticketing.py`             | Create/update/close/get ticket operations through connectors.                     |
+| `triage.py`                | Execute AI triage provider analysis.                                              |
+| `__pycache__/`             | Generated Python bytecode cache directory.                                        |
 
 ## Key Concepts
 

@@ -50,6 +50,11 @@ def build_default_validator_registry(resolver: SecretResolver) -> AuthValidatorR
     registry = AuthValidatorRegistry()
 
     registry.register(
+        "microsoft_graph",
+        "webhook",
+        MicrosoftGraphJwtValidator(resolver=resolver, validator_name="microsoft_graph_jwt"),
+    )
+    registry.register(
         "microsoft_defender",
         "webhook",
         MicrosoftGraphJwtValidator(resolver=resolver, validator_name="microsoft_graph_jwt"),

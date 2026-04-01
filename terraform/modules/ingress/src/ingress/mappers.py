@@ -213,6 +213,8 @@ NormalizerFn = Callable[[str, dict[str, Any], str], dict[str, Any]]
 _NORMALIZERS: dict[tuple[str, str], NormalizerFn] = {
     ("microsoft_defender", "alert"): _normalize_ms_defender_alert,
     ("microsoft_defender", "impossible_travel"): _normalize_ms_defender_impossible_travel,
+    ("microsoft_graph", "defender.alert"): _normalize_ms_defender_alert,
+    ("microsoft_graph", "defender.impossible_travel"): _normalize_ms_defender_impossible_travel,
     ("crowdstrike", "detection_summary"): _normalize_crowdstrike_detection_summary,
     ("crowdstrike", "impossible_travel"): _normalize_crowdstrike_impossible_travel,
     ("sentinelone", "alert"): _normalize_sentinelone_alert,

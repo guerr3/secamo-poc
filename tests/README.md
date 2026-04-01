@@ -11,28 +11,28 @@
 
 ## File Reference
 
-| File                                  | Responsibility                                          |
-| ------------------------------------- | ------------------------------------------------------- |
-| `approval/`                           | Approval-related test suites.                           |
-| `auth/`                               | Auth validation and resolver tests.                     |
-| `conftest.py`                         | Shared pytest fixtures and configuration.               |
+| File                                  | Responsibility                                            |
+| ------------------------------------- | --------------------------------------------------------- |
+| `approval/`                           | Approval-related test suites.                             |
+| `auth/`                               | Auth validation and resolver tests.                       |
+| `conftest.py`                         | Shared pytest fixtures and configuration.                 |
 | `contracts/`                          | Guardrails for legacy contract-import and boundary rules. |
-| `e2e/`                                | End-to-end oriented test scenarios.                     |
-| `normalization/`                      | Normalization and canonical mapping tests.              |
-| `README.md`                           | Module documentation.                                   |
-| `routing/`                            | Routing and dispatch behavior tests.                    |
-| `test_activities/`                    | Activity-focused test suites.                           |
-| `test_connectors_resilience.py`       | Connector resilience and error-path tests.              |
-| `test_graph_client.py`                | Graph client token/cache tests.                         |
-| `test_graph_webhook_routing.py`       | Graph webhook route resolution tests.                   |
-| `test_hitl_child_identity_rebind.py`  | HiTL child workflow identity and signal behavior tests. |
-| `test_ingress_graph_notifications.py` | Graph notification ingress behavior tests.              |
-| `test_ingress_hitl_respond.py`        | HiTL callback ingress endpoint behavior tests.          |
-| `test_ingress_mappers.py`             | Ingress mapper normalization tests.                     |
-| `test_jira_provisioner.py`            | Jira provisioner behavior tests.                        |
-| `test_models.py`                      | Shared model mapping and validation tests.              |
-| `test_stub_connectors.py`             | Stub connector behavior tests.                          |
-| `__pycache__/`                        | Generated Python bytecode cache directory.              |
+| `e2e/`                                | End-to-end oriented test scenarios.                       |
+| `normalization/`                      | Normalization and canonical mapping tests.                |
+| `README.md`                           | Module documentation.                                     |
+| `routing/`                            | Routing and dispatch behavior tests.                      |
+| `test_activities/`                    | Activity-focused test suites.                             |
+| `test_connectors_resilience.py`       | Connector resilience and error-path tests.                |
+| `test_graph_client.py`                | Graph client token/cache tests.                           |
+| `test_graph_webhook_routing.py`       | Graph webhook route resolution tests.                     |
+| `test_hitl_child_identity_rebind.py`  | HiTL child workflow identity and signal behavior tests.   |
+| `test_ingress_graph_notifications.py` | Graph notification ingress behavior tests.                |
+| `test_ingress_hitl_respond.py`        | HiTL callback ingress endpoint behavior tests.            |
+| `test_ingress_mappers.py`             | Ingress mapper normalization tests.                       |
+| `test_jira_provisioner.py`            | Jira provisioner behavior tests.                          |
+| `test_models.py`                      | Shared model mapping and validation tests.                |
+| `test_stub_connectors.py`             | Stub connector behavior tests.                            |
+| `__pycache__/`                        | Generated Python bytecode cache directory.                |
 
 ## Key Concepts
 

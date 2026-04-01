@@ -4,8 +4,9 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from activities.connector_dispatch import connector_execute_action
+    from activities.edr import edr_isolate_device
     from activities.hitl import request_hitl_approval
+    from activities.ticketing import ticket_update
     from shared.models import ApprovalDecision, HiTLApprovalRequest, HiTLRequest
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -71,15 +72,10 @@ class HiTLApprovalWorkflow:
         except TimeoutError:
             if request.auto_isolate_on_timeout and request.device_id:
                 await workflow.execute_activity(
-                    connector_execute_action,
+                    edr_isolate_device,
                     args=[
                         request.tenant_id,
-                        request.edr_provider,
-                        "isolate_device",
-                        {
-                            "device_id": request.device_id,
-                            "comment": "Automatic isolation after HITL timeout",
-                        },
+                        request.device_id,
                     ],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,
@@ -87,17 +83,14 @@ class HiTLApprovalWorkflow:
 
             if request.escalation_enabled and child_hitl_request.ticket_key:
                 await workflow.execute_activity(
-                    connector_execute_action,
+                    ticket_update,
                     args=[
                         request.tenant_id,
                         request.ticketing_provider,
-                        "update_ticket",
+                        child_hitl_request.ticket_key,
                         {
-                            "ticket_id": child_hitl_request.ticket_key,
-                            "fields": {
-                                "status": "escalated",
-                                "note": "Geen beslissing binnen timeout — geescaleerd.",
-                            },
+                            "status": "escalated",
+                            "note": "Geen beslissing binnen timeout — geescaleerd.",
                         },
                     ],
                     start_to_close_timeout=TIMEOUT,

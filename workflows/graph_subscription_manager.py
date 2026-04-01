@@ -7,7 +7,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from activities.connector_dispatch import (
+    from activities.subscription import (
         subscription_create,
         subscription_delete,
         subscription_metadata_load,

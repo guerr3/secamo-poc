@@ -104,6 +104,6 @@ async def test_signal_gateway_dispatches_expected_signal_name() -> None:
     assert len(transport.calls) == 1
     call = transport.calls[0]
     assert call["signal_name"] == "approve"
-    assert call["payload"]["actor"] == "reviewer@example.com"
+    assert call["payload"]["reviewer"] == "reviewer@example.com"
     assert call["payload"]["action"] == "approve"
     assert call["payload"]["comments"] == "approved"

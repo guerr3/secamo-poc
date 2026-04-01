@@ -8,7 +8,7 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
-    from activities.connector_dispatch import connector_fetch_events
+    from activities.provider_capabilities import connector_fetch_events
     from activities.tenant import get_tenant_config
     from shared.models import PollingManagerInput, TenantConfig
     from shared.models.canonical import Envelope

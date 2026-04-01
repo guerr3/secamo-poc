@@ -13,7 +13,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from activities._activity_errors import raise_activity_error
-from activities.connector_dispatch import connector_execute_action
+from activities.provider_capabilities import connector_execute_action
 from activities.tenant import get_tenant_config
 from shared.config import SECAMO_SENDER_EMAIL
 from shared.models import (

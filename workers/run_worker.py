@@ -20,9 +20,45 @@ from shared.config import (
     QUEUE_AUDIT,
     QUEUE_POLLER,
 )
+from shared.routing.defaults import build_default_route_registry
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def _validate_route_worker_parity(workflows_map: dict[str, list]) -> None:
+    """Fail fast when any configured route targets an unregistered workflow/queue."""
+    queue_to_group = {
+        QUEUE_IAM: "iam",
+        QUEUE_SOC: "soc",
+        QUEUE_AUDIT: "audit",
+        QUEUE_POLLER: "poller",
+    }
+    known_queues = set(queue_to_group.keys())
+    group_to_workflow_names = {
+        group: {wf.__name__ for wf in workflows_map.get(group, [])}
+        for group in ["iam", "soc", "audit", "poller"]
+    }
+
+    registry = build_default_route_registry()
+    errors: list[str] = []
+
+    for route in registry.iter_registered_routes():
+        if route.task_queue not in known_queues:
+            errors.append(
+                f"unknown task queue '{route.task_queue}' for workflow '{route.workflow_name}'"
+            )
+            continue
+
+        group = queue_to_group[route.task_queue]
+        if route.workflow_name not in group_to_workflow_names.get(group, set()):
+            errors.append(
+                f"workflow '{route.workflow_name}' mapped to queue '{route.task_queue}' is not registered"
+            )
+
+    if errors:
+        message = "route/worker parity validation failed: " + "; ".join(sorted(set(errors)))
+        raise RuntimeError(message)
 
 
 def load_activities_by_queue() -> dict[str, list]:
@@ -49,7 +85,7 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
-        from activities.connector_dispatch import (
+        from activities.subscription import (
             subscription_create,
             subscription_delete,
             subscription_list,
@@ -102,35 +138,35 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
-        from activities.connector_dispatch import (
-            device_get_context,
-            graph_confirm_user_compromised,
-            graph_dismiss_risky_user,
-            graph_enrich_alert,
-            graph_get_alerts,
-            graph_get_signin_history,
-            graph_isolate_device,
-            graph_list_noncompliant_devices,
-            graph_list_risky_users,
-            graph_run_antivirus_scan,
-            graph_unisolate_device,
-            identity_get_risk_context,
+        from activities.edr import (
+            edr_confirm_user_compromised,
+            edr_dismiss_risky_user,
+            edr_enrich_alert,
+            edr_get_device_context,
+            edr_get_identity_risk,
+            edr_get_signin_history,
+            edr_get_user_alerts,
+            edr_isolate_device,
+            edr_list_noncompliant_devices,
+            edr_list_risky_users,
+            edr_run_antivirus_scan,
+            edr_unisolate_device,
         )
         from activities.threat_intel import threat_intel_lookup
         from activities.risk import calculate_risk_score
         soc_activities.extend([
-            graph_enrich_alert,
-            graph_get_alerts,
-            graph_isolate_device,
-            graph_unisolate_device,
-            device_get_context,
-            graph_run_antivirus_scan,
-            graph_list_noncompliant_devices,
-            identity_get_risk_context,
-            graph_confirm_user_compromised,
-            graph_dismiss_risky_user,
-            graph_get_signin_history,
-            graph_list_risky_users,
+            edr_enrich_alert,
+            edr_get_user_alerts,
+            edr_isolate_device,
+            edr_unisolate_device,
+            edr_get_device_context,
+            edr_run_antivirus_scan,
+            edr_list_noncompliant_devices,
+            edr_get_identity_risk,
+            edr_confirm_user_compromised,
+            edr_dismiss_risky_user,
+            edr_get_signin_history,
+            edr_list_risky_users,
             threat_intel_lookup, calculate_risk_score,
         ])
         logger.info("✓ SOC capability activities geladen")
@@ -176,7 +212,7 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
-        from activities.connector_dispatch import (
+        from activities.provider_capabilities import (
             connector_fetch_events,
             connector_execute_action,
             connector_health_check,
@@ -274,6 +310,7 @@ async def main() -> None:
     # 1. Valideer alle imports vóór netwerk connectie
     activities_map = load_activities_by_queue()
     workflows_map  = load_workflows()
+    _validate_route_worker_parity(workflows_map)
 
     if (
         not activities_map["iam"]

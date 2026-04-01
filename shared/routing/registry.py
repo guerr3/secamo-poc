@@ -85,6 +85,16 @@ class RouteRegistry:
 
         self._rules.append(_RouteRule(name=name, predicate=predicate, routes=routes))
 
+    def iter_registered_routes(self) -> tuple[WorkflowRoute, ...]:
+        """Return all registered routes (fallback and rule routes) for validation use cases."""
+
+        routes: list[WorkflowRoute] = []
+        for route_group in self._fallback_routes.values():
+            routes.extend(route_group)
+        for rule in self._rules:
+            routes.extend(rule.routes)
+        return tuple(routes)
+
     def resolve_provider_event(self, provider: str, event_type: str) -> tuple[WorkflowRoute, ...]:
         """Resolve fallback routes directly from provider + event-type keys."""
 

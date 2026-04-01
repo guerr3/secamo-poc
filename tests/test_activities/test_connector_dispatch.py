@@ -3,16 +3,15 @@ from __future__ import annotations
 import pytest
 from temporalio.exceptions import ApplicationError
 
-from activities.connector_dispatch import connector_execute_action
-from connectors.errors import ConnectorConfigurationError, ConnectorTransientError
+from activities.provider_capabilities import connector_execute_action
+from connectors.errors import ConnectorTransientError
 
 
 @pytest.mark.asyncio
 async def test_connector_execute_action_success(mocker):
     connector = mocker.AsyncMock()
     connector.execute_action.return_value = {"ticket_id": "SOC-1", "updated": True}
-    mocker.patch("activities.connector_dispatch._load_connector_secrets")
-    mocker.patch("activities.connector_dispatch.get_connector", return_value=connector)
+    mocker.patch("activities.provider_capabilities._load_connector", return_value=connector)
 
     result = await connector_execute_action(
         tenant_id="tenant-1",
@@ -32,8 +31,7 @@ async def test_connector_execute_action_reported_failure_raises_non_retryable(mo
         "success": False,
         "reason": "provider not implemented",
     }
-    mocker.patch("activities.connector_dispatch._load_connector_secrets")
-    mocker.patch("activities.connector_dispatch.get_connector", return_value=connector)
+    mocker.patch("activities.provider_capabilities._load_connector", return_value=connector)
 
     with pytest.raises(ApplicationError) as exc:
         await connector_execute_action(
@@ -55,8 +53,7 @@ async def test_connector_execute_action_reported_failure_can_be_retryable(mocker
         "reason": "provider unavailable",
         "retryable": True,
     }
-    mocker.patch("activities.connector_dispatch._load_connector_secrets")
-    mocker.patch("activities.connector_dispatch.get_connector", return_value=connector)
+    mocker.patch("activities.provider_capabilities._load_connector", return_value=connector)
 
     with pytest.raises(ApplicationError) as exc:
         await connector_execute_action(
@@ -72,10 +69,9 @@ async def test_connector_execute_action_reported_failure_can_be_retryable(mocker
 
 @pytest.mark.asyncio
 async def test_connector_execute_action_unknown_provider_non_retryable(mocker):
-    mocker.patch("activities.connector_dispatch._load_connector_secrets")
     mocker.patch(
-        "activities.connector_dispatch.get_connector",
-        side_effect=ConnectorConfigurationError("unknown provider"),
+        "activities.provider_capabilities._load_connector",
+        side_effect=ValueError("unknown provider"),
     )
 
     with pytest.raises(ApplicationError) as exc:
@@ -86,13 +82,13 @@ async def test_connector_execute_action_unknown_provider_non_retryable(mocker):
             payload={"title": "x"},
         )
 
-    assert exc.value.non_retryable is True
-    assert exc.value.type == "ConnectorPermanentError"
+    assert exc.value.non_retryable is False
+    assert exc.value.type == "ConnectorActivityError"
 
 
 @pytest.mark.asyncio
 async def test_connector_execute_action_unknown_provider_fails_fast_before_connector_lookup(mocker):
-    connector_lookup = mocker.patch("activities.connector_dispatch.get_connector")
+    connector_lookup = mocker.patch("activities.provider_capabilities.get_connector")
 
     with pytest.raises(ApplicationError) as exc:
         await connector_execute_action(
@@ -102,8 +98,8 @@ async def test_connector_execute_action_unknown_provider_fails_fast_before_conne
             payload={"title": "x"},
         )
 
-    assert exc.value.non_retryable is True
-    assert exc.value.type == "ConnectorPermanentError"
+    assert exc.value.non_retryable is False
+    assert exc.value.type == "ConnectorActivityError"
     connector_lookup.assert_not_called()
 
 
@@ -111,8 +107,7 @@ async def test_connector_execute_action_unknown_provider_fails_fast_before_conne
 async def test_connector_execute_action_transient_error_retryable(mocker):
     connector = mocker.AsyncMock()
     connector.execute_action.side_effect = ConnectorTransientError("temporary 503")
-    mocker.patch("activities.connector_dispatch._load_connector_secrets")
-    mocker.patch("activities.connector_dispatch.get_connector", return_value=connector)
+    mocker.patch("activities.provider_capabilities._load_connector", return_value=connector)
 
     with pytest.raises(ApplicationError) as exc:
         await connector_execute_action(

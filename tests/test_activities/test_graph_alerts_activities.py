@@ -3,20 +3,19 @@ from __future__ import annotations
 import pytest
 from temporalio.exceptions import ApplicationError
 
-from activities.connector_dispatch import (
-    graph_confirm_user_compromised,
-    graph_enrich_alert,
-    graph_get_alerts,
-    graph_get_signin_history,
-    graph_isolate_device,
-    graph_list_noncompliant_devices,
-    graph_list_risky_users,
-    graph_run_antivirus_scan,
+from activities.edr import (
+    edr_confirm_user_compromised,
+    edr_enrich_alert,
+    edr_get_signin_history,
+    edr_get_user_alerts,
+    edr_isolate_device,
+    edr_list_noncompliant_devices,
+    edr_list_risky_users,
+    edr_run_antivirus_scan,
 )
 from activities.risk import calculate_risk_score
 from activities.threat_intel import threat_intel_lookup
-from shared.models import ConnectorActionData, ConnectorActionResult, DefenderDetectionFindingEvent, EnrichedAlert, ThreatIntelResult, VendorExtension
-from shared.providers.contracts import TenantSecrets
+from shared.models import EnrichedAlert, ThreatIntelResult
 
 
 class _Resp:
@@ -45,151 +44,60 @@ class _Client:
         return self.queue.pop(0)
 
 
-@pytest.fixture
-def alert() -> DefenderDetectionFindingEvent:
-    return DefenderDetectionFindingEvent(
-        event_type="defender.alert",
-        activity_id=2004,
-        alert_id="a1",
-        severity_id=60,
-        severity="high",
-        title="Test",
-        description="Desc",
-        vendor_extensions={
-            "user_email": VendorExtension(source="test", value="user@example.com"),
-            "device_id": VendorExtension(source="test", value="d1"),
-            "source_ip": VendorExtension(source="test", value="1.1.1.1"),
-        },
-    )
+@pytest.mark.asyncio
+async def test_edr_enrich_alert_happy(mocker):
+    provider = mocker.AsyncMock()
+    provider.enrich_alert.return_value = {"alert_id": "a1", "severity": "high", "title": "Alert", "description": "Body"}
+    mocker.patch("activities.edr._get_provider", new=mocker.AsyncMock(return_value=provider))
 
-
-@pytest.fixture
-def secrets() -> TenantSecrets:
-    return TenantSecrets(client_id="cid", client_secret="sec", tenant_azure_id="tid")
+    payload = await edr_enrich_alert("t1", "a1")
+    assert payload["alert_id"] == "a1"
+    assert payload["severity"] == "high"
 
 
 @pytest.mark.asyncio
-async def test_graph_enrich_alert_happy(mocker, alert, secrets):
-    mocker.patch(
-        "activities.connector_dispatch.connector_execute_action",
-        new=mocker.AsyncMock(
-            return_value=ConnectorActionResult(
-                provider="microsoft_defender",
-                operation_type="action",
-                success=True,
-                details="ok",
-                data=ConnectorActionData(
-                    action="enrich_alert_context",
-                    payload={
-                        "alert_id": "a1",
-                        "severity": "high",
-                        "title": "Alert",
-                        "description": "Body",
-                        "user_display_name": "User One",
-                        "user_department": "Finance",
-                        "device_display_name": "LAPTOP-1",
-                        "device_os": "Windows",
-                        "device_compliance": "noncompliant",
-                    },
-                ),
-            )
-        ),
-    )
-    enriched = await graph_enrich_alert("t1", alert)
-    assert enriched.user_display_name == "User One"
-    assert enriched.device_compliance == "noncompliant"
+async def test_edr_get_user_alerts_happy_and_error(mocker):
+    provider = mocker.AsyncMock()
+    provider.get_user_alerts.return_value = [{"id": "a1"}]
+    mocker.patch("activities.edr._get_provider", new=mocker.AsyncMock(return_value=provider))
 
-
-@pytest.mark.asyncio
-async def test_graph_get_alerts_happy_and_error(mocker, secrets):
-    mocker.patch(
-        "activities.connector_dispatch.connector_execute_action",
-        new=mocker.AsyncMock(
-            return_value=ConnectorActionResult(
-                provider="microsoft_defender",
-                operation_type="action",
-                success=True,
-                details="ok",
-                data=ConnectorActionData(action="list_user_alerts", payload={"alerts": [{"id": "a1"}]}),
-            )
-        ),
-    )
-    alerts = await graph_get_alerts("t1", "user@example.com")
+    alerts = await edr_get_user_alerts("t1", "user@example.com")
     assert len(alerts) == 1
 
-    mocker.patch(
-        "activities.connector_dispatch.connector_execute_action",
-        new=mocker.AsyncMock(side_effect=ApplicationError("boom")),
-    )
+    provider.get_user_alerts.side_effect = ApplicationError("boom")
     with pytest.raises(ApplicationError):
-        await graph_get_alerts("t1", "user@example.com")
+        await edr_get_user_alerts("t1", "user@example.com")
 
 
 @pytest.mark.asyncio
-async def test_graph_isolate_device_happy(mocker, secrets):
-    mocker.patch(
-        "activities.connector_dispatch.connector_execute_action",
-        new=mocker.AsyncMock(
-            return_value=ConnectorActionResult(
-                provider="microsoft_defender",
-                operation_type="action",
-                success=True,
-                details="ok",
-                data=ConnectorActionData(action="isolate_device", payload={"submitted": True, "found": True}),
-            )
-        ),
-    )
-    assert await graph_isolate_device("t1", "d1") is True
+async def test_edr_isolate_device_happy(mocker):
+    provider = mocker.AsyncMock()
+    provider.isolate_device.return_value = True
+    mocker.patch("activities.edr._get_provider", new=mocker.AsyncMock(return_value=provider))
+
+    assert await edr_isolate_device("t1", "d1") is True
 
 
 @pytest.mark.asyncio
-async def test_signin_and_device_facades_use_connector_actions(mocker):
-    connector = mocker.AsyncMock()
-    connector.side_effect = [
-        ConnectorActionResult(
-            provider="microsoft_defender",
-            operation_type="action",
-            success=True,
-            data=ConnectorActionData(action="confirm_user_compromised", payload={"confirmed": True}),
-        ),
-        ConnectorActionResult(
-            provider="microsoft_defender",
-            operation_type="action",
-            success=True,
-            data=ConnectorActionData(action="get_signin_history", payload={"signins": [{"id": "s1"}]}),
-        ),
-        ConnectorActionResult(
-            provider="microsoft_defender",
-            operation_type="action",
-            success=True,
-            data=ConnectorActionData(action="list_risky_users", payload={"users": [{"id": "r1", "riskLevel": "high"}]}),
-        ),
-        ConnectorActionResult(
-            provider="microsoft_defender",
-            operation_type="action",
-            success=True,
-            data=ConnectorActionData(action="run_antivirus_scan", payload={"submitted": True, "found": True}),
-        ),
-        ConnectorActionResult(
-            provider="microsoft_defender",
-            operation_type="action",
-            success=True,
-            data=ConnectorActionData(action="list_noncompliant_devices", payload={"devices": [{"id": "dev-1"}]}),
-        ),
-    ]
+async def test_signin_and_device_capabilities_use_provider_methods(mocker):
+    provider = mocker.AsyncMock()
+    provider.confirm_user_compromised.return_value = True
+    provider.get_signin_history.return_value = [{"id": "s1"}]
+    provider.list_risky_users.return_value = [{"id": "r1", "riskLevel": "high"}]
+    provider.run_antivirus_scan.return_value = {"submitted": True, "found": True}
+    provider.list_noncompliant_devices.return_value = [{"id": "dev-1"}]
+    mocker.patch("activities.edr._get_provider", new=mocker.AsyncMock(return_value=provider))
 
-    mocker.patch("activities.connector_dispatch.connector_execute_action", new=connector)
-
-    assert await graph_confirm_user_compromised("t1", "u1") is True
-    assert await graph_get_signin_history("t1", "user@example.com") == [{"id": "s1"}]
-    risky = await graph_list_risky_users("t1", "medium")
+    assert await edr_confirm_user_compromised("t1", "u1") is True
+    assert await edr_get_signin_history("t1", "user@example.com") == [{"id": "s1"}]
+    risky = await edr_list_risky_users("t1", "medium")
     assert len(risky) == 1
-    assert risky[0].riskLevel == "high"
+    assert risky[0]["riskLevel"] == "high"
 
-    scan_result = await graph_run_antivirus_scan("t1", "dev-1", "quick")
+    scan_result = await edr_run_antivirus_scan("t1", "dev-1", "quick")
     assert scan_result.success is True
     assert scan_result.data.payload["submitted"] is True
-    assert await graph_list_noncompliant_devices("t1") == [{"id": "dev-1"}]
+    assert await edr_list_noncompliant_devices("t1") == [{"id": "dev-1"}]
 
 
 @pytest.mark.asyncio

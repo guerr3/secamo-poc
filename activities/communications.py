@@ -5,9 +5,9 @@ import httpx
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
+from activities import _tenant_secrets
 from activities._activity_errors import application_error_from_http_status, raise_activity_error
-from activities._tenant_secrets import load_tenant_secrets
-from activities.connector_dispatch import connector_execute_action
+from activities.provider_capabilities import connector_execute_action
 from shared.config import SECAMO_SENDER_EMAIL
 from shared.models import NotificationResult
 from shared.providers.contracts import TenantSecrets
@@ -71,7 +71,7 @@ async def teams_send_notification(tenant_id: str, channel_webhook_url: str, mess
     activity.logger.info(f"[{tenant_id}] teams_send_notification")
     resolved_webhook_url = channel_webhook_url.strip()
     if not resolved_webhook_url:
-        secrets = load_tenant_secrets(tenant_id, "graph")
+        secrets = _tenant_secrets.load_tenant_secrets(tenant_id, "graph")
         resolved_webhook_url = str(secrets.teams_webhook_url or "").strip()
     if not resolved_webhook_url:
         raise_activity_error(

@@ -4,15 +4,12 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from activities.connector_dispatch import connector_execute_action
+    from activities.edr import edr_enrich_alert, edr_get_device_context, edr_get_identity_risk
     from activities.risk import calculate_risk_score
     from shared.models import (
         AlertEnrichmentRequest,
         AlertEnrichmentResult,
-        ConnectorActionResult,
-        DeviceContext,
         EnrichedAlert,
-        IdentityRiskContext,
         ThreatIntelResult,
     )
 
@@ -32,19 +29,12 @@ class AlertEnrichmentWorkflow:
             request.alert.alert_id,
         )
 
-        enrich_result: ConnectorActionResult = await workflow.execute_activity(
-            connector_execute_action,
-            args=[
-                request.tenant_id,
-                request.edr_provider,
-                "enrich_alert",
-                {"alert_id": request.alert.alert_id},
-            ],
+        enriched_payload = await workflow.execute_activity(
+            edr_enrich_alert,
+            args=[request.tenant_id, request.alert.alert_id, None],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
         )
-
-        enriched_payload = enrich_result.data.payload
         user_email_ext = request.alert.vendor_extensions.get("user_email")
         device_id_ext = request.alert.vendor_extensions.get("device_id")
         source_ip_ext = request.alert.vendor_extensions.get("source_ip")
@@ -72,20 +62,12 @@ class AlertEnrichmentWorkflow:
         )
 
         if device_id:
-            device_context_result: ConnectorActionResult = await workflow.execute_activity(
-                connector_execute_action,
-                args=[
-                    request.tenant_id,
-                    request.edr_provider,
-                    "get_device_context",
-                    {"device_id": device_id},
-                ],
+            device_context = await workflow.execute_activity(
+                edr_get_device_context,
+                args=[request.tenant_id, device_id],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
-            device_payload = dict(device_context_result.data.payload)
-            device_payload.setdefault("device_id", device_id)
-            device_context = DeviceContext.model_validate(device_payload)
 
             if device_context:
                 description = enriched.description
@@ -107,22 +89,12 @@ class AlertEnrichmentWorkflow:
         ) or user_email
 
         if risky_lookup_key:
-            identity_provider = request.identity_provider or request.edr_provider
-            identity_risk_result: ConnectorActionResult = await workflow.execute_activity(
-                connector_execute_action,
-                args=[
-                    request.tenant_id,
-                    identity_provider,
-                    "get_identity_risk",
-                    {"lookup_key": str(risky_lookup_key)},
-                ],
+            identity_risk = await workflow.execute_activity(
+                edr_get_identity_risk,
+                args=[request.tenant_id, str(risky_lookup_key)],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
-
-            risk_payload = dict(identity_risk_result.data.payload)
-            risk_payload.setdefault("subject", str(risky_lookup_key))
-            identity_risk = IdentityRiskContext.model_validate(risk_payload)
 
             if identity_risk.risk_level:
                 enriched = enriched.model_copy(

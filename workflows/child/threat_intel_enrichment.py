@@ -4,7 +4,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from activities.connector_dispatch import connector_threat_intel_fanout
+    from activities.provider_capabilities import connector_threat_intel_fanout
     from shared.models import ThreatIntelEnrichmentRequest, ThreatIntelResult
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)

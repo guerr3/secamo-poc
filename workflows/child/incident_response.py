@@ -4,9 +4,10 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from activities.connector_dispatch import connector_execute_action
+    from activities.edr import edr_isolate_device
     from activities.evidence import collect_evidence_bundle
     from activities.identity import identity_delete_user, identity_revoke_sessions
+    from activities.ticketing import ticket_update
     from shared.models import EvidenceBundle, IncidentResponseRequest
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -29,21 +30,18 @@ class IncidentResponseWorkflow:
 
         if request.decision.action == "dismiss":
             await workflow.execute_activity(
-                connector_execute_action,
+                ticket_update,
                 args=[
                     request.tenant_id,
                     request.ticketing_provider,
-                    "update_ticket",
+                    request.ticket_id,
                     {
-                        "ticket_id": request.ticket_id,
-                        "fields": {
-                            "status": "closed",
-                            "resolution": "false_positive",
-                            "note": (
-                                f"Dismissed door {request.decision.reviewer}: "
-                                f"{request.decision.comments}"
-                            ),
-                        },
+                        "status": "closed",
+                        "resolution": "false_positive",
+                        "note": (
+                            f"Dismissed door {request.decision.reviewer}: "
+                            f"{request.decision.comments}"
+                        ),
                     },
                 ],
                 start_to_close_timeout=TIMEOUT,
@@ -54,34 +52,26 @@ class IncidentResponseWorkflow:
         elif request.decision.action == "isolate":
             resolved_device_id = request.device_id or "unknown-device"
             await workflow.execute_activity(
-                connector_execute_action,
+                edr_isolate_device,
                 args=[
                     request.tenant_id,
-                    request.edr_provider,
-                    "isolate_device",
-                    {
-                        "device_id": resolved_device_id,
-                        "comment": f"Isolated by {request.decision.reviewer} from WF-05",
-                    },
+                    resolved_device_id,
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
             await workflow.execute_activity(
-                connector_execute_action,
+                ticket_update,
                 args=[
                     request.tenant_id,
                     request.ticketing_provider,
-                    "update_ticket",
+                    request.ticket_id,
                     {
-                        "ticket_id": request.ticket_id,
-                        "fields": {
-                            "status": "in_progress",
-                            "note": (
-                                f"Device {resolved_device_id} geisoleerd door "
-                                f"{request.decision.reviewer}."
-                            ),
-                        },
+                        "status": "in_progress",
+                        "note": (
+                            f"Device {resolved_device_id} geisoleerd door "
+                            f"{request.decision.reviewer}."
+                        ),
                     },
                 ],
                 start_to_close_timeout=TIMEOUT,
@@ -104,20 +94,17 @@ class IncidentResponseWorkflow:
                     retry_policy=RETRY_POLICY,
                 )
             await workflow.execute_activity(
-                connector_execute_action,
+                ticket_update,
                 args=[
                     request.tenant_id,
                     request.ticketing_provider,
-                    "update_ticket",
+                    request.ticket_id,
                     {
-                        "ticket_id": request.ticket_id,
-                        "fields": {
-                            "status": "in_progress",
-                            "note": (
-                                f"Gebruiker {request.user_email} uitgeschakeld door "
-                                f"{request.decision.reviewer}."
-                            ),
-                        },
+                        "status": "in_progress",
+                        "note": (
+                            f"Gebruiker {request.user_email} uitgeschakeld door "
+                            f"{request.decision.reviewer}."
+                        ),
                     },
                 ],
                 start_to_close_timeout=TIMEOUT,

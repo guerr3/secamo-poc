@@ -481,9 +481,9 @@ def _validate_graph_validation_tokens(tokens: list[str] | None) -> bool:
 def _graph_event_type_from_resource(resource: str) -> str:
     value = str(resource or "").strip().lower()
     if "alerts" in value:
-        return "alert"
+        return "defender.alert"
     if "signin" in value or "risky" in value:
-        return "impossible_travel"
+        return "defender.impossible_travel"
     return ""
 
 
@@ -743,7 +743,7 @@ async def handle_graph_notification(event: IngressEvent) -> dict:
     if not await _validate_provider_authentication(
         event=event,
         tenant_id=tenant_id,
-        provider="microsoft_defender",
+        provider="microsoft_graph",
         channel="webhook",
     ):
         return response.error(401, "Invalid provider signature")
@@ -774,7 +774,7 @@ async def handle_graph_notification(event: IngressEvent) -> dict:
         provider_payload = _graph_item_to_provider_payload(item.model_dump(mode="json"), event_type)
         dispatch_result = await _dispatch_provider_event(
             raw_body=provider_payload,
-            provider="microsoft_defender",
+            provider="microsoft_graph",
             event_type=event_type,
             tenant_id=tenant_id,
         )
@@ -785,7 +785,7 @@ async def handle_graph_notification(event: IngressEvent) -> dict:
     return response.accepted(
         {
             "tenant_id": tenant_id,
-            "provider": "microsoft_defender",
+            "provider": "microsoft_graph",
             "received": len(envelope.value),
             "dispatched": dispatched,
             "ignored": ignored,

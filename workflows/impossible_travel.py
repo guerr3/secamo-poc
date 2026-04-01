@@ -6,7 +6,6 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from shared.models import (
         ApprovalDecision,
-        ConnectorActionResult,
         IdentityUser,
         HiTLApprovalRequest,
         HiTLRequest,
@@ -19,8 +18,8 @@ with workflow.unsafe.imports_passed_through():
     )
     from shared.models.canonical import Envelope, ImpossibleTravelEvent
     from shared.workflow_helpers import bootstrap_tenant
+    from activities.edr import edr_get_user_alerts
     from activities.identity import identity_get_user
-    from activities.connector_dispatch import connector_execute_action
     from workflows.child.hitl_approval import HiTLApprovalWorkflow
     from workflows.child.incident_response import IncidentResponseWorkflow
     from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
@@ -93,18 +92,12 @@ class ImpossibleTravelWorkflow:
             )
 
         # 4. Recente alerts ophalen via provider connector
-        alerts_result: ConnectorActionResult = await workflow.execute_activity(
-            connector_execute_action,
-            args=[
-                event.tenant_id,
-                config.edr_provider,
-                "get_user_alerts",
-                {"user_email": payload.user_principal_name},
-            ],
+        recent_alerts: list[dict] = await workflow.execute_activity(
+            edr_get_user_alerts,
+            args=[event.tenant_id, payload.user_principal_name],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
-        recent_alerts: list[dict] = alerts_result.data.payload.get("alerts", [])
 
         # 5. Ticket aanmaken via child workflow
         ticket: TicketResult = await workflow.execute_child_workflow(
