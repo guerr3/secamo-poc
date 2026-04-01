@@ -1,31 +1,22 @@
-"""Ingress contract package for phase-1 architecture boundaries.
+"""Ingress package exports for shared webhook orchestration runtime.
 
-Responsibility: expose provider-agnostic pipeline contracts used by ingress orchestration.
-This package must not contain provider-specific logic, AWS SDK usage, or Temporal SDK calls.
+Responsibility: expose shared ingress runtime entry points and reusable helpers.
+This module must not contain transport handler logic or provider implementation branches.
 """
 
-from .contracts import (
-    AuthResult,
-    DispatchItem,
-    DispatchPlan,
-    DispatchResult,
-    IngressContext,
-    IngressOutcome,
-    IngressRequest,
-    IngressSignal,
-)
 from .errors import IngressError, IngressErrorCode, IngressPipelineError
+from .graph import GraphNotificationHelper
+from .normalization import normalize_event_body
+from .pipeline import AuthResult, GraphDispatchResult, IngressPipeline, PipelineDispatchResult
 
 __all__ = [
     "AuthResult",
-    "DispatchItem",
-    "DispatchPlan",
-    "DispatchResult",
-    "IngressContext",
+    "GraphDispatchResult",
+    "GraphNotificationHelper",
     "IngressError",
     "IngressErrorCode",
-    "IngressOutcome",
+    "IngressPipeline",
     "IngressPipelineError",
-    "IngressRequest",
-    "IngressSignal",
+    "PipelineDispatchResult",
+    "normalize_event_body",
 ]

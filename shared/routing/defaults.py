@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from shared.config import QUEUE_IAM, QUEUE_SOC
 from shared.models.canonical import Envelope
 from shared.routing.contracts import WorkflowRoute
 from shared.routing.registry import RouteRegistry
@@ -30,103 +31,103 @@ def build_default_route_registry() -> RouteRegistry:
     registry.register_rule(
         name="critical-defender-alert",
         predicate=_is_critical_defender_alert,
-        routes=(WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        routes=(WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
 
     registry.register(
         "microsoft_defender",
         "defender.alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "microsoft_defender",
         "defender.impossible_travel",
-        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "microsoft_defender",
         "alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "microsoft_defender",
         "impossible_travel",
-        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "crowdstrike",
         "defender.alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "crowdstrike",
         "defender.impossible_travel",
-        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "crowdstrike",
         "detection_summary",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "crowdstrike",
         "impossible_travel",
-        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "sentinelone",
         "defender.alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "sentinelone",
         "alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "jira",
         "iam.onboarding",
-        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue="iam-graph"),),
+        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue=QUEUE_IAM),),
     )
     registry.register(
         "jira",
         "jira:issue_created",
-        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue="iam-graph"),),
+        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue=QUEUE_IAM),),
     )
     registry.register(
         "jira",
         "jira:issue_updated",
-        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue="iam-graph"),),
+        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue=QUEUE_IAM),),
     )
     registry.register(
         "microsoft_graph",
         "defender.alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "microsoft_graph",
         "defender.impossible_travel",
-        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "microsoft_graph",
         "iam.onboarding",
-        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue="iam-graph"),),
+        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue=QUEUE_IAM),),
     )
     registry.register(
         "microsoft_graph",
         "iam_request",
-        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue="iam-graph"),),
+        (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue=QUEUE_IAM),),
     )
     registry.register(
         "defender",
         "alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
     registry.register(
         "defender",
         "defender.alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_SOC),),
     )
 
     registry.register_polling_resource("microsoft_defender", "defender_alerts", "alert")

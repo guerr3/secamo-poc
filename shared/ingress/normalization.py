@@ -244,6 +244,7 @@ _NORMALIZERS: dict[tuple[str, str], NormalizerFn] = {
 
 def normalize_event_body(provider: str, event_type: str, tenant_id: str, raw_body: dict[str, Any]) -> dict[str, Any]:
     """Normalize provider webhook payloads into intermediate envelope-build input shape."""
+
     key = (provider, event_type)
     normalizer = _NORMALIZERS.get(key)
     if normalizer is None:
