@@ -6,6 +6,9 @@ import types
 from pathlib import Path
 from types import SimpleNamespace
 
+from shared.auth.contracts import AuthValidationResult
+from shared.ingress.pipeline import IngressPipeline
+
 
 def _load_handler_module():
     ingress_sdk = types.ModuleType("ingress_sdk")
@@ -71,19 +74,21 @@ async def test_handle_graph_notification_returns_validation_token() -> None:
 async def test_handle_graph_notification_dispatches_supported_items(monkeypatch) -> None:
     module = _load_handler_module()
 
-    async def _always_valid(*_args, **_kwargs):
-        return True
+    class _FakePipeline:
+        async def dispatch_graph_notifications(self, *, tenant_id, body, headers, raw_body_text):
+            assert tenant_id == "tenant-demo-001"
+            assert isinstance(body, dict)
+            assert isinstance(headers, dict)
+            assert isinstance(raw_body_text, str)
+            return SimpleNamespace(
+                accepted=True,
+                status_code=202,
+                received=2,
+                dispatched=1,
+                ignored=1,
+            )
 
-    monkeypatch.setattr(module, "_validate_provider_authentication", _always_valid)
-
-    async def _fake_dispatch_provider_event(*, raw_body, provider, event_type, tenant_id):
-        assert provider == "microsoft_graph"
-        assert tenant_id == "tenant-demo-001"
-        assert event_type in {"defender.alert", "defender.impossible_travel"}
-        assert isinstance(raw_body, dict)
-        return {"statusCode": 202, "body": {"ok": True}}
-
-    monkeypatch.setattr(module, "_dispatch_provider_event", _fake_dispatch_provider_event)
+    monkeypatch.setattr(module, "_get_ingress_pipeline", lambda: _FakePipeline())
 
     event = SimpleNamespace(
         tenant_id="tenant-demo-001",
@@ -126,18 +131,38 @@ async def test_handle_graph_notification_dispatches_supported_items(monkeypatch)
 
 
 async def test_dispatch_provider_event_uses_canonical_event_type_for_jira(monkeypatch) -> None:
-    module = _load_handler_module()
-
     captured: dict[str, str] = {}
 
-    async def _fake_dispatch_intent(envelope):
-        captured["payload_event_type"] = envelope.payload.event_type
-        captured["source_provider"] = envelope.source_provider
-        return SimpleNamespace(attempted=1, succeeded=1, failed=0)
+    class _StubAuthRegistry:
+        async def validate(self, _request):
+            return AuthValidationResult(authenticated=True, validator_name="stub")
 
-    monkeypatch.setattr(module, "_route_fanout_dispatcher", SimpleNamespace(dispatch_intent=_fake_dispatch_intent))
+    class _StubGraphHelper:
+        def validate_graph_validation_tokens(self, _tokens):
+            return True
 
-    result = await module._dispatch_provider_event(
+        def graph_client_state_matches_tenant(self, _client_state, _tenant_id):
+            return True
+
+        def graph_event_type_from_resource(self, _resource):
+            return ""
+
+        def graph_item_to_provider_payload(self, _item, _event_type):
+            return {}
+
+    class _StubDispatcher:
+        async def dispatch_intent(self, envelope):
+            captured["payload_event_type"] = envelope.payload.event_type
+            captured["source_provider"] = envelope.source_provider
+            return SimpleNamespace(attempted=1, succeeded=1, failed=0)
+
+    pipeline = IngressPipeline(
+        auth_registry=_StubAuthRegistry(),
+        route_fanout_dispatcher=_StubDispatcher(),
+        graph_helper=_StubGraphHelper(),
+    )
+
+    result = await pipeline.dispatch_provider_event(
         raw_body={
             "provider": "jira",
             "event_type": "jira:issue_created",
@@ -154,8 +179,10 @@ async def test_dispatch_provider_event_uses_canonical_event_type_for_jira(monkey
         provider="jira",
         event_type="jira:issue_created",
         tenant_id="tenant-demo-001",
+        authenticate=False,
     )
 
-    assert result["statusCode"] == 202
+    assert result.accepted is True
+    assert result.status_code == 202
     assert captured["payload_event_type"] == "iam.onboarding"
     assert captured["source_provider"] == "jira"

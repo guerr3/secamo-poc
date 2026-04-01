@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.util
-import sys
-import types
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
+from shared.ingress.envelope_builder import build_envelope
+from shared.ingress.normalization import normalize_event_body
 from shared.models import (
     ApprovalDecision,
     Correlation,
@@ -44,52 +42,8 @@ def cli_payload() -> dict:
     }
 
 
-def _load_ingress_handler_module():
-    ingress_sdk = types.ModuleType("ingress_sdk")
-    temporal_module = types.ModuleType("ingress_sdk.temporal")
-    response_module = types.ModuleType("ingress_sdk.response")
-    dispatch_module = types.ModuleType("ingress_sdk.dispatch")
-    event_module = types.ModuleType("ingress_sdk.event")
-
-    async def _not_used(*_args, **_kwargs):
-        return {}
-
-    temporal_module.start_workflow = _not_used
-    temporal_module.signal_workflow = _not_used
-
-    response_module.error = lambda code, message: {"statusCode": code, "body": message}
-    response_module.accepted = lambda body: {"statusCode": 202, "body": body}
-    response_module.ok = lambda body: {"statusCode": 200, "body": body}
-
-    dispatch_module.async_handler = lambda routes: routes
-    event_module.IngressEvent = object
-
-    ingress_sdk.temporal = temporal_module
-    ingress_sdk.response = response_module
-
-    sys.modules["ingress_sdk"] = ingress_sdk
-    sys.modules["ingress_sdk.temporal"] = temporal_module
-    sys.modules["ingress_sdk.response"] = response_module
-    sys.modules["ingress_sdk.dispatch"] = dispatch_module
-    sys.modules["ingress_sdk.event"] = event_module
-
-    ingress_src = Path("terraform/modules/ingress/src/ingress")
-    if str(ingress_src) not in sys.path:
-        sys.path.insert(0, str(ingress_src))
-
-    module_name = "ingress_handler_model_tests"
-    handler_path = ingress_src / "handler.py"
-    spec = importlib.util.spec_from_file_location(module_name, handler_path)
-    assert spec and spec.loader
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[module_name] = module
-    spec.loader.exec_module(module)
-    return module
-
-
 class TestIngressHandlerMapping:
     def test_defender_alert_mapping_to_envelope(self) -> None:
-        module = _load_ingress_handler_module()
         raw_body = {
             "request_id": "req-001",
             "correlation_id": "corr-001",
@@ -106,13 +60,13 @@ class TestIngressHandlerMapping:
             },
         }
 
-        normalized = module.normalize_event_body(
+        normalized = normalize_event_body(
             provider="microsoft_defender",
             event_type="alert",
             tenant_id="tenant-demo-001",
             raw_body=raw_body,
         )
-        envelope = module._build_envelope(
+        envelope = build_envelope(
             raw_body=raw_body,
             normalized=normalized,
             provider="microsoft_defender",
@@ -140,17 +94,16 @@ class TestIngressHandlerMapping:
         assert envelope.event_id == expected_event_id
 
     def test_internal_iam_mapping_to_envelope(self, cli_payload: dict) -> None:
-        module = _load_ingress_handler_module()
         request = IamIngressRequest.model_validate(cli_payload)
         raw_body = request.model_dump(mode="json")
 
-        normalized = module.normalize_event_body(
+        normalized = normalize_event_body(
             provider="microsoft_graph",
             event_type="iam_request",
             tenant_id="tenant-demo-001",
             raw_body=raw_body,
         )
-        envelope = module._build_envelope(
+        envelope = build_envelope(
             raw_body=raw_body,
             normalized=normalized,
             provider="microsoft_graph",

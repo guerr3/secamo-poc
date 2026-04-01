@@ -1,21 +1,10 @@
 from __future__ import annotations
 
-import importlib.util
-from pathlib import Path
-
-
-def _load_mappers_module():
-    mapper_path = Path(__file__).resolve().parents[1] / "terraform" / "modules" / "ingress" / "src" / "ingress" / "mappers.py"
-    spec = importlib.util.spec_from_file_location("ingress_mappers", mapper_path)
-    assert spec is not None and spec.loader is not None
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+from shared.ingress.normalization import normalize_event_body
 
 
 def test_normalize_microsoft_defender_alert() -> None:
-    mappers = _load_mappers_module()
-    payload = mappers.normalize_event_body(
+    payload = normalize_event_body(
         provider="microsoft_defender",
         event_type="alert",
         tenant_id="tenant-demo-001",
@@ -38,8 +27,7 @@ def test_normalize_microsoft_defender_alert() -> None:
 
 
 def test_normalize_crowdstrike_detection_summary() -> None:
-    mappers = _load_mappers_module()
-    payload = mappers.normalize_event_body(
+    payload = normalize_event_body(
         provider="crowdstrike",
         event_type="detection_summary",
         tenant_id="tenant-demo-001",
@@ -63,8 +51,7 @@ def test_normalize_crowdstrike_detection_summary() -> None:
 
 
 def test_normalize_jira_issue_created() -> None:
-    mappers = _load_mappers_module()
-    payload = mappers.normalize_event_body(
+    payload = normalize_event_body(
         provider="jira",
         event_type="jira:issue_created",
         tenant_id="tenant-demo-001",
@@ -92,8 +79,7 @@ def test_normalize_jira_issue_created() -> None:
 
 
 def test_normalize_sentinelone_alert() -> None:
-    mappers = _load_mappers_module()
-    payload = mappers.normalize_event_body(
+    payload = normalize_event_body(
         provider="sentinelone",
         event_type="alert",
         tenant_id="tenant-demo-001",
