@@ -45,9 +45,9 @@ from shared.models.domain import (
 from shared.models.subscriptions import SubscriptionConfig, SubscriptionManagerInput, SubscriptionState
 
 # ── AI triage and ChatOps contracts ─────────────────────────
-from shared.models.chatops import ChatOpsAction, ChatOpsMessage, ChatOpsProvider
-from shared.models.capabilities import IdentityAccessProvider, TicketingProvider
-from shared.models.triage import AITriageProvider, TriageRequest, TriageResult
+from shared.models.chatops import ChatOpsAction, ChatOpsMessage
+from shared.models.triage import TriageRequest, TriageResult
+from shared.providers.protocols import AITriageProvider, ChatOpsProvider, IdentityAccessProvider, TicketingProvider
 
 # ── Ingress transport models ─────────────────────────────────
 from shared.models.ingress import IamIngressRequest

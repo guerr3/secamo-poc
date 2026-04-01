@@ -1,4 +1,4 @@
-"""shared.models.triage - AI triage contracts and provider interface.
+"""shared.models.triage - AI triage contracts.
 
 This module defines provider-agnostic data contracts used by activities,
 workflows, and provider implementations involved in AI-driven security triage.
@@ -9,7 +9,7 @@ workflow or activity code.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -49,15 +49,3 @@ class TriageResult(BaseModel):
     recommended_actions: list[str] = Field(default_factory=list)
     is_false_positive: bool
 
-
-@runtime_checkable
-class AITriageProvider(Protocol):
-    """Provider contract for asynchronous AI triage implementations.
-
-    Implementations encapsulate provider-specific API behavior while exposing
-    a stable interface that activities can call without coupling to any one
-    model vendor.
-    """
-
-    async def analyze_alert(self, request: TriageRequest) -> TriageResult:
-        """Analyze a security alert and return a normalized triage result."""

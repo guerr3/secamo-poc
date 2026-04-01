@@ -1,6 +1,6 @@
 """Azure OpenAI provider for tenant-scoped AI triage.
 
-This module implements :class:`shared.models.triage.AITriageProvider` and keeps
+This module implements :class:`shared.providers.protocols.AITriageProvider` and keeps
 all vendor-specific behavior encapsulated behind the protocol boundary.
 """
 

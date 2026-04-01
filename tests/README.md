@@ -16,7 +16,7 @@
 | `approval/`                           | Approval-related test suites.                           |
 | `auth/`                               | Auth validation and resolver tests.                     |
 | `conftest.py`                         | Shared pytest fixtures and configuration.               |
-| `contracts/`                          | Contract-level test suites.                             |
+| `contracts/`                          | Guardrails for legacy contract-import and boundary rules. |
 | `e2e/`                                | End-to-end oriented test scenarios.                     |
 | `normalization/`                      | Normalization and canonical mapping tests.              |
 | `README.md`                           | Module documentation.                                   |

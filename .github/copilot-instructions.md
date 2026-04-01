@@ -91,7 +91,9 @@ Place new code in the narrowest correct layer:
 - Temporal workflows: `workflows/` and `workflows/child/`
 - Provider connectors: `connectors/` (must extend [connectors/base.py](../connectors/base.py))
 - Connector registration: [connectors/registry.py](../connectors/registry.py)
-- Shared contracts/models: `shared/` subpackages (especially `shared/models/`, `shared/routing/`, `shared/ingress/`, `shared/auth/`)
+- Domain contracts/models: `shared/models/`
+- Provider contracts (protocols, provider enums/types, secret mapping): `shared/providers/`
+- Shared routing/ingress/auth contracts: `shared/routing/`, `shared/ingress/`, `shared/auth/`
 - Worker queue registration: [workers/run_worker.py](../workers/run_worker.py)
 - Infrastructure changes: `terraform/modules/` or `terraform/environments/`
 
@@ -122,7 +124,8 @@ Pattern sources to treat as authoritative:
 
 3. Capability-first provider interfaces and adapters:
 
-- [shared/models/capabilities.py](../shared/models/capabilities.py)
+- [shared/providers/protocols.py](../shared/providers/protocols.py)
+- [shared/providers/types.py](../shared/providers/types.py)
 - [shared/providers/factory.py](../shared/providers/factory.py)
 - [shared/providers/identity_access.py](../shared/providers/identity_access.py)
 - [shared/providers/ticketing.py](../shared/providers/ticketing.py)
@@ -147,8 +150,9 @@ To prevent duplicate implementations for the same business capability:
 
 1. One capability, one interface:
 
-- Define capability contracts only in [shared/models/capabilities.py](../shared/models/capabilities.py).
-- Do not create alternate Protocols for the same capability in other model files.
+- Define provider capability contracts only in [shared/providers/protocols.py](../shared/providers/protocols.py).
+- Define provider identifiers/type aliases and provider-to-secret mapping only in [shared/providers/types.py](../shared/providers/types.py).
+- Do not create alternate Protocols/enums for the same provider capability in other modules.
 
 2. One activity surface per capability:
 
@@ -174,7 +178,9 @@ Before adding code, classify the change and place it in exactly one layer:
 
 1. New boundary contract:
 
-- Add/update model in `shared/models/*` or `shared/*/contracts.py`.
+- Domain/event payload contracts: add/update model in `shared/models/*`.
+- Provider capability/type contracts: add/update model in `shared/providers/*`.
+- Other shared boundary contracts remain in `shared/*/contracts.py` where applicable.
 
 2. Provider/channel/route selection rule:
 
@@ -203,6 +209,11 @@ Default policy for this repository:
 - Remove obsolete exports/usages/tests in the same PR when practical.
 
 This policy exists specifically to avoid long-lived parallel implementations and architecture drift.
+
+Additional contract ownership policy:
+
+- Do not add or restore a top-level `contracts/` package.
+- Treat `shared.models` + `shared.providers` as the only source of truth for contracts.
 
 ## Temporal Engineering Rules
 

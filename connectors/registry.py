@@ -16,12 +16,13 @@ from connectors.stub_providers import (
     VirusTotalConnector,
 )
 from shared.providers.contracts import TenantSecrets
+from shared.providers.protocols import ConnectorInterface
 
-ConnectorFactory = Callable[[str, TenantSecrets], BaseConnector]
+ConnectorFactory = Callable[[str, TenantSecrets], ConnectorInterface]
 
 
 def _factory(cls: type[BaseConnector]) -> ConnectorFactory:
-    def build(tenant_id: str, secrets: TenantSecrets) -> BaseConnector:
+    def build(tenant_id: str, secrets: TenantSecrets) -> ConnectorInterface:
         return cls(tenant_id=tenant_id, secrets=secrets)
 
     return build
@@ -41,7 +42,7 @@ _CONNECTOR_FACTORIES: dict[str, ConnectorFactory] = {
 }
 
 
-def get_connector(provider: str, tenant_id: str, secrets: TenantSecrets) -> BaseConnector:
+def get_connector(provider: str, tenant_id: str, secrets: TenantSecrets) -> ConnectorInterface:
     factory = _CONNECTOR_FACTORIES.get(provider.lower())
     if factory is None:
         raise ConnectorConfigurationError(f"No connector registered for provider '{provider}'")

@@ -1,4 +1,4 @@
-"""shared.models.chatops - ChatOps message contracts and provider interface.
+"""shared.models.chatops - ChatOps message contracts.
 
 This module provides normalized message and action schemas that can be mapped
 to multiple chat platforms (for example, Microsoft Teams Adaptive Cards and
@@ -8,7 +8,7 @@ or workflows.
 
 from __future__ import annotations
 
-from typing import Any, Protocol, runtime_checkable
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -50,17 +50,3 @@ class ChatOpsMessage(BaseModel):
     actions: list[ChatOpsAction] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
-
-@runtime_checkable
-class ChatOpsProvider(Protocol):
-    """Provider contract for ChatOps transport and webhook verification.
-
-    Implementations are responsible for converting normalized message payloads
-    into platform-native format and validating callback authenticity.
-    """
-
-    async def send_message(self, target_channel: str, message: ChatOpsMessage) -> str:
-        """Send a message to the target channel and return provider message id."""
-
-    async def validate_webhook_signature(self, headers: dict[str, str], body: bytes) -> bool:
-        """Validate inbound webhook signature and return True when trusted."""

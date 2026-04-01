@@ -16,18 +16,19 @@ import asyncio
 from typing import Any
 
 from connectors.registry import get_connector
-from shared.models import (
-    AITriageProvider,
-    ChatOpsProvider,
-    IdentityAccessProvider,
-    TenantConfig,
-    TicketingProvider,
-)
+from shared.models import TenantConfig
 from shared.providers.contracts import TenantSecrets
 from shared.providers.ai import AzureOpenAITriageProvider
 from shared.providers.chatops import MSTeamsChatOpsProvider, SlackChatOpsProvider
 from shared.providers.identity_access import ConnectorIdentityAccessProvider
+from shared.providers.protocols import (
+    AITriageProvider,
+    ChatOpsProvider,
+    IdentityAccessProvider,
+    TicketingProvider,
+)
 from shared.providers.ticketing import ConnectorTicketingProvider
+from shared.providers.types import secret_type_for_provider
 
 
 _AI_PROVIDER_CACHE: dict[str, AITriageProvider] = {}

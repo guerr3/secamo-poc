@@ -22,6 +22,20 @@ graph TD
     E --> L1 --> L2 --> L3 --> L4 --> L5
 ```
 
+### Contract Source of Truth
+
+Secamo uses a strict split for typed boundaries:
+
+- Domain models and event payload contracts live in `shared/models/*`.
+- Provider contracts (provider protocols, provider type enums, and provider-to-secret mapping) live in `shared/providers/*`.
+- Connector implementations in `connectors/*` must satisfy the connector interface contract defined in `shared/providers/protocols.py`.
+- Legacy `contracts/` is removed and must not be reintroduced.
+
+Practical rule:
+
+- If the model describes workflow or event/business payload shape, place it in `shared.models`.
+- If the model describes provider capability interface, provider identity typing, or secret mapping, place it in `shared.providers`.
+
 ## Quick Start
 
 1. Create and activate a Python 3.11 virtual environment.
@@ -86,7 +100,7 @@ graph TD
 
 1. Implement a connector class in `connectors/` that extends `BaseConnector`.
 2. Register it in `connectors/registry.py`.
-3. Route usage through activities (typically `activities/connector_dispatch.py` or module-specific activity wrappers).
+3. Route usage through capability activities under `activities/` (for example `activities/edr.py`, `activities/identity.py`, `activities/ticketing.py`, or `activities/provider_capabilities.py`).
 4. Add tests under `tests/` for behavior and failure classification.
 5. Update [connectors/README.md](connectors/README.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 

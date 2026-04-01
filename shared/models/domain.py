@@ -14,6 +14,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from shared.models.canonical import DefenderDetectionFindingEvent, Envelope
 from shared.models.subscriptions import SubscriptionConfig
+from shared.providers.types import (
+    AIProviderType,
+    ChatOpsProviderType,
+    EDRProviderType,
+    IAMProviderType,
+    NotificationProviderType,
+    ThreatIntelProviderType,
+    TicketingProviderType,
+)
 
 
 class AITriageConfig(BaseModel):
@@ -31,7 +40,7 @@ class AITriageConfig(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    provider_type: Literal["azure_openai", "aws_bedrock", "local"] = "azure_openai"
+    provider_type: AIProviderType = "azure_openai"
     credentials_path: str = "/secamo/tenants/{tenant_id}/ai_triage"
     default_channel: Optional[str] = None
     model_name: Optional[str] = None
@@ -53,7 +62,7 @@ class ChatOpsConfig(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    provider_type: Literal["ms_teams", "slack"] = "ms_teams"
+    provider_type: ChatOpsProviderType = "ms_teams"
     credentials_path: str = "/secamo/tenants/{tenant_id}/chatops"
     default_channel: Optional[str] = None
     default_channels: list[str] = Field(default_factory=list)
@@ -66,11 +75,11 @@ class TenantConfig(BaseModel):
     tenant_id: str
     display_name: str = "Unknown Tenant"
 
-    iam_provider: Literal["microsoft_graph", "okta", "entra_id", "custom"] = "microsoft_graph"
-    edr_provider: Literal["microsoft_defender", "crowdstrike", "sentinelone"] = "microsoft_defender"
-    ticketing_provider: Literal["jira", "halo_itsm", "servicenow"] = "jira"
-    threat_intel_providers: list[Literal["virustotal", "abuseipdb", "misp"]] = Field(default_factory=lambda: ["virustotal"])
-    notification_provider: Literal["teams", "slack", "email"] = "teams"
+    iam_provider: IAMProviderType = "microsoft_graph"
+    edr_provider: EDRProviderType = "microsoft_defender"
+    ticketing_provider: TicketingProviderType = "jira"
+    threat_intel_providers: list[ThreatIntelProviderType] = Field(default_factory=lambda: ["virustotal"])
+    notification_provider: NotificationProviderType = "teams"
     soc_analyst_email: Optional[str] = None
 
     sla_tier: Literal["platinum", "standard", "basic"] = "standard"

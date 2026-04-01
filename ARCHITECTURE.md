@@ -16,6 +16,20 @@ Boundary rules:
 - Activities must be retry-safe and idempotent where possible.
 - Tenant secrets are resolved from SSM path conventions, not hardcoded.
 
+## Contract Ownership (Source of Truth)
+
+Secamo enforces a single-source contract model split:
+
+- `shared.models` owns domain contracts: workflow inputs/outputs, event payloads, and canonical business data models.
+- `shared.providers` owns provider contracts: provider capability protocols, provider type enums, connector interface contracts, and provider-to-secret mapping.
+- `connectors` owns concrete connector implementations only.
+
+Rules:
+
+- Do not define provider protocols in `shared.models`.
+- Do not define domain/event payload models in `shared.providers`.
+- Do not recreate a parallel `contracts/` package.
+
 ## Data Flow
 
 The following sequence shows a representative flow from inbound event to orchestration and external side effects.
