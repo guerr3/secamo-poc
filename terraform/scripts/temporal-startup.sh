@@ -1,11 +1,11 @@
 #!/bin/bash
 # ──────────────────────────────────────────────────────────────
-# Temporal Server + Worker + Ingress Startup Script
+# Temporal Server + Worker Startup Script
 # ──────────────────────────────────────────────────────────────
 # This script runs on first boot of the EC2 instance.
 # It installs Docker, clones the secamo-poc repo, copies the
 # canonical terraform/temporal-compose assets, and launches the
-# full local stack (Temporal + worker + graph ingress).
+# local stack (Temporal + worker).
 #
 # Template variables (injected by Terraform):
 #   ${temporal_namespace}   — Namespace to create
@@ -22,7 +22,7 @@ exec > >(tee /var/log/temporal-startup.log) 2>&1
 echo "=== Temporal startup script began at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 
 # ── System Updates & Docker Install ──────────────────────────
-echo "[1/7] Installing Docker, Git, and required tools..."
+echo "[1/6] Installing Docker, Git, and required tools..."
 dnf update -y -q
 dnf install -y -q docker git jq
 
@@ -42,7 +42,7 @@ docker compose version
 echo "Docker and Docker Compose installed successfully"
 
 # ── Clone Secamo Repo ────────────────────────────────────────
-echo "[2/7] Cloning secamo-poc repo..."
+echo "[2/6] Cloning secamo-poc repo..."
 REPO_DIR="/opt/secamo-poc"
 
 if [ -d "$REPO_DIR/.git" ]; then
@@ -55,7 +55,7 @@ else
 fi
 
 # ── Sync Canonical Compose Assets ────────────────────────────
-echo "[3/7] Syncing canonical terraform/temporal-compose assets..."
+echo "[3/6] Syncing canonical terraform/temporal-compose assets..."
 TEMPORAL_DIR="/opt/temporal-compose"
 rm -rf "$TEMPORAL_DIR"
 mkdir -p "$TEMPORAL_DIR"
@@ -102,14 +102,14 @@ AUDIT_TABLE_NAME=${audit_table}
 EOF
 
 # ── Start Temporal Stack ─────────────────────────────────────
-echo "[4/7] Starting Temporal infrastructure via docker compose..."
+echo "[4/6] Starting Temporal infrastructure via docker compose..."
 cd "$TEMPORAL_DIR"
 
 # Start Temporal infra first (worker builds from the cloned repo)
 docker compose up -d postgresql temporal-admin-tools temporal temporal-create-namespace temporal-ui
 
 # ── Wait for initialization ──────────────────────────────────
-echo "[5/7] Waiting for Temporal to become healthy..."
+echo "[5/6] Waiting for Temporal to become healthy..."
 until docker inspect --format='{{.State.Health.Status}}' temporal 2>/dev/null | grep -q "^healthy$"; do
   echo "Temporal not healthy yet, waiting 10s..."
   sleep 10
@@ -129,37 +129,19 @@ if [ "$EXIT_CODE" != "0" ]; then
 fi
 echo "Namespace created successfully."
 
-# ── Start Worker + Ingress Containers ───────────────────────
-echo "[6/7] Building and starting secamo-worker and secamo-graph-ingress containers..."
+# ── Start Worker Container ───────────────────────────────────
+echo "[6/6] Building and starting secamo-worker container..."
 cd "$TEMPORAL_DIR"
-docker compose up -d --build secamo-worker secamo-graph-ingress
-
-echo "[7/7] Waiting for secamo-graph-ingress health check..."
-INGRESS_ATTEMPTS=24
-INGRESS_COUNT=0
-until docker inspect --format='{{.State.Health.Status}}' secamo-graph-ingress 2>/dev/null | grep -q "^healthy$"; do
-  INGRESS_COUNT=$((INGRESS_COUNT + 1))
-  if [ "$INGRESS_COUNT" -ge "$INGRESS_ATTEMPTS" ]; then
-    echo "ERROR: secamo-graph-ingress did not become healthy in time"
-    docker logs secamo-graph-ingress || true
-    exit 1
-  fi
-  echo "secamo-graph-ingress not healthy yet, waiting 5s... (attempt $INGRESS_COUNT/$INGRESS_ATTEMPTS)"
-  sleep 5
-done
-echo "secamo-graph-ingress is healthy on port 8081."
+docker compose up -d --build secamo-worker
 
 echo ""
 echo "=== Temporal startup script completed at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
 echo "Temporal Server:  0.0.0.0:7233"
 echo "Temporal UI:      0.0.0.0:8080"
-echo "Graph Ingress:    0.0.0.0:8081/healthz"
 echo "Namespace:        ${temporal_namespace}"
 echo "Evidence Bucket:  ${evidence_bucket}"
 echo "Audit Table:      ${audit_table}"
 echo "Worker:           secamo-worker (running)"
-echo "Ingress:          secamo-graph-ingress (running)"
 echo ""
 echo "View logs: cd /opt/temporal-compose && docker compose logs -f"
 echo "Worker logs: docker logs -f secamo-worker"
-echo "Ingress logs: docker logs -f secamo-graph-ingress"
