@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from connectors.registry import get_connector
+from shared.models.canonical import Envelope
 from shared.models import DeviceContext, IdentityRiskContext
 from shared.providers.contracts import TenantSecrets
 from shared.providers.protocols import ConnectorInterface, EDRProvider
@@ -18,6 +19,9 @@ class ConnectorEDRProvider:
 
     def __init__(self, *, connector: ConnectorInterface) -> None:
         self._connector = connector
+
+    async def fetch_events(self, query: dict[str, Any]) -> list[Envelope]:
+        return await self._connector.fetch_events(query)
 
     async def enrich_alert(self, alert_id: str, context: dict[str, Any] | None = None) -> dict:
         payload: dict[str, Any] = {"alert_id": alert_id}

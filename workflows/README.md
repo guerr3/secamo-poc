@@ -16,7 +16,6 @@
 | `__init__.py`                   | Workflow package marker.                                                          |
 | `child/`                        | Reusable child workflows for enrichment, approvals, response, and deprovisioning. |
 | `defender_alert_enrichment.py`  | Parent SOC enrichment orchestration workflow.                                     |
-| `graph_subscription_manager.py` | Subscription reconciliation and renewal loop workflow.                            |
 | `iam_onboarding.py`             | IAM lifecycle orchestration workflow.                                             |
 | `impossible_travel.py`          | Impossible-travel triage and incident response orchestration workflow.            |
 | `polling_manager.py`            | Polling-based provider event collection and downstream dispatch workflow.         |

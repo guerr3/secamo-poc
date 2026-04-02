@@ -6,13 +6,12 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from temporalio.exceptions import WorkflowAlreadyStartedError
-
-    from activities.provider_capabilities import connector_fetch_events
+    from activities.edr import edr_fetch_events
     from activities.tenant import get_tenant_config
     from shared.models import PollingManagerInput, TenantConfig
     from shared.models.canonical import Envelope
     from shared.routing import build_default_route_registry
+    from shared.workflow_helpers import start_child_workflow_idempotent
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
@@ -57,11 +56,11 @@ class PollingManagerWorkflow:
                 effective_poll_interval = provider_cfg.poll_interval_seconds
 
         fetch_result = await workflow.execute_activity(
-            connector_fetch_events,
+            edr_fetch_events,
             args=[
                 input.tenant_id,
-                input.provider,
                 {
+                    "provider": input.provider,
                     "since": input.cursor,
                     "resource_type": input.resource_type,
                     "top": 100,
@@ -102,16 +101,13 @@ class PollingManagerWorkflow:
             event_id = envelope.event_id
             child_workflow_id = f"{input.provider}-{input.resource_type}-{input.tenant_id}-{event_id}"
 
-            try:
-                await workflow.start_child_workflow(
-                    workflow_name,
-                    envelope,
-                    id=child_workflow_id,
-                    task_queue=task_queue,
-                    parent_close_policy=workflow.ParentClosePolicy.ABANDON,
-                )
-            except WorkflowAlreadyStartedError:
-                workflow.logger.info("Duplicate event skipped via deterministic workflow_id=%s", child_workflow_id)
+            await start_child_workflow_idempotent(
+                workflow_name,
+                envelope,
+                workflow_id=child_workflow_id,
+                task_queue=task_queue,
+                parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+            )
 
         await workflow.sleep(timedelta(seconds=effective_poll_interval))
 

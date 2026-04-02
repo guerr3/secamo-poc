@@ -231,7 +231,7 @@ Activity code must be retry-safe:
 
 Reference examples:
 
-- [workflows/graph_subscription_manager.py](../workflows/graph_subscription_manager.py)
+- [workflows/polling_manager.py](../workflows/polling_manager.py)
 - [workflows/iam_onboarding.py](../workflows/iam_onboarding.py)
 - [activities/\_activity_errors.py](../activities/_activity_errors.py)
 

@@ -17,6 +17,7 @@ _SYMBOL_TO_MODULE = {
     "identity_revoke_sessions": "activities.identity",
     "identity_update_user": "activities.identity",
     "edr_enrich_alert": "activities.edr",
+    "edr_fetch_events": "activities.edr",
     "edr_get_device_context": "activities.edr",
     "edr_isolate_device": "activities.edr",
     "edr_unisolate_device": "activities.edr",
@@ -42,6 +43,7 @@ _SYMBOL_TO_MODULE = {
     "request_hitl_approval": "activities.hitl",
     "teams_send_adaptive_card": "activities.communications",
     "teams_send_notification": "activities.communications",
+    "threat_intel_fanout": "activities.threat_intel",
     "threat_intel_lookup": "activities.threat_intel",
 }
 

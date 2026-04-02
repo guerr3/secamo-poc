@@ -8,13 +8,22 @@ Thin @activity.defn functions for EDR operations. Each function:
 
 from __future__ import annotations
 
+from typing import Any
+
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from activities._tenant_secrets import load_tenant_secrets
 from activities.tenant import get_tenant_config
 from connectors.errors import ConnectorPermanentError, ConnectorTransientError
-from shared.models import ConnectorActionData, ConnectorActionResult, DeviceContext, IdentityRiskContext
+from shared.models import (
+    ConnectorActionData,
+    ConnectorActionResult,
+    ConnectorFetchData,
+    ConnectorFetchResult,
+    DeviceContext,
+    IdentityRiskContext,
+)
 from shared.providers.edr import get_edr_provider
 from shared.providers.types import secret_type_for_provider
 
@@ -29,11 +38,32 @@ def _raise_edr_error(operation: str, error: Exception) -> None:
     raise ApplicationError(message, type="EDRActivityError", non_retryable=False) from error
 
 
-async def _get_provider(tenant_id: str):
+async def _get_provider(tenant_id: str, *, provider_override: str | None = None):
     config = await get_tenant_config(tenant_id)
-    secret_type = secret_type_for_provider(config.edr_provider)
+    provider_name = provider_override or config.edr_provider
+    secret_type = secret_type_for_provider(provider_name)
     secrets = load_tenant_secrets(tenant_id, secret_type)
-    return get_edr_provider(tenant_id, secrets, provider=config.edr_provider)
+    return get_edr_provider(tenant_id, secrets, provider=provider_name)
+
+
+@activity.defn
+async def edr_fetch_events(tenant_id: str, query: dict[str, Any]) -> ConnectorFetchResult:
+    """Fetch provider events through the EDR capability surface."""
+    provider_name = str(query.get("provider") or "").strip() or None
+    activity.logger.info("[%s] edr_fetch_events provider=%s", tenant_id, provider_name or "default")
+    try:
+        provider = await _get_provider(tenant_id, provider_override=provider_name)
+        events = await provider.fetch_events(query)
+        return ConnectorFetchResult(
+            provider=provider_name or "edr",
+            success=True,
+            details="fetch completed",
+            data=ConnectorFetchData(events=events, raw_count=len(events)),
+        )
+    except ApplicationError:
+        raise
+    except Exception as exc:
+        _raise_edr_error("fetch_events", exc)
 
 
 @activity.defn

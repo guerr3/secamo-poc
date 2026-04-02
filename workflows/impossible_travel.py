@@ -11,19 +11,14 @@ with workflow.unsafe.imports_passed_through():
         HiTLRequest,
         IncidentResponseRequest,
         TenantConfig,
-        ThreatIntelEnrichmentRequest,
-        ThreatIntelResult,
-        TicketCreationRequest,
         TicketResult,
     )
     from shared.models.canonical import Envelope, ImpossibleTravelEvent
-    from shared.workflow_helpers import bootstrap_tenant
+    from shared.workflow_helpers import bootstrap_tenant, create_soc_ticket, resolve_threat_intel
     from activities.edr import edr_get_user_alerts
     from activities.identity import identity_get_user
     from workflows.child.hitl_approval import HiTLApprovalWorkflow
     from workflows.child.incident_response import IncidentResponseWorkflow
-    from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
-    from workflows.child.ticket_creation import TicketCreationWorkflow
 
 # ── Module-level constants ────────────────────────────────────
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -71,25 +66,11 @@ class ImpossibleTravelWorkflow:
 
         user_display = user.display_name if user else payload.user_principal_name
 
-        if config.threat_intel_enabled:
-            threat_intel = await workflow.execute_child_workflow(
-                ThreatIntelEnrichmentWorkflow.run,
-                ThreatIntelEnrichmentRequest(
-                    tenant_id=event.tenant_id,
-                    indicator=source_ip or "",
-                    providers=config.threat_intel_providers,
-                ),
-                id=f"{workflow.info().workflow_id}-ti",
-                task_queue="soc-defender",
-            )
-        else:
-            threat_intel = ThreatIntelResult(
-                indicator=source_ip or "",
-                is_malicious=False,
-                provider="disabled",
-                reputation_score=0.0,
-                details="Threat intel disabled by tenant config.",
-            )
+        threat_intel = await resolve_threat_intel(
+            event.tenant_id,
+            source_ip or "",
+            config,
+        )
 
         # 4. Recente alerts ophalen via provider connector
         recent_alerts: list[dict] = await workflow.execute_activity(
@@ -100,26 +81,21 @@ class ImpossibleTravelWorkflow:
         )
 
         # 5. Ticket aanmaken via child workflow
-        ticket: TicketResult = await workflow.execute_child_workflow(
-            TicketCreationWorkflow.run,
-            TicketCreationRequest(
-                tenant_id=event.tenant_id,
-                title=f"[IMPOSSIBLE TRAVEL] {user_display}",
-                description=(
-                    f"Impossible travel gedetecteerd voor {user_display}\n"
-                    f"Source IP: {source_ip or 'unknown'}\n"
-                    f"Destination IP: {destination_ip or 'unknown'}\n"
-                    f"Threat intel: {'MALICIOUS' if threat_intel.is_malicious else 'CLEAN'} "
-                    f"(score: {threat_intel.reputation_score})\n"
-                    f"Recente alerts: {len(recent_alerts)}\n\n"
-                    f"Wacht op analist-beslissing..."
-                ),
-                severity=(payload.severity or "high"),
-                source_workflow="WF-05",
-                ticketing_provider=config.ticketing_provider,
+        ticket: TicketResult = await create_soc_ticket(
+            event.tenant_id,
+            config,
+            title=f"[IMPOSSIBLE TRAVEL] {user_display}",
+            description=(
+                f"Impossible travel gedetecteerd voor {user_display}\n"
+                f"Source IP: {source_ip or 'unknown'}\n"
+                f"Destination IP: {destination_ip or 'unknown'}\n"
+                f"Threat intel: {'MALICIOUS' if threat_intel.is_malicious else 'CLEAN'} "
+                f"(score: {threat_intel.reputation_score})\n"
+                f"Recente alerts: {len(recent_alerts)}\n\n"
+                f"Wacht op analist-beslissing..."
             ),
-            id=f"{workflow.info().workflow_id}-ticket",
-            task_queue="soc-defender",
+            severity=(payload.severity or "high"),
+            source_workflow="WF-05",
         )
         ticket_key = ticket.ticket_id
 

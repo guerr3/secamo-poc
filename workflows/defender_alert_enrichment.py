@@ -9,17 +9,15 @@ with workflow.unsafe.imports_passed_through():
         AlertEnrichmentResult,
         TicketResult,
         TenantConfig,
-        ThreatIntelEnrichmentRequest,
-        ThreatIntelResult,
-        TicketCreationRequest,
     )
     from shared.models.canonical import DefenderDetectionFindingEvent, Envelope
-    from shared.workflow_helpers import bootstrap_tenant
-    from activities.communications import teams_send_notification
-    from activities.audit import create_audit_log
+    from shared.workflow_helpers import (
+        bootstrap_tenant,
+        create_soc_ticket,
+        emit_workflow_observability,
+        resolve_threat_intel,
+    )
     from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
-    from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
-    from workflows.child.ticket_creation import TicketCreationWorkflow
 
 # ── Module-level constants ────────────────────────────────────
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -63,25 +61,7 @@ class DefenderAlertEnrichmentWorkflow:
 
         # 4. Threat intelligence lookup
         indicator = source_ip or destination_ip or ""
-        if config.threat_intel_enabled:
-            threat_intel = await workflow.execute_child_workflow(
-                ThreatIntelEnrichmentWorkflow.run,
-                ThreatIntelEnrichmentRequest(
-                    tenant_id=event.tenant_id,
-                    indicator=indicator,
-                    providers=config.threat_intel_providers,
-                ),
-                id=f"{workflow.info().workflow_id}-ti",
-                task_queue="soc-defender",
-            )
-        else:
-            threat_intel = ThreatIntelResult(
-                indicator=indicator,
-                is_malicious=False,
-                provider="disabled",
-                reputation_score=0.0,
-                details="Threat intel disabled by tenant config.",
-            )
+        threat_intel = await resolve_threat_intel(event.tenant_id, indicator, config)
 
         # 5. Enrichment + risicoscore via child workflow
         enrich_and_risk: AlertEnrichmentResult = await workflow.execute_child_workflow(
@@ -101,27 +81,22 @@ class DefenderAlertEnrichmentWorkflow:
 
         ticket = TicketResult(ticket_id="NOT-CREATED", status="skipped", url="")
         if ticketing_enabled:
-            ticket = await workflow.execute_child_workflow(
-                TicketCreationWorkflow.run,
-                TicketCreationRequest(
-                    tenant_id=event.tenant_id,
-                    title=f"[{risk.level.upper()}] {enriched.title}",
-                    description=(
-                        f"Alert: {enriched.alert_id}\n"
-                        f"Severity: {enriched.severity}\n"
-                        f"Risk score: {risk.score} ({risk.level})\n"
-                        f"Factors: {', '.join(risk.factors)}\n\n"
-                        f"Beschrijving: {enriched.description}\n"
-                        f"Gebruiker: {enriched.user_display_name} ({enriched.user_department})\n"
-                        f"Device: {enriched.device_display_name} ({enriched.device_os})\n"
-                        f"Threat intel: {threat_intel.details}"
-                    ),
-                    severity=risk.level,
-                    source_workflow="WF-02",
-                    ticketing_provider=config.ticketing_provider,
+            ticket = await create_soc_ticket(
+                event.tenant_id,
+                config,
+                title=f"[{risk.level.upper()}] {enriched.title}",
+                description=(
+                    f"Alert: {enriched.alert_id}\n"
+                    f"Severity: {enriched.severity}\n"
+                    f"Risk score: {risk.score} ({risk.level})\n"
+                    f"Factors: {', '.join(risk.factors)}\n\n"
+                    f"Beschrijving: {enriched.description}\n"
+                    f"Gebruiker: {enriched.user_display_name} ({enriched.user_department})\n"
+                    f"Device: {enriched.device_display_name} ({enriched.device_os})\n"
+                    f"Threat intel: {threat_intel.details}"
                 ),
-                id=f"{workflow.info().workflow_id}-ticket",
-                task_queue="soc-defender",
+                severity=risk.level,
+                source_workflow="WF-02",
             )
 
         # 7. Teams notificatie
@@ -132,38 +107,22 @@ class DefenderAlertEnrichmentWorkflow:
             f"Ticket: {ticket.url}"
         )
 
-        try:
-            await workflow.execute_activity(
-                teams_send_notification,
-                args=[event.tenant_id, "", notification_msg],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-        except Exception as exc:
-            workflow.logger.warning("Teams notification failed, continuing workflow: %s", exc)
-
-        # 8. Audit log
-        try:
-            await workflow.execute_activity(
-                create_audit_log,
-                args=[
-                    event.tenant_id,
-                    workflow.info().workflow_id,
-                    "defender_alert_enrichment",
-                    f"Ticket {ticket.ticket_id} aangemaakt met risicoscore {risk.score}",
-                    {
-                        "alert_id": enriched.alert_id,
-                        "risk_score": risk.score,
-                        "risk_level": risk.level,
-                        "ticket_id": ticket.ticket_id,
-                        "requester": str(event.metadata.get("requester") or "ingress-api"),
-                    },
-                ],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-        except Exception as exc:
-            workflow.logger.warning("Audit log write failed, continuing workflow: %s", exc)
+        await emit_workflow_observability(
+            event.tenant_id,
+            workflow_id=workflow.info().workflow_id,
+            action="defender_alert_enrichment",
+            result=f"Ticket {ticket.ticket_id} aangemaakt met risicoscore {risk.score}",
+            metadata={
+                "alert_id": enriched.alert_id,
+                "risk_score": risk.score,
+                "risk_level": risk.level,
+                "ticket_id": ticket.ticket_id,
+                "requester": str(event.metadata.get("requester") or "ingress-api"),
+            },
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+            notification_message=notification_msg,
+        )
 
         result_msg = (
             f"WF-02 afgerond — alert '{enriched.alert_id}' verrijkt, "

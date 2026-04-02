@@ -142,6 +142,7 @@ def load_activities_by_queue() -> dict[str, list]:
             edr_confirm_user_compromised,
             edr_dismiss_risky_user,
             edr_enrich_alert,
+            edr_fetch_events,
             edr_get_device_context,
             edr_get_identity_risk,
             edr_get_signin_history,
@@ -169,6 +170,7 @@ def load_activities_by_queue() -> dict[str, list]:
             edr_list_risky_users,
             threat_intel_lookup, calculate_risk_score,
         ])
+        poller_activities.extend([edr_fetch_events])
         logger.info("✓ SOC capability activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Graph Alerts activities: {e}")
@@ -213,18 +215,13 @@ def load_activities_by_queue() -> dict[str, list]:
 
     try:
         from activities.provider_capabilities import (
-            connector_fetch_events,
             connector_execute_action,
             connector_health_check,
-            connector_threat_intel_fanout,
         )
         soc_activities.extend([
-            connector_fetch_events,
             connector_execute_action,
             connector_health_check,
-            connector_threat_intel_fanout,
         ])
-        poller_activities.extend([connector_fetch_events])
         logger.info("✓ Connector dispatch activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Connector dispatch activities: {e}")
@@ -277,14 +274,6 @@ def load_workflows() -> dict:
         logger.info("✓ Impossible Travel workflow geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Impossible Travel Workflow: {e}")
-        sys.exit(1)
-
-    try:
-        from workflows.graph_subscription_manager import GraphSubscriptionManagerWorkflow
-        soc_workflows.extend([GraphSubscriptionManagerWorkflow])
-        logger.info("✓ Graph ingress/subscription workflows geladen")
-    except ImportError as e:
-        logger.error(f"✗ Fout bij het laden van Graph ingress/subscription workflows: {e}")
         sys.exit(1)
 
     poller_workflows = []

@@ -26,8 +26,6 @@ def _generate_temp_password(length: int = 16) -> str:
 
 
 with workflow.unsafe.imports_passed_through():
-    from temporalio.exceptions import WorkflowAlreadyStartedError
-
     from shared.models import (
         IdentityUser,
         LifecycleAction,
@@ -36,7 +34,7 @@ with workflow.unsafe.imports_passed_through():
         UserDeprovisioningRequest,
     )
     from shared.models.canonical import Envelope, IamOnboardingEvent
-    from shared.workflow_helpers import bootstrap_tenant
+    from shared.workflow_helpers import bootstrap_tenant, start_child_workflow_idempotent
     from activities.identity import (
         identity_assign_license,
         identity_create_user,
@@ -90,27 +88,21 @@ class IamOnboardingWorkflow:
             polling_workflow_id = (
                 f"polling-{event.tenant_id}-{provider_cfg.provider}-{provider_cfg.resource_type}"
             )
-            try:
-                await workflow.start_child_workflow(
-                    PollingManagerWorkflow.run,
-                    PollingManagerInput(
-                        tenant_id=event.tenant_id,
-                        provider=provider_cfg.provider,
-                        resource_type=provider_cfg.resource_type,
-                        secret_type=provider_cfg.secret_type,
-                        poll_interval_seconds=provider_cfg.poll_interval_seconds,
-                        cursor=None,
-                        iteration=0,
-                    ),
-                    id=polling_workflow_id,
-                    task_queue="poller",
-                    parent_close_policy=workflow.ParentClosePolicy.ABANDON,
-                )
-            except WorkflowAlreadyStartedError:
-                workflow.logger.info(
-                    "Polling manager already running: %s",
-                    polling_workflow_id,
-                )
+            await start_child_workflow_idempotent(
+                PollingManagerWorkflow.run,
+                PollingManagerInput(
+                    tenant_id=event.tenant_id,
+                    provider=provider_cfg.provider,
+                    resource_type=provider_cfg.resource_type,
+                    secret_type=provider_cfg.secret_type,
+                    poll_interval_seconds=provider_cfg.poll_interval_seconds,
+                    cursor=None,
+                    iteration=0,
+                ),
+                workflow_id=polling_workflow_id,
+                task_queue="poller",
+                parent_close_policy=workflow.ParentClosePolicy.ABANDON,
+            )
 
         # 3. Idempotency check — kijk of gebruiker al bestaat
         existing_user: IdentityUser | None = await workflow.execute_activity(
