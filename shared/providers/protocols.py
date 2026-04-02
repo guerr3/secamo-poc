@@ -10,7 +10,15 @@ from typing import Any, Protocol, runtime_checkable
 
 from shared.models.canonical import Envelope
 from shared.models.chatops import ChatOpsMessage
-from shared.models.domain import DeviceContext, IdentityRiskContext, IdentityUser, TicketData, TicketResult
+from shared.models.domain import (
+    DeviceContext,
+    IdentityRiskContext,
+    IdentityUser,
+    ThreatIntelResult,
+    TicketData,
+    TicketResult,
+)
+from shared.models.subscriptions import SubscriptionConfig, SubscriptionState
 from shared.models.triage import TriageRequest, TriageResult
 
 
@@ -87,3 +95,60 @@ class EDRProvider(Protocol):
     async def get_signin_history(self, user_principal_name: str, top: int = 20) -> list[dict[str, Any]]: ...
     async def list_risky_users(self, min_risk_level: str) -> list[dict[str, Any]]: ...
     async def get_identity_risk(self, lookup_key: str) -> IdentityRiskContext | None: ...
+
+
+@runtime_checkable
+class ThreatIntelProvider(Protocol):
+    """Provider contract for threat-intelligence enrichment operations."""
+
+    async def lookup_indicator(
+        self,
+        indicator: str,
+        *,
+        provider_override: str | None = None,
+    ) -> ThreatIntelResult: ...
+
+    async def fanout(
+        self,
+        indicator: str,
+        providers: list[str],
+    ) -> ThreatIntelResult: ...
+
+
+@runtime_checkable
+class SubscriptionProvider(Protocol):
+    """Provider contract for Graph-style webhook subscription lifecycle + metadata."""
+
+    async def create_subscription(
+        self,
+        subscription: SubscriptionConfig,
+        *,
+        secret_type: str,
+        notification_url: str,
+        client_state: str,
+    ) -> SubscriptionState: ...
+
+    async def renew_subscription(
+        self,
+        subscription_id: str,
+        *,
+        expiration_hours: int,
+        secret_type: str,
+    ) -> SubscriptionState: ...
+
+    async def delete_subscription(
+        self,
+        subscription_id: str,
+        *,
+        secret_type: str,
+    ) -> bool: ...
+
+    async def list_subscriptions(
+        self,
+        *,
+        secret_type: str,
+    ) -> list[SubscriptionState]: ...
+
+    async def store_metadata(self, state: SubscriptionState) -> dict[str, Any]: ...
+    async def load_metadata(self, tenant_id: str) -> list[SubscriptionState]: ...
+    async def lookup_metadata(self, subscription_id: str) -> SubscriptionState | None: ...

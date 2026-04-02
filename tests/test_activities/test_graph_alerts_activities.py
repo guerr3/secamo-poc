@@ -104,13 +104,25 @@ async def test_signin_and_device_capabilities_use_provider_methods(mocker):
 async def test_threat_intel_lookup_paths(mocker):
     assert (await threat_intel_lookup("t1", "")).is_malicious is False
 
-    mocker.patch("activities.threat_intel.get_secret", return_value=None)
+    provider = mocker.AsyncMock()
+    provider.lookup_indicator.return_value = ThreatIntelResult(
+        indicator="8.8.8.8",
+        is_malicious=False,
+        provider="none",
+        reputation_score=0.0,
+        details="no threat intel configured",
+    )
+    mocker.patch("activities.threat_intel._get_provider", return_value=provider)
     neutral = await threat_intel_lookup("t1", "8.8.8.8")
     assert neutral.provider == "none"
 
-    mocker.patch("activities.threat_intel.get_secret", return_value="vt-key")
-    vt_body = {"data": {"attributes": {"last_analysis_stats": {"malicious": 2, "suspicious": 1, "harmless": 2, "undetected": 5}}}}
-    mocker.patch("activities.threat_intel.httpx.AsyncClient", return_value=_Client([_Resp(200, vt_body)]))
+    provider.lookup_indicator.return_value = ThreatIntelResult(
+        indicator="8.8.8.8",
+        is_malicious=True,
+        provider="virustotal",
+        reputation_score=33.33,
+        details="VirusTotal reputation lookup",
+    )
     vt = await threat_intel_lookup("t1", "8.8.8.8")
     assert vt.provider == "virustotal"
 

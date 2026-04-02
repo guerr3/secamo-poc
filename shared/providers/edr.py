@@ -7,11 +7,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from connectors.registry import get_connector
 from shared.models.canonical import Envelope
 from shared.models import DeviceContext, IdentityRiskContext
-from shared.providers.contracts import TenantSecrets
-from shared.providers.protocols import ConnectorInterface, EDRProvider
+from shared.providers.protocols import ConnectorInterface
 
 
 class ConnectorEDRProvider:
@@ -120,23 +118,3 @@ class ConnectorEDRProvider:
             risk_state=user.get("riskState") or user.get("risk_state"),
             risk_detail=user.get("riskDetail") or user.get("risk_detail"),
         )
-
-
-def get_edr_provider(
-    tenant_id: str,
-    secrets: TenantSecrets,
-    *,
-    provider: str = "microsoft_defender",
-) -> EDRProvider:
-    """Resolve an EDR provider for the given tenant.
-
-    Args:
-        tenant_id: Tenant identifier.
-        secrets: Pre-loaded tenant secrets.
-        provider: EDR provider name (from TenantConfig.edr_provider).
-
-    Returns:
-        A protocol-compatible EDR provider instance.
-    """
-    connector = get_connector(provider=provider, tenant_id=tenant_id, secrets=secrets)
-    return ConnectorEDRProvider(connector=connector)

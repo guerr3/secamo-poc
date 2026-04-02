@@ -9,14 +9,8 @@ from temporalio.exceptions import ApplicationError
 from activities.tenant import get_tenant_config
 from shared.models import IdentityUser
 from shared.providers.factory import get_identity_access_provider
+from shared.providers.types import secret_type_for_provider
 from shared.ssm_client import get_secret_bundle
-
-
-def _secret_type_for_iam_provider(iam_provider: str) -> str:
-    normalized = iam_provider.strip().lower()
-    if normalized in {"microsoft_graph", "entra_id"}:
-        return "graph"
-    return "identity"
 
 
 async def _load_secret_bundle_async(tenant_id: str, secret_type: str) -> dict[str, str]:
@@ -25,7 +19,7 @@ async def _load_secret_bundle_async(tenant_id: str, secret_type: str) -> dict[st
 
 async def _get_identity_provider(tenant_id: str):
     config = await get_tenant_config(tenant_id)
-    secret_type = _secret_type_for_iam_provider(config.iam_provider)
+    secret_type = secret_type_for_provider(config.iam_provider)
     secrets = await _load_secret_bundle_async(tenant_id, secret_type)
 
     try:

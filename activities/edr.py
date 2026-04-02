@@ -24,7 +24,7 @@ from shared.models import (
     DeviceContext,
     IdentityRiskContext,
 )
-from shared.providers.edr import get_edr_provider
+from shared.providers.factory import get_edr_provider
 from shared.providers.types import secret_type_for_provider
 
 
@@ -43,7 +43,7 @@ async def _get_provider(tenant_id: str, *, provider_override: str | None = None)
     provider_name = provider_override or config.edr_provider
     secret_type = secret_type_for_provider(provider_name)
     secrets = load_tenant_secrets(tenant_id, secret_type)
-    return get_edr_provider(tenant_id, secrets, provider=provider_name)
+    return await get_edr_provider(tenant_id, secrets, provider=provider_name)
 
 
 @activity.defn

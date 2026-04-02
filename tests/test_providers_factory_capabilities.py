@@ -5,7 +5,10 @@ import pytest
 from shared.models import TenantConfig
 from shared.providers.factory import (
     clear_provider_caches,
+    get_edr_provider,
     get_identity_access_provider,
+    get_subscription_provider,
+    get_threat_intel_provider,
     get_ticketing_provider,
 )
 
@@ -84,3 +87,63 @@ async def test_get_identity_access_provider_rejects_unimplemented_provider():
 
     with pytest.raises(NotImplementedError):
         await get_identity_access_provider("tenant-4", {}, config)
+
+
+@pytest.mark.asyncio
+async def test_get_edr_provider_uses_connector_cache(mocker):
+    clear_provider_caches()
+    connector = object()
+    connector_lookup = mocker.patch("shared.providers.factory.get_connector", return_value=connector)
+
+    secrets = {
+        "client_id": "cid",
+        "client_secret": "sec",
+        "tenant_azure_id": "tid",
+    }
+
+    p1 = await get_edr_provider("tenant-5", secrets, provider="microsoft_defender")
+    p2 = await get_edr_provider("tenant-5", secrets, provider="microsoft_defender")
+
+    assert p1 is p2
+    connector_lookup.assert_called_once()
+    args = connector_lookup.call_args.args
+    assert args[0] == "microsoft_defender"
+    assert args[1] == "tenant-5"
+
+
+@pytest.mark.asyncio
+async def test_get_threat_intel_provider_uses_cache():
+    clear_provider_caches()
+    secrets = {
+        "client_id": "cid",
+        "client_secret": "sec",
+        "tenant_azure_id": "tid",
+        "virustotal_api_key": "vt",
+    }
+
+    p1 = await get_threat_intel_provider("tenant-6", secrets, default_provider="virustotal")
+    p2 = await get_threat_intel_provider("tenant-6", secrets, default_provider="virustotal")
+
+    assert p1 is p2
+
+
+@pytest.mark.asyncio
+async def test_get_subscription_provider_maps_graph_and_uses_cache(mocker):
+    clear_provider_caches()
+    connector = object()
+    connector_lookup = mocker.patch("shared.providers.factory.get_connector", return_value=connector)
+
+    secrets = {
+        "client_id": "cid",
+        "client_secret": "sec",
+        "tenant_azure_id": "tid",
+    }
+
+    p1 = await get_subscription_provider("tenant-7", secrets, provider="microsoft_graph")
+    p2 = await get_subscription_provider("tenant-7", secrets, provider="microsoft_graph")
+
+    assert p1 is p2
+    connector_lookup.assert_called_once()
+    args = connector_lookup.call_args.args
+    assert args[0] == "microsoft_defender"
+    assert args[1] == "tenant-7"

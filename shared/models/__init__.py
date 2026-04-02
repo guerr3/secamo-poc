@@ -47,7 +47,14 @@ from shared.models.subscriptions import SubscriptionConfig, SubscriptionManagerI
 # ── AI triage and ChatOps contracts ─────────────────────────
 from shared.models.chatops import ChatOpsAction, ChatOpsMessage
 from shared.models.triage import TriageRequest, TriageResult
-from shared.providers.protocols import AITriageProvider, ChatOpsProvider, IdentityAccessProvider, TicketingProvider
+from shared.providers.protocols import (
+    AITriageProvider,
+    ChatOpsProvider,
+    IdentityAccessProvider,
+    SubscriptionProvider,
+    ThreatIntelProvider,
+    TicketingProvider,
+)
 
 # ── Ingress transport models ─────────────────────────────────
 from shared.models.ingress import IamIngressRequest
@@ -119,7 +126,9 @@ __all__ = [
     "TicketData",
     "TicketCreationRequest",
     "TicketResult",
+    "ThreatIntelProvider",
     "TicketingProvider",
+    "SubscriptionProvider",
     "ThreatIntelEnrichmentRequest",
     "ThreatIntelResult",
     "TriageRequest",

@@ -3,55 +3,41 @@ from __future__ import annotations
 import pytest
 
 from activities.threat_intel import threat_intel_fanout
+from shared.models import ThreatIntelResult
 
 
 @pytest.mark.asyncio
 async def test_threat_intel_fanout_selects_highest_reputation(mocker):
-    virustotal = mocker.AsyncMock()
-    virustotal.execute_action.return_value = {
-        "reputation_score": 12,
-        "is_malicious": False,
-        "details": "clean",
-    }
-    abuseipdb = mocker.AsyncMock()
-    abuseipdb.execute_action.return_value = {
-        "reputation_score": 87,
-        "is_malicious": True,
-        "details": "high confidence malicious",
-    }
-
-    connectors = {
-        "virustotal": virustotal,
-        "abuseipdb": abuseipdb,
-    }
-
-    mocker.patch("activities.threat_intel.secret_type_for_provider", return_value="threatintel")
-    mocker.patch("activities.threat_intel.load_tenant_secrets", return_value={"api_key": "x"})
-
-    def _get_connector(*, provider: str, tenant_id: str, secrets: dict):
-        assert tenant_id == "tenant-1"
-        assert secrets == {"api_key": "x"}
-        return connectors[provider]
-
-    mocker.patch("activities.threat_intel.get_connector", side_effect=_get_connector)
+    provider = mocker.AsyncMock()
+    provider.fanout.return_value = ThreatIntelResult(
+        indicator="1.2.3.4",
+        provider="abuseipdb",
+        is_malicious=True,
+        reputation_score=87.0,
+        details="high confidence malicious",
+    )
+    get_provider = mocker.patch("activities.threat_intel._get_provider", return_value=provider)
 
     result = await threat_intel_fanout("tenant-1", ["virustotal", "abuseipdb"], "1.2.3.4")
 
     assert result.provider == "abuseipdb"
     assert result.is_malicious is True
     assert result.reputation_score == 87.0
-    virustotal.execute_action.assert_awaited_once_with("lookup_indicator", {"indicator": "1.2.3.4"})
-    abuseipdb.execute_action.assert_awaited_once_with("lookup_indicator", {"indicator": "1.2.3.4"})
+    get_provider.assert_awaited_once_with("tenant-1", default_provider="virustotal")
+    provider.fanout.assert_awaited_once_with("1.2.3.4", ["virustotal", "abuseipdb"])
 
 
 @pytest.mark.asyncio
 async def test_threat_intel_fanout_returns_default_when_all_fail(mocker):
-    failing_connector = mocker.AsyncMock()
-    failing_connector.execute_action.side_effect = RuntimeError("provider unavailable")
-
-    mocker.patch("activities.threat_intel.secret_type_for_provider", return_value="threatintel")
-    mocker.patch("activities.threat_intel.load_tenant_secrets", return_value={"api_key": "x"})
-    mocker.patch("activities.threat_intel.get_connector", return_value=failing_connector)
+    provider = mocker.AsyncMock()
+    provider.fanout.return_value = ThreatIntelResult(
+        indicator="8.8.8.8",
+        provider="none",
+        is_malicious=False,
+        reputation_score=0.0,
+        details="No provider returned a positive result.",
+    )
+    mocker.patch("activities.threat_intel._get_provider", return_value=provider)
 
     result = await threat_intel_fanout("tenant-1", ["virustotal"], "8.8.8.8")
 

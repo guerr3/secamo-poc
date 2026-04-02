@@ -20,20 +20,28 @@ from shared.models import TenantConfig
 from shared.providers.contracts import TenantSecrets
 from shared.providers.ai import AzureOpenAITriageProvider
 from shared.providers.chatops import MSTeamsChatOpsProvider, SlackChatOpsProvider
+from shared.providers.edr import ConnectorEDRProvider
 from shared.providers.identity_access import ConnectorIdentityAccessProvider
 from shared.providers.protocols import (
     AITriageProvider,
     ChatOpsProvider,
+    EDRProvider,
     IdentityAccessProvider,
+    SubscriptionProvider,
+    ThreatIntelProvider,
     TicketingProvider,
 )
+from shared.providers.subscription import ConnectorSubscriptionProvider
 from shared.providers.ticketing import ConnectorTicketingProvider
-from shared.providers.types import secret_type_for_provider
+from shared.providers.threat_intel import ConnectorThreatIntelProvider
 
 
 _AI_PROVIDER_CACHE: dict[str, AITriageProvider] = {}
 _CHATOPS_PROVIDER_CACHE: dict[str, ChatOpsProvider] = {}
+_EDR_PROVIDER_CACHE: dict[str, EDRProvider] = {}
 _IDENTITY_PROVIDER_CACHE: dict[str, IdentityAccessProvider] = {}
+_SUBSCRIPTION_PROVIDER_CACHE: dict[str, SubscriptionProvider] = {}
+_THREAT_INTEL_PROVIDER_CACHE: dict[str, ThreatIntelProvider] = {}
 _TICKETING_PROVIDER_CACHE: dict[str, TicketingProvider] = {}
 _CACHE_LOCK = asyncio.Lock()
 
@@ -47,8 +55,11 @@ def _resolve_secret(secrets: dict[str, Any], *names: str) -> str | None:
     return None
 
 
-def _to_tenant_secrets(secrets: dict[str, Any]) -> TenantSecrets:
+def _to_tenant_secrets(secrets: dict[str, Any] | TenantSecrets) -> TenantSecrets:
     """Normalize loose secret dictionaries into connector-ready tenant secrets."""
+    if isinstance(secrets, TenantSecrets):
+        return secrets
+
     return TenantSecrets(
         client_id=_resolve_secret(secrets, "client_id") or "",
         client_secret=_resolve_secret(secrets, "client_secret") or "",
@@ -208,6 +219,88 @@ async def get_identity_access_provider(
     return provider
 
 
+async def get_edr_provider(
+    tenant_id: str,
+    secrets: dict[str, Any] | TenantSecrets,
+    *,
+    provider: str = "microsoft_defender",
+) -> EDRProvider:
+    """Resolve and cache the EDR provider for a tenant."""
+    provider_type = provider.strip().lower() or "microsoft_defender"
+    cache_key = f"edr:{tenant_id}:{provider_type}"
+    cached = _EDR_PROVIDER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    tenant_secrets = _to_tenant_secrets(secrets)
+    connector = get_connector(provider_type, tenant_id, tenant_secrets)
+    provider_instance: EDRProvider = ConnectorEDRProvider(connector=connector)
+
+    async with _CACHE_LOCK:
+        existing = _EDR_PROVIDER_CACHE.get(cache_key)
+        if existing is not None:
+            return existing
+        _EDR_PROVIDER_CACHE[cache_key] = provider_instance
+    return provider_instance
+
+
+async def get_threat_intel_provider(
+    tenant_id: str,
+    secrets: dict[str, Any] | TenantSecrets,
+    *,
+    default_provider: str = "virustotal",
+) -> ThreatIntelProvider:
+    """Resolve and cache the threat-intel provider for a tenant."""
+    provider_type = default_provider.strip().lower() or "virustotal"
+    cache_key = f"threat-intel:{tenant_id}:{provider_type}"
+    cached = _THREAT_INTEL_PROVIDER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    tenant_secrets = _to_tenant_secrets(secrets)
+    provider_instance: ThreatIntelProvider = ConnectorThreatIntelProvider(
+        tenant_id=tenant_id,
+        secrets=tenant_secrets,
+        default_provider=provider_type,
+    )
+
+    async with _CACHE_LOCK:
+        existing = _THREAT_INTEL_PROVIDER_CACHE.get(cache_key)
+        if existing is not None:
+            return existing
+        _THREAT_INTEL_PROVIDER_CACHE[cache_key] = provider_instance
+    return provider_instance
+
+
+async def get_subscription_provider(
+    tenant_id: str,
+    secrets: dict[str, Any] | TenantSecrets,
+    *,
+    provider: str = "microsoft_defender",
+) -> SubscriptionProvider:
+    """Resolve and cache the subscription provider for a tenant."""
+    provider_type = provider.strip().lower() or "microsoft_defender"
+    connector_provider = "microsoft_defender" if provider_type == "microsoft_graph" else provider_type
+    cache_key = f"subscription:{tenant_id}:{connector_provider}"
+    cached = _SUBSCRIPTION_PROVIDER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    tenant_secrets = _to_tenant_secrets(secrets)
+    connector = get_connector(connector_provider, tenant_id, tenant_secrets)
+    provider_instance: SubscriptionProvider = ConnectorSubscriptionProvider(
+        tenant_id=tenant_id,
+        connector=connector,
+    )
+
+    async with _CACHE_LOCK:
+        existing = _SUBSCRIPTION_PROVIDER_CACHE.get(cache_key)
+        if existing is not None:
+            return existing
+        _SUBSCRIPTION_PROVIDER_CACHE[cache_key] = provider_instance
+    return provider_instance
+
+
 async def get_ticketing_provider(
     tenant_id: str,
     secrets: dict[str, Any],
@@ -244,5 +337,8 @@ def clear_provider_caches() -> None:
     """Clear factory caches; intended for unit tests."""
     _AI_PROVIDER_CACHE.clear()
     _CHATOPS_PROVIDER_CACHE.clear()
+    _EDR_PROVIDER_CACHE.clear()
     _IDENTITY_PROVIDER_CACHE.clear()
+    _SUBSCRIPTION_PROVIDER_CACHE.clear()
+    _THREAT_INTEL_PROVIDER_CACHE.clear()
     _TICKETING_PROVIDER_CACHE.clear()
