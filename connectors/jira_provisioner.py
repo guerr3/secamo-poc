@@ -270,7 +270,7 @@ class JiraProvisioner:
             base_url=base_url,
             auth=auth,
             project_key=tenant_secrets.project_key,
-            callback_url=f"{callback_base}/api/v1/hitl/jira?tenant_id={tenant_id}",
+            callback_url=f"{callback_base}/api/v1/hitl/jira/{tenant_id}",
             webhook_name=f"secamo-{tenant_id}-hitl",
             webhook_description="Secamo Jira HiTL approval webhook",
             shared_secret=hitl_secret,

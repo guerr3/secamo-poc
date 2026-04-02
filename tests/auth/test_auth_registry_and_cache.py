@@ -14,6 +14,7 @@ import pytest
 from shared.auth.contracts import AuthValidationRequest
 from shared.auth.registry import AuthValidatorRegistry, build_default_validator_registry
 from shared.auth.secrets import CachedSecretResolver
+from shared.auth.validators import MicrosoftGraphJwtValidator
 
 
 class _MutableClock:
@@ -133,3 +134,17 @@ async def test_default_registry_contains_expected_validators() -> None:
     )
     crowd_result = await registry.validate(crowd_request)
     assert crowd_result.authenticated is True
+
+
+def test_default_registry_resolves_defender_alias() -> None:
+    resolver = CachedSecretResolver(
+        secret_fetcher=_CountingSecretFetcher({}),
+        jwks_fetcher=_CountingJwksFetcher({}),
+    )
+    registry = build_default_validator_registry(resolver)
+
+    alias_validator = registry.resolve("defender", "webhook")
+    canonical_validator = registry.resolve("microsoft_defender", "webhook")
+
+    assert isinstance(alias_validator, MicrosoftGraphJwtValidator)
+    assert alias_validator is canonical_validator

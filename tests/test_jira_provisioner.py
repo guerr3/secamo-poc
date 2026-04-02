@@ -53,6 +53,11 @@ async def test_provision_jsm_tenant_discovers_and_persists_service_desk(mocker, 
     assert result.project_type == "jsm"
     assert result.jsm_service_desk_id == "42"
     assert ensure_webhook.await_count == 2
+    callback_urls = [call.kwargs["callback_url"] for call in ensure_webhook.await_args_list]
+    assert callback_urls == [
+        "https://api.example.com/api/v1/ingress/event/tenant-1",
+        "https://api.example.com/api/v1/hitl/jira/tenant-1",
+    ]
     discover_service_desk.assert_awaited_once()
     persist_fields.assert_called_once_with(
         "tenant-1",

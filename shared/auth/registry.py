@@ -48,16 +48,25 @@ def build_default_validator_registry(resolver: SecretResolver) -> AuthValidatorR
     """Build phase-2 default validator registry for supported providers/channels."""
 
     registry = AuthValidatorRegistry()
+    graph_jwt_validator = MicrosoftGraphJwtValidator(
+        resolver=resolver,
+        validator_name="microsoft_graph_jwt",
+    )
 
     registry.register(
         "microsoft_graph",
         "webhook",
-        MicrosoftGraphJwtValidator(resolver=resolver, validator_name="microsoft_graph_jwt"),
+        graph_jwt_validator,
     )
     registry.register(
         "microsoft_defender",
         "webhook",
-        MicrosoftGraphJwtValidator(resolver=resolver, validator_name="microsoft_graph_jwt"),
+        graph_jwt_validator,
+    )
+    registry.register(
+        "defender",
+        "webhook",
+        graph_jwt_validator,
     )
     registry.register(
         "crowdstrike",
