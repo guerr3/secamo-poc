@@ -46,9 +46,14 @@ async def create_audit_log(
     ttl = int((now + timedelta(days=90)).timestamp())
 
     try:
+        pk = f"TENANT#{tenant_id}"
+        sk = f"AUDIT#{now.isoformat()}#{workflow_id}"
+
         _dynamo.put_item(
             TableName=AUDIT_TABLE_NAME,
             Item={
+                "PK": {"S": pk},
+                "SK": {"S": sk},
                 "workflow_id": {"S": workflow_id},
                 "timestamp": {"S": now.isoformat()},
                 "tenant_id": {"S": tenant_id},
