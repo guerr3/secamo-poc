@@ -72,6 +72,25 @@ class IamOnboardingEvent(StrictModel):
     vendor_extensions: VendorExtensions = Field(default_factory=dict)
 
 
+class CustomerOnboardingEvent(StrictModel):
+    """OCSF IAM Account Change payload for tenant onboarding lifecycle events."""
+
+    event_type: Literal["customer.onboarding"]
+    category_uid: Literal[3] = 3
+    class_uid: Literal[3003] = 3003
+    activity_id: int
+    activity_name: str | None = None
+    tenant_id: str
+    display_name: str | None = None
+    action: LifecycleAction = LifecycleAction.CREATE
+    config: dict[str, JsonValue] = Field(default_factory=dict)
+    secrets: dict[str, dict[str, JsonValue]] = Field(default_factory=dict)
+    soc_analyst_email: str | None = None
+    welcome_email: str | None = None
+    message: str | None = None
+    vendor_extensions: VendorExtensions = Field(default_factory=dict)
+
+
 class ImpossibleTravelEvent(StrictModel):
     """OCSF Authentication payload for impossible-travel detections."""
 
@@ -128,6 +147,7 @@ class HitlApprovalEvent(StrictModel):
 
 SecamoEventVariant: TypeAlias = Annotated[
     IamOnboardingEvent
+    | CustomerOnboardingEvent
     | ImpossibleTravelEvent
     | DefenderDetectionFindingEvent
     | HitlApprovalEvent,
@@ -184,6 +204,7 @@ def derive_event_id(
 
 __all__ = [
     "Correlation",
+    "CustomerOnboardingEvent",
     "DefenderDetectionFindingEvent",
     "Envelope",
     "HitlApprovalEvent",

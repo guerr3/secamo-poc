@@ -85,6 +85,20 @@ def load_activities_by_queue() -> dict[str, list]:
         sys.exit(1)
 
     try:
+        from activities.onboarding import (
+            provision_customer_secrets,
+            register_customer_tenant,
+        )
+        iam_activities.extend([
+            provision_customer_secrets,
+            register_customer_tenant,
+        ])
+        logger.info("✓ Customer onboarding activities geladen")
+    except ImportError as e:
+        logger.error(f"✗ Fout bij het laden van Customer onboarding activities: {e}")
+        sys.exit(1)
+
+    try:
         from activities.subscription import (
             subscription_create,
             subscription_delete,
@@ -239,9 +253,14 @@ def load_workflows() -> dict:
     """Lazy load all workflows met expliciete foutafhandeling."""
     iam_workflows = []
     try:
+        from workflows.customer_onboarding import CustomerOnboardingWorkflow
         from workflows.iam_onboarding import IamOnboardingWorkflow
         from workflows.child.user_deprovisioning import UserDeprovisioningWorkflow
-        iam_workflows.extend([IamOnboardingWorkflow, UserDeprovisioningWorkflow])
+        iam_workflows.extend([
+            IamOnboardingWorkflow,
+            CustomerOnboardingWorkflow,
+            UserDeprovisioningWorkflow,
+        ])
         logger.info("✓ IAM Onboarding workflow geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van IAM Onboarding Workflow: {e}")

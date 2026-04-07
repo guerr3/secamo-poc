@@ -11,6 +11,7 @@ from typing import Any
 
 from shared.models.canonical import (
     Correlation,
+    CustomerOnboardingEvent,
     DefenderDetectionFindingEvent,
     Envelope,
     HitlApprovalEvent,
@@ -63,7 +64,13 @@ def build_envelope(
     tenant_id: str,
     source_provider: str,
     occurred_at: datetime,
-    payload: DefenderDetectionFindingEvent | ImpossibleTravelEvent | IamOnboardingEvent | HitlApprovalEvent,
+    payload: (
+        DefenderDetectionFindingEvent
+        | ImpossibleTravelEvent
+        | IamOnboardingEvent
+        | CustomerOnboardingEvent
+        | HitlApprovalEvent
+    ),
     correlation: Correlation,
     provider_event_id: str | None,
     metadata: dict[str, Any] | None = None,

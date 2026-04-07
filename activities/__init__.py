@@ -8,6 +8,8 @@ _SYMBOL_TO_MODULE = {
     "calculate_risk_score": "activities.risk",
     "collect_evidence_bundle": "activities.evidence",
     "create_audit_log": "activities.audit",
+    "provision_customer_secrets": "activities.onboarding",
+    "register_customer_tenant": "activities.onboarding",
     "email_send": "activities.communications",
     "identity_assign_license": "activities.identity",
     "identity_create_user": "activities.identity",
