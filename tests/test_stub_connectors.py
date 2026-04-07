@@ -20,8 +20,6 @@ STUB_PROVIDERS = [
     "sentinelone",
     "halo_itsm",
     "servicenow",
-    "virustotal",
-    "abuseipdb",
     "misp",
 ]
 

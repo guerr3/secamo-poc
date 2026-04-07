@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 from typing import Any
-from urllib.parse import quote
-
-import httpx
 
 from connectors.registry import get_connector
 from shared.models import ThreatIntelResult
@@ -21,7 +18,7 @@ class ThreatIntelHttpStatusError(RuntimeError):
 
 
 class ConnectorThreatIntelProvider:
-    """Threat-intel provider backed by connector actions and direct VirusTotal fallback."""
+    """Threat-intel provider backed by connector actions."""
 
     def __init__(
         self,
@@ -54,56 +51,6 @@ class ConnectorThreatIntelProvider:
         payload = response if isinstance(response, dict) else {}
         return self._result_from_payload(indicator, provider, payload)
 
-    async def _lookup_virustotal_http(self, indicator: str) -> ThreatIntelResult:
-        api_key = self._secrets.virustotal_api_key
-        if not api_key:
-            return ThreatIntelResult(
-                indicator=indicator,
-                is_malicious=False,
-                provider="none",
-                reputation_score=0.0,
-                details="no threat intel configured",
-            )
-
-        headers = {"x-apikey": api_key}
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(
-                f"https://www.virustotal.com/api/v3/ip_addresses/{quote(indicator)}",
-                headers=headers,
-            )
-
-        if response.status_code == 404:
-            return ThreatIntelResult(
-                indicator=indicator,
-                is_malicious=False,
-                provider="virustotal",
-                reputation_score=0.0,
-                details="indicator not found",
-            )
-
-        if response.status_code != 200:
-            raise ThreatIntelHttpStatusError("virustotal", "lookup_indicator", response.status_code)
-
-        attrs = response.json().get("data", {}).get("attributes", {})
-        stats = attrs.get("last_analysis_stats", {})
-        malicious_votes = int(stats.get("malicious", 0)) + int(stats.get("suspicious", 0))
-        total_votes = max(
-            malicious_votes
-            + int(stats.get("harmless", 0))
-            + int(stats.get("undetected", 0))
-            + int(stats.get("timeout", 0)),
-            1,
-        )
-        score = min((malicious_votes / total_votes) * 100.0, 100.0)
-
-        return ThreatIntelResult(
-            indicator=indicator,
-            is_malicious=score > 20.0,
-            provider="virustotal",
-            reputation_score=round(score, 2),
-            details="VirusTotal reputation lookup",
-        )
-
     async def lookup_indicator(
         self,
         indicator: str,
@@ -111,10 +58,6 @@ class ConnectorThreatIntelProvider:
         provider_override: str | None = None,
     ) -> ThreatIntelResult:
         provider = (provider_override or self._default_provider).strip().lower() or "virustotal"
-
-        if provider == "virustotal":
-            return await self._lookup_virustotal_http(indicator)
-
         return await self._lookup_via_connector(provider, indicator)
 
     async def fanout(self, indicator: str, providers: list[str]) -> ThreatIntelResult:

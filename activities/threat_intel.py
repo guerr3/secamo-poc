@@ -6,6 +6,7 @@ from temporalio.exceptions import ApplicationError
 
 from activities._activity_errors import application_error_from_http_status
 from activities.tenant import get_tenant_config
+from connectors.errors import ConnectorPermanentError, ConnectorTransientError
 from shared.models import ThreatIntelResult
 from shared.providers.factory import get_threat_intel_provider
 from shared.providers.threat_intel import ThreatIntelHttpStatusError
@@ -80,6 +81,18 @@ async def threat_intel_lookup(tenant_id: str, indicator: str) -> ThreatIntelResu
     try:
         provider = await _get_provider(tenant_id)
         return await provider.lookup_indicator(indicator)
+    except ConnectorPermanentError as exc:
+        raise ApplicationError(
+            f"[{tenant_id}] threat_intel_lookup permanent connector error: {exc}",
+            type="ConnectorPermanentError",
+            non_retryable=True,
+        ) from exc
+    except ConnectorTransientError as exc:
+        raise ApplicationError(
+            f"[{tenant_id}] threat_intel_lookup transient connector error: {exc}",
+            type="ConnectorTransientError",
+            non_retryable=False,
+        ) from exc
     except ThreatIntelHttpStatusError as exc:
         raise application_error_from_http_status(
             tenant_id,

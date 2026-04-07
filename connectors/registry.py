@@ -3,17 +3,17 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from connectors.base import BaseConnector
+from connectors.abuseipdb import AbuseIpdbConnector
 from connectors.errors import ConnectorConfigurationError
 from connectors.jira import JiraConnector
 from connectors.microsoft_defender import MicrosoftGraphConnector
+from connectors.virustotal import VirusTotalConnector
 from connectors.stub_providers import (
-    AbuseIpdbConnector,
     CrowdStrikeConnector,
     HaloItsmConnector,
     MispConnector,
     SentinelOneConnector,
     ServiceNowConnector,
-    VirusTotalConnector,
 )
 from shared.providers.contracts import TenantSecrets
 from shared.providers.protocols import ConnectorInterface
