@@ -28,8 +28,8 @@ terraform validate
 
 # Real deployment
 terraform init
-terraform plan -var="my_ip=$(curl -s ifconfig.me)/32"
-terraform apply -var="my_ip=$(curl -s ifconfig.me)/32"
+terraform plan
+terraform apply
 ```
 
 ## Verify
@@ -46,5 +46,5 @@ Suggested checks:
 
 ```bash
 cd terraform/environments/temporal-test
-terraform destroy -var="my_ip=$(curl -s ifconfig.me)/32"
+terraform destroy
 ```

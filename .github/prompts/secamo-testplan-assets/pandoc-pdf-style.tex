@@ -1,0 +1,31 @@
+% Pandoc PDF style overrides for cleaner typography and table rendering
+\usepackage{booktabs}
+\usepackage{longtable}
+\usepackage{array}
+\usepackage{tabularx}
+\usepackage[table]{xcolor}
+\usepackage{microtype}
+\usepackage{fancyhdr}
+\usepackage{etoolbox}
+
+\definecolor{tableheader}{HTML}{E9EFF7}
+\definecolor{tablerowalt}{HTML}{F7FAFF}
+
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.2}
+
+% Improve spacing around headings without changing content structure
+\usepackage{titlesec}
+\titlespacing*{\section}{0pt}{1.2em}{0.6em}
+\titlespacing*{\subsection}{0pt}{1.0em}{0.5em}
+\titlespacing*{\subsubsection}{0pt}{0.8em}{0.4em}
+
+% Subtle footer page numbering
+\pagestyle{fancy}
+\fancyhf{}
+\fancyfoot[C]{\thepage}
+\renewcommand{\headrulewidth}{0pt}
+
+% Apply zebra striping for readability in tabular and longtable
+\AtBeginEnvironment{tabular}{\rowcolors{2}{tablerowalt}{white}}
+\AtBeginEnvironment{longtable}{\rowcolors{2}{tablerowalt}{white}}

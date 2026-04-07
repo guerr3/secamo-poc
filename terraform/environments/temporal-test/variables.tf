@@ -9,8 +9,9 @@ variable "aws_region" {
 }
 
 variable "my_ip" {
-  description = "Your public IP in CIDR notation (e.g. 1.2.3.4/32) to restrict SSH/UI/gRPC access"
+  description = "CIDR for SSH/UI/gRPC access to the Temporal host (defaults to public access)"
   type        = string
+  default     = "0.0.0.0/0"
 
   validation {
     condition     = can(cidrhost(var.my_ip, 0))
@@ -57,9 +58,9 @@ variable "github_repo_url" {
 # ── Ingress (Front Door) ─────────────────────────────────────
 
 variable "microsoft_allowed_cidrs" {
-  description = "Microsoft IP ranges allowed to invoke the ingress API"
+  description = "CIDR ranges allowed to invoke the ingress API"
   type        = list(string)
-  default     = ["20.190.128.0/18", "40.126.0.0/18"]
+  default     = ["0.0.0.0/0"]
 }
 
 variable "evidence_bucket_name" {
