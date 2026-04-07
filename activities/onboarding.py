@@ -37,6 +37,15 @@ def _stringify(value: Any) -> str:
     return str(value)
 
 
+def _is_partial_onboarding_enabled(payload: CustomerOnboardingEvent) -> bool:
+    raw = payload.config.get("allow_partial_onboarding") if isinstance(payload.config, dict) else None
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 def _normalize_base_url(value: str) -> str:
     parsed = urlparse(value)
     if not parsed.scheme or not parsed.netloc:
@@ -95,7 +104,10 @@ async def provision_customer_secrets(tenant_id: str, payload: CustomerOnboarding
             non_retryable=True,
         )
 
-    _require_graph_bundle(payload)
+    partial_onboarding = _is_partial_onboarding_enabled(payload)
+
+    if not partial_onboarding:
+        _require_graph_bundle(payload)
 
     config_values: dict[str, Any] = dict(payload.config)
     if payload.display_name and not config_values.get("display_name"):
@@ -134,11 +146,20 @@ async def provision_customer_secrets(tenant_id: str, payload: CustomerOnboarding
 
         callback_base_url = _resolve_callback_base_url()
     except ValueError as exc:
-        raise_activity_error(
-            f"[{tenant_id}] onboarding provisioning failed: {exc}",
-            error_type="OnboardingInvalidConfig",
-            non_retryable=True,
-        )
+        if partial_onboarding:
+            activity.logger.warning(
+                "[%s] partial onboarding enabled; callback base URL unavailable (%s). "
+                "Graph subscription bootstrap will be deferred.",
+                tenant_id,
+                exc,
+            )
+            callback_base_url = ""
+        else:
+            raise_activity_error(
+                f"[{tenant_id}] onboarding provisioning failed: {exc}",
+                error_type="OnboardingInvalidConfig",
+                non_retryable=True,
+            )
     except (ClientError, BotoCoreError) as exc:
         raise_activity_error(
             f"[{tenant_id}] onboarding SSM write failed: {type(exc).__name__}",
@@ -152,9 +173,13 @@ async def provision_customer_secrets(tenant_id: str, payload: CustomerOnboarding
             non_retryable=False,
         )
 
-    return {
-        "graph_notification_url": f"{callback_base_url}/api/v1/graph/notifications/{tenant_id}",
+    result: dict[str, str] = {
+        "graph_notification_url": "",
+        "partial_onboarding": "true" if partial_onboarding else "false",
     }
+    if callback_base_url:
+        result["graph_notification_url"] = f"{callback_base_url}/api/v1/graph/notifications/{tenant_id}"
+    return result
 
 
 @activity.defn

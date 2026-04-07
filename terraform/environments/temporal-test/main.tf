@@ -207,6 +207,7 @@ resource "aws_iam_role_policy" "temporal_ssm_params" {
       {
         Effect = "Allow"
         Action = [
+          "ssm:PutParameter",
           "ssm:GetParameter",
           "ssm:GetParameters",
           "ssm:GetParametersByPath"
@@ -257,7 +258,9 @@ resource "aws_iam_role_policy" "temporal_storage" {
         ]
         Resource = [
           module.storage.audit_table_arn,
-          "${module.storage.audit_table_arn}/index/*"
+          "${module.storage.audit_table_arn}/index/*",
+          aws_dynamodb_table.tenants.arn,
+          "${aws_dynamodb_table.tenants.arn}/index/*"
         ]
       }
     ]

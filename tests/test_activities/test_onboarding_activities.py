@@ -66,6 +66,27 @@ async def test_provision_customer_secrets_requires_graph_bundle() -> None:
 
 
 @pytest.mark.asyncio
+async def test_provision_customer_secrets_partial_mode_allows_missing_graph_bundle(mocker) -> None:
+    put_secret = mocker.patch("activities.onboarding.put_secret")
+    mocker.patch("activities.onboarding._resolve_callback_base_url", side_effect=ValueError("Invalid public callback base URL"))
+
+    payload = _payload(
+        config={
+            "display_name": "Tenant One",
+            "allow_partial_onboarding": True,
+        },
+        secrets={},
+    )
+
+    result = await provision_customer_secrets("tenant-1", payload)
+
+    assert result["graph_notification_url"] == ""
+    assert result["partial_onboarding"] == "true"
+    called_paths = {call.kwargs["path"] for call in put_secret.call_args_list}
+    assert "config/display_name" in called_paths
+
+
+@pytest.mark.asyncio
 async def test_register_customer_tenant_upserts_item(mocker, monkeypatch: pytest.MonkeyPatch) -> None:
     from activities import onboarding as onboarding_module
 

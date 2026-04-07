@@ -31,6 +31,15 @@ def _resource_slug(resource: str) -> str:
     return slug or "subscription"
 
 
+def _is_partial_onboarding_enabled(payload: CustomerOnboardingEvent) -> bool:
+    raw = payload.config.get("allow_partial_onboarding") if isinstance(payload.config, dict) else None
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        return raw.strip().lower() in {"1", "true", "yes", "on"}
+    return False
+
+
 @workflow.defn
 class CustomerOnboardingWorkflow:
     """Tenant onboarding orchestration for secrets, registration, subscriptions and confirmations."""
@@ -41,6 +50,7 @@ class CustomerOnboardingWorkflow:
             raise ValueError("CustomerOnboardingWorkflow requires customer.onboarding payload")
 
         payload = event.payload
+        partial_onboarding = _is_partial_onboarding_enabled(payload)
         if payload.tenant_id != event.tenant_id:
             raise ApplicationError(
                 "Envelope tenant_id and payload tenant_id must match",
@@ -94,45 +104,54 @@ class CustomerOnboardingWorkflow:
         )
 
         notification_url = str(provisioning_result.get("graph_notification_url") or "").strip()
-        if not notification_url:
-            raise ApplicationError(
-                "Graph notification URL could not be resolved during onboarding provisioning",
-                type="MissingGraphNotificationUrl",
-                non_retryable=True,
-            )
-
-        existing_subscriptions: list[SubscriptionState] = await workflow.execute_activity(
-            subscription_list,
-            args=[event.tenant_id, "graph"],
-            start_to_close_timeout=TIMEOUT,
-            retry_policy=runtime_retry,
-        )
-
-        existing_keys = {
-            (state.resource, tuple(sorted(state.change_types)))
-            for state in existing_subscriptions
-        }
+        existing_keys: set[tuple[str, tuple[str, ...]]] = set()
         created_subscription_ids: list[str] = []
+        has_desired_graph_subscriptions = bool(config.graph_subscriptions)
 
-        for desired in config.graph_subscriptions:
-            key = (desired.resource, tuple(sorted(desired.change_types)))
-            if key in existing_keys:
-                continue
+        if has_desired_graph_subscriptions and not notification_url:
+            if partial_onboarding:
+                workflow.logger.warning(
+                    "WF-CUST-ONBOARDING partial mode: graph notification URL missing; skipping graph subscription bootstrap"
+                )
+            else:
+                raise ApplicationError(
+                    "Graph notification URL could not be resolved during onboarding provisioning",
+                    type="MissingGraphNotificationUrl",
+                    non_retryable=True,
+                )
 
-            state: SubscriptionState = await workflow.execute_activity(
-                subscription_create,
-                args=[
-                    event.tenant_id,
-                    desired,
-                    "graph",
-                    notification_url,
-                    f"secamo:{event.tenant_id}:{_resource_slug(desired.resource)}",
-                ],
+        if has_desired_graph_subscriptions and notification_url:
+            existing_subscriptions: list[SubscriptionState] = await workflow.execute_activity(
+                subscription_list,
+                args=[event.tenant_id, "graph"],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,
             )
-            created_subscription_ids.append(state.subscription_id)
-            existing_keys.add(key)
+
+            existing_keys = {
+                (state.resource, tuple(sorted(state.change_types)))
+                for state in existing_subscriptions
+            }
+
+            for desired in config.graph_subscriptions:
+                key = (desired.resource, tuple(sorted(desired.change_types)))
+                if key in existing_keys:
+                    continue
+
+                state: SubscriptionState = await workflow.execute_activity(
+                    subscription_create,
+                    args=[
+                        event.tenant_id,
+                        desired,
+                        "graph",
+                        notification_url,
+                        f"secamo:{event.tenant_id}:{_resource_slug(desired.resource)}",
+                    ],
+                    start_to_close_timeout=TIMEOUT,
+                    retry_policy=runtime_retry,
+                )
+                created_subscription_ids.append(state.subscription_id)
+                existing_keys.add(key)
 
         analyst_email = payload.soc_analyst_email or config.soc_analyst_email
         if not analyst_email:
