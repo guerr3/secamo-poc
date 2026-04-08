@@ -68,3 +68,9 @@ variable "evidence_bucket_name" {
   type        = string
   default     = ""
 }
+
+variable "secamo_sender_email" {
+  description = "Sender email used by communication and HiTL email activities"
+  type        = string
+  default     = "noreply@secamo.local"
+}

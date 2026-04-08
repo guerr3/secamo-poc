@@ -14,6 +14,9 @@
 #   ${region}               — AWS region
 #   ${evidence_bucket}      — S3 bucket for evidence artifacts
 #   ${audit_table}          — DynamoDB table for audit records
+#   ${tenant_table}         — DynamoDB table for tenant metadata
+#   ${hitl_token_table}     — DynamoDB table for HiTL approval tokens
+#   ${secamo_sender_email}  — Sender email for notification activities
 # ──────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -99,6 +102,9 @@ TEMPORAL_ADDRESS=temporal:7233
 TEMPORAL_NAMESPACE=${temporal_namespace}
 EVIDENCE_BUCKET_NAME=${evidence_bucket}
 AUDIT_TABLE_NAME=${audit_table}
+TENANT_TABLE_NAME=${tenant_table}
+HITL_TOKEN_TABLE=${hitl_token_table}
+SECAMO_SENDER_EMAIL=${secamo_sender_email}
 EOF
 
 # ── Start Temporal Stack ─────────────────────────────────────

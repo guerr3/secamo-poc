@@ -1,0 +1,32 @@
+# Copy this file to a local .tfvars file (do not commit environment-specific values)
+# Example: demo_vm_aws.tfvars
+
+project_name = "secamo"
+environment  = "demo_vm_aws"
+name_prefix  = "secamo-demo-vm-aws"
+
+aws_region  = "eu-west-1"
+aws_profile = "PowerUser-IAMFullAccess-760659115776"
+
+vpc_cidr           = "10.230.0.0/16"
+public_subnet_cidr = "10.230.10.0/24"
+availability_zone  = "eu-west-1a"
+
+# Restrict RDP to your public source IP
+rdp_allowed_cidr = "203.0.113.10/32"
+public_ip_enabled = true
+
+windows_instance_type = "t3.large"
+root_volume_size_gb   = 50
+
+# Use an existing key pair if you need to decrypt the initial Windows password for RDP
+key_pair_name = "replace-with-existing-keypair"
+
+# Optional AMI override; leave empty to use latest Windows Server 2022 base image
+windows_ami_id = ""
+instance_name  = "secamo-demo-win-01"
+
+extra_tags = {
+  Owner      = "secops"
+  CostCenter = "demo"
+}

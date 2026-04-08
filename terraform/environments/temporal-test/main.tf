@@ -291,6 +291,9 @@ resource "aws_instance" "temporal" {
     region             = data.aws_region.current.name
     evidence_bucket    = module.storage.evidence_bucket_name
     audit_table        = module.storage.audit_table_name
+    tenant_table       = aws_dynamodb_table.tenants.name
+    hitl_token_table   = aws_dynamodb_table.hitl_tokens.name
+    secamo_sender_email = var.secamo_sender_email
   })
 
   user_data_replace_on_change = true
