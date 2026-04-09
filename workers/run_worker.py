@@ -167,7 +167,7 @@ def load_activities_by_queue() -> dict[str, list]:
             edr_run_antivirus_scan,
             edr_unisolate_device,
         )
-        from activities.threat_intel import threat_intel_lookup
+        from activities.threat_intel import threat_intel_lookup, threat_intel_fanout
         from activities.risk import calculate_risk_score
         soc_activities.extend([
             edr_enrich_alert,
@@ -182,7 +182,7 @@ def load_activities_by_queue() -> dict[str, list]:
             edr_dismiss_risky_user,
             edr_get_signin_history,
             edr_list_risky_users,
-            threat_intel_lookup, calculate_risk_score,
+            threat_intel_lookup, threat_intel_fanout, calculate_risk_score,
         ])
         poller_activities.extend([edr_fetch_events])
         logger.info("✓ SOC capability activities geladen")
