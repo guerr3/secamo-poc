@@ -11,6 +11,7 @@ from temporalio.exceptions import ApplicationError
 
 
 with workflow.unsafe.imports_passed_through():
+    from shared.config import QUEUE_INTERACTIONS    
     from activities.audit import create_audit_log
     from activities.communications import email_send, teams_send_notification
     from activities.onboarding import provision_customer_secrets, register_customer_tenant
@@ -180,12 +181,14 @@ class CustomerOnboardingWorkflow:
             args=[event.tenant_id, "", teams_message],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
+            task_queue=QUEUE_INTERACTIONS,
         )
         welcome_email_task = workflow.execute_activity(
             email_send,
             args=[event.tenant_id, payload.welcome_email, welcome_subject, welcome_body],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
+            task_queue=QUEUE_INTERACTIONS,
         )
         ticket_task = create_soc_ticket(
             event.tenant_id,

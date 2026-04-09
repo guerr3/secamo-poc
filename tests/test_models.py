@@ -213,7 +213,7 @@ class TestExtraFieldsIgnored:
 class TestRoutingResolution:
     def test_provider_event_route(self):
         route = resolve_provider_event_route("microsoft_defender", "alert")
-        assert route == ("DefenderAlertEnrichmentWorkflow", "soc-defender")
+        assert route == ("DefenderAlertEnrichmentWorkflow", "edr")
 
     def test_polling_route_prefers_payload_provider_event_type(self):
         route = resolve_polling_route(
@@ -221,4 +221,4 @@ class TestRoutingResolution:
             resource_type="defender_alerts",
             payload={"provider_event_type": "impossible_travel"},
         )
-        assert route == ("ImpossibleTravelWorkflow", "soc-defender")
+        assert route == ("ImpossibleTravelWorkflow", "edr")

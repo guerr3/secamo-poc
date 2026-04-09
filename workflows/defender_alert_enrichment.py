@@ -4,6 +4,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from shared.config import QUEUE_EDR
     from shared.models import (
         AlertEnrichmentRequest,
         AlertEnrichmentResult,
@@ -27,7 +28,7 @@ TIMEOUT = timedelta(seconds=30)
 class DefenderAlertEnrichmentWorkflow:
     """
     WF-02 — Defender Alert Enrichment & Ticketing (SOC automation).
-    Task Queue: soc-defender
+    Task Queue: edr
     """
 
     @workflow.run
@@ -74,7 +75,7 @@ class DefenderAlertEnrichmentWorkflow:
                 threat_intel=threat_intel,
             ),
             id=f"{workflow.info().workflow_id}-alert-enrichment",
-            task_queue="soc-defender",
+            task_queue=QUEUE_EDR,
         )
         enriched = enrich_and_risk.enriched_alert
         risk = enrich_and_risk.risk_score

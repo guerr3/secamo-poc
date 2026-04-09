@@ -6,7 +6,7 @@
 
 - Connect to Temporal with repository runtime settings.
 - Register activities by queue and workflows by queue.
-- Start queue workers concurrently for IAM, SOC, audit, and poller domains.
+- Start queue workers concurrently for user lifecycle, EDR, ticketing, interactions, audit, and polling domains.
 - Provide startup failure behavior for missing imports or runtime wiring errors.
 
 ## File Reference
@@ -20,7 +20,7 @@
 
 ## Key Concepts
 
-- Queue partitioning: queue separation isolates identity, SOC, audit, and poller workloads.
+- Queue partitioning: queue separation isolates user lifecycle, EDR, ticketing, interactions, audit, and polling workloads.
 - Lazy import registration: runtime validates module availability at startup to fail fast on bad wiring.
 - Central runtime entrypoint: worker startup logic is consolidated in one module to reduce drift.
 

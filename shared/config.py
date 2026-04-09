@@ -10,10 +10,12 @@ TEMPORAL_NAMESPACE = os.environ.get("TEMPORAL_NAMESPACE", "default")
 # in de activities (bijv. get_tenant_secrets) op basis van tenant_id.
 
 # ── Task Queue namen per domein ───────────────────────────────
-QUEUE_IAM    = "iam-graph"
-QUEUE_SOC    = "soc-defender"
-QUEUE_AUDIT  = "audit"
-QUEUE_POLLER = "poller"
+QUEUE_USER_LIFECYCLE = "user-lifecycle"
+QUEUE_EDR            = "edr"
+QUEUE_TICKETING      = "ticketing"
+QUEUE_INTERACTIONS   = "interactions"
+QUEUE_AUDIT          = "audit"
+QUEUE_POLLING        = "polling"
 
 # ── Shared runtime settings ──────────────────────────────────
 SECAMO_SENDER_EMAIL = os.environ.get("SECAMO_SENDER_EMAIL", "noreply@secamo.local")

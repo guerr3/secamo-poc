@@ -77,8 +77,8 @@ async def test_envelope_to_fanout_temporal_start(caplog: pytest.LogCaptureFixtur
         "microsoft_defender",
         "defender.alert",
         (
-            WorkflowRoute(workflow_name="WorkflowWillFail", task_queue="soc-defender"),
-            WorkflowRoute(workflow_name="WorkflowWillStart", task_queue="soc-defender"),
+            WorkflowRoute(workflow_name="WorkflowWillFail", task_queue="edr"),
+            WorkflowRoute(workflow_name="WorkflowWillStart", task_queue="edr"),
         ),
     )
 

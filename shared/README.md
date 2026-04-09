@@ -43,7 +43,7 @@
 Other modules import shared contracts and helpers instead of re-defining cross-cutting logic.
 
 ```python
-from shared.config import QUEUE_SOC
+from shared.config import QUEUE_EDR
 from shared.routing.defaults import build_default_route_registry
 from shared.models.canonical import Envelope
 ```

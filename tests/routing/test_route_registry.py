@@ -74,8 +74,8 @@ def test_route_registry_resolves_multiple_routes() -> None:
         "microsoft_defender",
         "defender.alert",
         (
-            WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),
-            WorkflowRoute(workflow_name="IncidentCorrelatorWorkflow", task_queue="soc-defender"),
+            WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="edr"),
+            WorkflowRoute(workflow_name="IncidentCorrelatorWorkflow", task_queue="edr"),
         ),
     )
 
@@ -90,12 +90,12 @@ def test_route_registry_resolves_provider_specific_fallbacks() -> None:
     registry.register(
         "microsoft_defender",
         "defender.alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="edr"),),
     )
     registry.register(
         "crowdstrike",
         "defender.alert",
-        (WorkflowRoute(workflow_name="CrowdStrikeSpecificWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="CrowdStrikeSpecificWorkflow", task_queue="edr"),),
     )
 
     defender_envelope = _sample_envelope()
@@ -116,9 +116,9 @@ async def test_best_effort_fanout_continues_on_failure(caplog: pytest.LogCapture
         "microsoft_defender",
         "defender.alert",
         (
-            WorkflowRoute(workflow_name="WorkflowA", task_queue="soc-defender"),
-            WorkflowRoute(workflow_name="WorkflowB", task_queue="soc-defender"),
-            WorkflowRoute(workflow_name="WorkflowC", task_queue="soc-defender"),
+            WorkflowRoute(workflow_name="WorkflowA", task_queue="edr"),
+            WorkflowRoute(workflow_name="WorkflowB", task_queue="edr"),
+            WorkflowRoute(workflow_name="WorkflowC", task_queue="edr"),
         ),
     )
 
