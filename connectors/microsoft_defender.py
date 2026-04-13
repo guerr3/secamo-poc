@@ -354,6 +354,56 @@ class MicrosoftGraphConnector(BaseConnector):
         ]
         return alerts[:max_top]
 
+    async def _request_defender_alerts_with_fallback(
+        self,
+        *,
+        url: str,
+        headers: dict[str, str],
+        params: dict[str, str] | None,
+    ) -> httpx.Response:
+        if params is None:
+            return await self._request_with_retry("GET", url, headers=headers, params=None)
+
+        attempts: list[dict[str, str] | None] = [dict(params)]
+        if "$filter" in params:
+            attempts.append({key: value for key, value in params.items() if key != "$filter"})
+        if "$expand" in params:
+            attempts.append(
+                {
+                    key: value
+                    for key, value in params.items()
+                    if key not in {"$filter", "$expand"}
+                }
+            )
+
+        seen_keys: set[tuple[tuple[str, str], ...]] = set()
+        deduped_attempts: list[dict[str, str] | None] = []
+        for candidate in attempts:
+            candidate = candidate or None
+            key = tuple(sorted(candidate.items())) if candidate else tuple()
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            deduped_attempts.append(candidate)
+
+        last_error: ConnectorPermanentError | None = None
+        for candidate_params in deduped_attempts:
+            try:
+                return await self._request_with_retry(
+                    "GET",
+                    url,
+                    headers=headers,
+                    params=candidate_params,
+                )
+            except ConnectorPermanentError as exc:
+                if self._connector_error_status(exc) != 400:
+                    raise
+                last_error = exc
+
+        if last_error is not None:
+            raise last_error
+        raise ConnectorPermanentError(f"Graph request rejected: status=400 url={url}")
+
     def _map_event(self, item: dict[str, Any], resource_type: str, occurred_field: str, event_type: str, provider_event_type: str) -> Envelope:
         occurred_at = self._parse_iso_datetime(item.get(occurred_field))
         if occurred_at is None:
@@ -461,12 +511,19 @@ class MicrosoftGraphConnector(BaseConnector):
                 break
             visited_urls.add(next_url)
 
-            response = await self._request_with_retry(
-                "GET",
-                next_url,
-                headers=headers,
-                params=next_params,
-            )
+            if resource_type == "defender_alerts":
+                response = await self._request_defender_alerts_with_fallback(
+                    url=next_url,
+                    headers=headers,
+                    params=next_params,
+                )
+            else:
+                response = await self._request_with_retry(
+                    "GET",
+                    next_url,
+                    headers=headers,
+                    params=next_params,
+                )
             payload = response.json()
 
             for item in payload.get("value", []):

@@ -326,6 +326,78 @@ async def test_graph_list_user_alerts_fallback_on_400(mocker, graph_secrets):
 
 
 @pytest.mark.asyncio
+async def test_graph_fetch_events_defender_fallback_removes_filter_on_400(mocker, graph_secrets):
+    queue = [
+        _Resp(400, body={"error": {"message": "Unsupported filter"}}),
+        _Resp(
+            200,
+            body={
+                "value": [
+                    {
+                        "id": "a1",
+                        "createdDateTime": "2026-03-22T00:00:00Z",
+                        "severity": "high",
+                        "title": "Alert",
+                    }
+                ]
+            },
+        ),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    events = await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
+
+    assert len(events) == 1
+    assert "$filter" in calls[0]["params"]
+    assert "$filter" not in calls[1]["params"]
+    assert calls[1]["params"]["$expand"] == "evidence"
+
+
+@pytest.mark.asyncio
+async def test_graph_fetch_events_defender_fallback_removes_expand_after_second_400(mocker, graph_secrets):
+    queue = [
+        _Resp(400, body={"error": {"message": "Unsupported filter"}}),
+        _Resp(400, body={"error": {"message": "Unsupported expand"}}),
+        _Resp(
+            200,
+            body={
+                "value": [
+                    {
+                        "id": "a2",
+                        "createdDateTime": "2026-03-22T00:00:00Z",
+                        "severity": "medium",
+                        "title": "Alert without expand",
+                    }
+                ]
+            },
+        ),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    events = await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
+
+    assert len(events) == 1
+    assert "$filter" in calls[0]["params"]
+    assert "$filter" not in calls[1]["params"]
+    assert "$expand" in calls[1]["params"]
+    assert "$expand" not in calls[2]["params"]
+
+
+@pytest.mark.asyncio
 async def test_graph_isolate_uses_defender_token(mocker, graph_secrets):
     queue = [_Resp(200, body={"status": "submitted"}, content=b'{"status":"submitted"}')]
     calls: list[dict[str, Any]] = []
