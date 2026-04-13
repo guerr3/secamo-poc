@@ -287,6 +287,73 @@ class MicrosoftGraphConnector(BaseConnector):
             "user_email": user_email,
         }
 
+    @classmethod
+    def _alert_matches_user_email(cls, item: dict[str, Any], user_email: str) -> bool:
+        normalized_user_email = user_email.strip().lower()
+        if not normalized_user_email:
+            return False
+
+        direct_candidates = (
+            cls._coerce_non_empty_str(item.get("userPrincipalName")),
+            cls._coerce_non_empty_str(item.get("userEmail")),
+            cls._coerce_non_empty_str(item.get("assignedTo")),
+        )
+        if any(candidate and candidate.lower() == normalized_user_email for candidate in direct_candidates):
+            return True
+
+        evidence_email = cls._coerce_non_empty_str(cls._extract_alert_evidence_fields(item).get("user_email"))
+        if evidence_email and evidence_email.lower() == normalized_user_email:
+            return True
+
+        user_states = item.get("userStates")
+        if not isinstance(user_states, list):
+            return False
+
+        for user_state in user_states:
+            if not isinstance(user_state, dict):
+                continue
+            state_email = cls._first_non_empty_str(
+                user_state.get("userPrincipalName"),
+                user_state.get("emailAddress"),
+                user_state.get("upn"),
+            )
+            if state_email and state_email.lower() == normalized_user_email:
+                return True
+        return False
+
+    async def _fetch_user_alerts(self, *, headers: dict[str, str], user_email: str, payload: dict[str, Any]) -> list[dict[str, Any]]:
+        max_top = min(max(int(payload.get("top", 100)), 1), 200)
+        since_hours = min(max(int(payload.get("since_hours", 24)), 1), 24 * 30)
+        since_dt = datetime.now(timezone.utc) - timedelta(hours=since_hours)
+
+        url = "https://graph.microsoft.com/v1.0/security/alerts_v2"
+        params = {
+            "$top": str(max_top),
+            "$expand": "evidence",
+            "$filter": f"createdDateTime gt {self._format_odata_datetime(since_dt)}",
+        }
+
+        try:
+            response = await self._request_with_retry("GET", url, headers=headers, params=params)
+        except ConnectorPermanentError as exc:
+            if self._connector_error_status(exc) != 400:
+                raise
+            # Fallback to a minimal supported query shape when the tenant rejects filtering.
+            response = await self._request_with_retry(
+                "GET",
+                url,
+                headers=headers,
+                params={"$top": str(max_top), "$expand": "evidence"},
+            )
+
+        body = response.json()
+        alerts = [
+            item
+            for item in body.get("value", [])
+            if isinstance(item, dict) and self._alert_matches_user_email(item, user_email)
+        ]
+        return alerts[:max_top]
+
     def _map_event(self, item: dict[str, Any], resource_type: str, occurred_field: str, event_type: str, provider_event_type: str) -> Envelope:
         occurred_at = self._parse_iso_datetime(item.get(occurred_field))
         if occurred_at is None:
@@ -512,16 +579,12 @@ class MicrosoftGraphConnector(BaseConnector):
             if not user_email:
                 raise ConnectorUnsupportedActionError("list_user_alerts requires payload.user_email")
 
-            escaped_email = self._escape_odata_literal(user_email)
-            filt = f"userStates/any(u:u/userPrincipalName eq '{escaped_email}')"
-            url = "https://graph.microsoft.com/v1.0/security/alerts_v2"
-            response = await self._request_with_retry("GET", url, headers=headers, params={"$filter": filt})
-            body = response.json()
+            alerts = await self._fetch_user_alerts(headers=headers, user_email=user_email, payload=payload)
             return {
                 "success": True,
                 "provider": self.provider,
                 "details": "alerts listed",
-                "alerts": body.get("value", []),
+                "alerts": alerts,
             }
 
         if action == "list_risky_users":

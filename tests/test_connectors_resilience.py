@@ -249,6 +249,83 @@ async def test_graph_fetch_events_handles_empty_evidence_fields(mocker, graph_se
 
 
 @pytest.mark.asyncio
+async def test_graph_list_user_alerts_filters_client_side(mocker, graph_secrets):
+    queue = [
+        _Resp(
+            200,
+            body={
+                "value": [
+                    {
+                        "id": "a1",
+                        "userStates": [{"userPrincipalName": "User@Example.com"}],
+                    },
+                    {
+                        "id": "a2",
+                        "evidence": [
+                            {
+                                "@odata.type": "#microsoft.graph.security.userEvidence",
+                                "userPrincipalName": "user@example.com",
+                            }
+                        ],
+                    },
+                    {
+                        "id": "a3",
+                        "userStates": [{"userPrincipalName": "other@example.com"}],
+                    },
+                ]
+            },
+        )
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    result = await connector.execute_action("list_user_alerts", {"user_email": "user@example.com"})
+
+    assert [alert["id"] for alert in result["alerts"]] == ["a1", "a2"]
+    assert calls[0]["params"]["$expand"] == "evidence"
+    assert "createdDateTime gt" in calls[0]["params"]["$filter"]
+
+
+@pytest.mark.asyncio
+async def test_graph_list_user_alerts_fallback_on_400(mocker, graph_secrets):
+    queue = [
+        _Resp(400, body={"error": {"message": "Unsupported filter"}}),
+        _Resp(
+            200,
+            body={
+                "value": [
+                    {
+                        "id": "a1",
+                        "userStates": [{"userPrincipalName": "user@example.com"}],
+                    }
+                ]
+            },
+        ),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    result = await connector.execute_action("list_user_alerts", {"user_email": "user@example.com"})
+
+    assert [alert["id"] for alert in result["alerts"]] == ["a1"]
+    assert "$filter" in calls[0]["params"]
+    assert "$filter" not in calls[1]["params"]
+    assert calls[1]["params"]["$expand"] == "evidence"
+
+
+@pytest.mark.asyncio
 async def test_graph_isolate_uses_defender_token(mocker, graph_secrets):
     queue = [_Resp(200, body={"status": "submitted"}, content=b'{"status":"submitted"}')]
     calls: list[dict[str, Any]] = []
