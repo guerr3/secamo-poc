@@ -560,9 +560,31 @@ class MicrosoftGraphConnector(BaseConnector):
             }
 
             if alert_id:
-                alert_url = f"https://graph.microsoft.com/v1.0/security/alerts_v2/{quote(alert_id)}?$expand=evidence"
+                alert_url = f"https://graph.microsoft.com/v1.0/security/alerts_v2/{quote(alert_id)}"
+                alert_response: httpx.Response | None = None
                 try:
-                    alert_response = await self._request_with_retry("GET", alert_url, headers=headers)
+                    alert_response = await self._request_with_retry(
+                        "GET",
+                        alert_url,
+                        headers=headers,
+                        params={"$expand": "evidence"},
+                    )
+                except ConnectorPermanentError as exc:
+                    status = self._connector_error_status(exc)
+                    if status == 400:
+                        try:
+                            alert_response = await self._request_with_retry(
+                                "GET",
+                                alert_url,
+                                headers=headers,
+                            )
+                        except ConnectorPermanentError as fallback_exc:
+                            if self._connector_error_status(fallback_exc) != 404:
+                                raise
+                    elif status != 404:
+                        raise
+
+                if alert_response is not None:
                     alert_body = alert_response.json()
                     evidence_fields = self._extract_alert_evidence_fields(alert_body)
                     severity = str(alert_body.get("severity") or severity).lower()
@@ -572,9 +594,6 @@ class MicrosoftGraphConnector(BaseConnector):
                         user_email = evidence_fields["user_email"]
                     if device_id is None:
                         device_id = evidence_fields["device_id"]
-                except ConnectorPermanentError as exc:
-                    if self._connector_error_status(exc) != 404:
-                        raise
 
             user_display_name = None
             user_department = None

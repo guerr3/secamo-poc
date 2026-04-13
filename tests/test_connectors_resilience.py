@@ -398,6 +398,59 @@ async def test_graph_fetch_events_defender_fallback_removes_expand_after_second_
 
 
 @pytest.mark.asyncio
+async def test_graph_enrich_alert_context_fallback_removes_expand_on_400(mocker, graph_secrets):
+    queue = [
+        _Resp(400, body={"error": {"message": "Unsupported expand"}}),
+        _Resp(
+            200,
+            body={
+                "id": "a1",
+                "severity": "high",
+                "title": "Alert title",
+                "description": "Alert body",
+                "evidence": [],
+            },
+        ),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    result = await connector.execute_action("enrich_alert_context", {"alert_id": "a1"})
+
+    assert result["success"] is True
+    assert result["alert_id"] == "a1"
+    assert result["title"] == "Alert title"
+    assert result["description"] == "Alert body"
+    assert calls[0]["params"]["$expand"] == "evidence"
+    assert calls[1]["params"] is None
+
+
+@pytest.mark.asyncio
+async def test_graph_enrich_alert_context_404_returns_payload_defaults(mocker, graph_secrets):
+    queue = [_Resp(404, body={"error": {"message": "Not found"}})]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    result = await connector.execute_action("enrich_alert_context", {"alert_id": "missing-id"})
+
+    assert result["success"] is True
+    assert result["alert_id"] == "missing-id"
+    assert calls[0]["params"]["$expand"] == "evidence"
+
+
+@pytest.mark.asyncio
 async def test_graph_isolate_uses_defender_token(mocker, graph_secrets):
     queue = [_Resp(200, body={"status": "submitted"}, content=b'{"status":"submitted"}')]
     calls: list[dict[str, Any]] = []
