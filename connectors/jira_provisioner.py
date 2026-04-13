@@ -229,6 +229,53 @@ class JiraProvisioner:
 
         raise ConnectorPermanentError(f"Unable to find JSM service desk for project_key='{project_key}'")
 
+    async def _discover_request_type_id(
+        self,
+        *,
+        base_url: str,
+        auth: tuple[str, str],
+        service_desk_id: str,
+    ) -> str:
+        response = await self._request_with_retry(
+            "GET",
+            f"{base_url}/rest/servicedeskapi/servicedesk/{service_desk_id}/requesttype",
+            auth,
+        )
+        payload = response.json()
+        values = payload.get("values") if isinstance(payload, dict) else None
+        request_types = values if isinstance(values, list) else []
+        if not request_types:
+            raise ConnectorPermanentError(
+                f"Unable to find request types for JSM service desk '{service_desk_id}'"
+            )
+
+        prioritized_names = (
+            "incident",
+            "it help",
+            "get it help",
+            "service request",
+            "request",
+        )
+        for preferred_name in prioritized_names:
+            for item in request_types:
+                if not isinstance(item, dict):
+                    continue
+                candidate_name = str(item.get("name") or "").strip().lower()
+                candidate_id = str(item.get("id") or "").strip()
+                if candidate_id and preferred_name in candidate_name:
+                    return candidate_id
+
+        for item in request_types:
+            if not isinstance(item, dict):
+                continue
+            candidate_id = str(item.get("id") or "").strip()
+            if candidate_id:
+                return candidate_id
+
+        raise ConnectorPermanentError(
+            f"Unable to resolve default JSM request type for service desk '{service_desk_id}'"
+        )
+
     @staticmethod
     def _persist_ticketing_fields(tenant_id: str, values: dict[str, str]) -> None:
         for key, value in values.items():
@@ -284,11 +331,20 @@ class JiraProvisioner:
                 project_key=tenant_secrets.project_key,
             )
 
+        request_type_id = (tenant_secrets.jsm_request_type_id or "").strip()
+        if not request_type_id:
+            request_type_id = await self._discover_request_type_id(
+                base_url=base_url,
+                auth=auth,
+                service_desk_id=service_desk_id,
+            )
+
         self._persist_ticketing_fields(
             tenant_id,
             {
                 "project_type": "jsm",
                 "jsm_service_desk_id": service_desk_id,
+                "jsm_request_type_id": request_type_id,
             },
         )
 
@@ -296,5 +352,6 @@ class JiraProvisioner:
             update={
                 "project_type": "jsm",
                 "jsm_service_desk_id": service_desk_id,
+                "jsm_request_type_id": request_type_id,
             }
         )

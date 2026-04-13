@@ -46,6 +46,11 @@ async def test_provision_jsm_tenant_discovers_and_persists_service_desk(mocker, 
         "_discover_service_desk_id",
         new=mocker.AsyncMock(return_value="42"),
     )
+    discover_request_type = mocker.patch.object(
+        provisioner,
+        "_discover_request_type_id",
+        new=mocker.AsyncMock(return_value="10001"),
+    )
     persist_fields = mocker.patch.object(provisioner, "_persist_ticketing_fields")
 
     result = await provisioner.provision_jsm_tenant("tenant-1", jsm_secrets)
@@ -59,11 +64,13 @@ async def test_provision_jsm_tenant_discovers_and_persists_service_desk(mocker, 
         "https://api.example.com/api/v1/hitl/jira/tenant-1",
     ]
     discover_service_desk.assert_awaited_once()
+    discover_request_type.assert_awaited_once()
     persist_fields.assert_called_once_with(
         "tenant-1",
         {
             "project_type": "jsm",
             "jsm_service_desk_id": "42",
+            "jsm_request_type_id": "10001",
         },
     )
 
@@ -71,23 +78,27 @@ async def test_provision_jsm_tenant_discovers_and_persists_service_desk(mocker, 
 @pytest.mark.asyncio
 async def test_provision_jsm_tenant_uses_existing_service_desk(mocker, jsm_secrets: TenantSecrets) -> None:
     provisioner = JiraProvisioner()
-    tenant_secrets = jsm_secrets.model_copy(update={"jsm_service_desk_id": "99"})
+    tenant_secrets = jsm_secrets.model_copy(update={"jsm_service_desk_id": "99", "jsm_request_type_id": "20002"})
 
     mocker.patch.object(provisioner, "_resolve_callback_base_url", return_value="https://api.example.com")
     mocker.patch.object(provisioner, "_ensure_secret_value", side_effect=["ingress-secret", "hitl-secret"])
     ensure_webhook = mocker.patch.object(provisioner, "_ensure_webhook", new=mocker.AsyncMock())
     discover_service_desk = mocker.patch.object(provisioner, "_discover_service_desk_id", new=mocker.AsyncMock())
+    discover_request_type = mocker.patch.object(provisioner, "_discover_request_type_id", new=mocker.AsyncMock())
     persist_fields = mocker.patch.object(provisioner, "_persist_ticketing_fields")
 
     result = await provisioner.provision_jsm_tenant("tenant-1", tenant_secrets)
 
     assert result.jsm_service_desk_id == "99"
+    assert result.jsm_request_type_id == "20002"
     assert ensure_webhook.await_count == 2
     discover_service_desk.assert_not_awaited()
+    discover_request_type.assert_not_awaited()
     persist_fields.assert_called_once_with(
         "tenant-1",
         {
             "project_type": "jsm",
             "jsm_service_desk_id": "99",
+            "jsm_request_type_id": "20002",
         },
     )

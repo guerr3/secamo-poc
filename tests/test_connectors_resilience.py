@@ -4,6 +4,7 @@ from typing import Any
 
 import pytest
 
+from connectors.errors import ConnectorPermanentError
 from connectors.jira import JiraConnector
 from connectors.microsoft_defender import MicrosoftGraphConnector
 from shared.providers.contracts import TenantSecrets
@@ -487,3 +488,107 @@ async def test_jira_create_ticket_uses_secret_project_key_fallback(mocker, jira_
 
     assert result["key"] == "SOC-101"
     assert calls[0]["json"]["fields"]["project"]["key"] == "TENANTSOC"
+
+
+@pytest.mark.asyncio
+async def test_jira_create_ticket_uses_jsm_customer_request_endpoint(mocker, jira_secrets):
+    queue = [
+        _Resp(
+            201,
+            body={
+                "issueKey": "HELP-101",
+                "serviceDeskId": "42",
+                "requestTypeId": "10001",
+            },
+            content=b'{"issueKey":"HELP-101"}',
+        )
+    ]
+    calls: list[dict[str, Any]] = []
+
+    jsm_secrets = jira_secrets.model_copy(
+        update={
+            "project_type": "jsm",
+            "jsm_service_desk_id": "42",
+            "jsm_request_type_id": "10001",
+        }
+    )
+    mocker.patch(
+        "connectors.jira.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = JiraConnector(tenant_id="tenant-1", secrets=jsm_secrets)
+    result = await connector.execute_action(
+        "create_ticket",
+        {
+            "title": "Need access",
+            "description": "Please grant access",
+        },
+    )
+
+    assert result["issueKey"] == "HELP-101"
+    assert calls[0]["url"].endswith("/rest/servicedeskapi/request")
+    assert calls[0]["json"]["serviceDeskId"] == "42"
+    assert calls[0]["json"]["requestTypeId"] == "10001"
+    assert calls[0]["json"]["requestFieldValues"]["summary"] == "Need access"
+
+
+@pytest.mark.asyncio
+async def test_jira_create_ticket_jsm_requires_request_type_id(mocker, jira_secrets):
+    jsm_secrets = jira_secrets.model_copy(
+        update={
+            "project_type": "jsm",
+            "jsm_service_desk_id": "42",
+            "jsm_request_type_id": None,
+        }
+    )
+    connector = JiraConnector(tenant_id="tenant-1", secrets=jsm_secrets)
+
+    with pytest.raises(ConnectorPermanentError):
+        await connector.execute_action(
+            "create_ticket",
+            {
+                "title": "Need access",
+                "description": "Please grant access",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_jira_update_issue_handles_fields_comment_and_transition(mocker, jira_secrets):
+    queue = [
+        _Resp(204, body={}, content=b""),
+        _Resp(201, body={"id": "1001"}, content=b'{"id":"1001"}'),
+        _Resp(200, body={"transitions": [{"id": "31", "name": "Escalated"}]}, content=b'{"transitions":[{"id":"31","name":"Escalated"}]}'),
+        _Resp(204, body={}, content=b""),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch(
+        "connectors.jira.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = JiraConnector(tenant_id="tenant-1", secrets=jira_secrets)
+    result = await connector.execute_action(
+        "update_issue",
+        {
+            "ticket_id": "SOC-123",
+            "fields": {
+                "description": "Updated details",
+                "labels": ["secamo", "wf-05"],
+            },
+            "comment": "Escalated for analyst review",
+            "transition_name": "Escalated",
+        },
+    )
+
+    assert result["updated"] is True
+    assert calls[0]["method"] == "PUT"
+    assert calls[0]["url"].endswith("/rest/api/3/issue/SOC-123")
+    assert calls[1]["method"] == "POST"
+    assert calls[1]["url"].endswith("/rest/api/3/issue/SOC-123/comment")
+    assert calls[2]["method"] == "GET"
+    assert calls[2]["url"].endswith("/rest/api/3/issue/SOC-123/transitions")
+    assert calls[3]["method"] == "POST"
+    assert calls[3]["json"]["transition"]["id"] == "31"

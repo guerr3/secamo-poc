@@ -26,5 +26,6 @@ class TenantSecrets(BaseModel):
     project_key: Optional[str] = None
     project_type: Literal["jsm", "standard"] = "standard"
     jsm_service_desk_id: Optional[str] = None
+    jsm_request_type_id: Optional[str] = None
     virustotal_api_key: Optional[str] = Field(default=None, repr=False)
     abuseipdb_api_key: Optional[str] = Field(default=None, repr=False)

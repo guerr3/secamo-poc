@@ -71,6 +71,7 @@ def _to_tenant_secrets(secrets: dict[str, Any] | TenantSecrets) -> TenantSecrets
         project_key=_resolve_secret(secrets, "project_key"),
         project_type=(_resolve_secret(secrets, "project_type") or "standard").lower(),
         jsm_service_desk_id=_resolve_secret(secrets, "jsm_service_desk_id"),
+        jsm_request_type_id=_resolve_secret(secrets, "jsm_request_type_id"),
         virustotal_api_key=_resolve_secret(secrets, "virustotal_api_key"),
         abuseipdb_api_key=_resolve_secret(secrets, "abuseipdb_api_key"),
     )

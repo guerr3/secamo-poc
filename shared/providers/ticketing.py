@@ -23,9 +23,24 @@ class ConnectorTicketingProvider:
         self._default_project_key = default_project_key
 
     def _to_ticket_result(self, payload: dict[str, Any], *, fallback_ticket_id: str = "", fallback_status: str = "open") -> TicketResult:
-        ticket_id = str(payload.get("key") or payload.get("ticket_id") or payload.get("id") or fallback_ticket_id)
-        status = str(payload.get("status") or fallback_status)
-        url = f"{self._ticket_base_url}/browse/{ticket_id}" if self._ticket_base_url and ticket_id else ""
+        ticket_id = str(
+            payload.get("key")
+            or payload.get("issueKey")
+            or payload.get("ticket_id")
+            or payload.get("id")
+            or fallback_ticket_id
+        )
+        current_status = payload.get("currentStatus") if isinstance(payload.get("currentStatus"), dict) else {}
+        status = str(payload.get("status") or current_status.get("status") or fallback_status)
+
+        links = payload.get("_links") if isinstance(payload.get("_links"), dict) else {}
+        if isinstance(links.get("agent"), str) and links.get("agent"):
+            url = str(links.get("agent"))
+        elif isinstance(links.get("web"), str) and links.get("web"):
+            url = str(links.get("web"))
+        else:
+            url = f"{self._ticket_base_url}/browse/{ticket_id}" if self._ticket_base_url and ticket_id else ""
+
         return TicketResult(ticket_id=ticket_id, status=status, url=url)
 
     @staticmethod
@@ -39,13 +54,21 @@ class ConnectorTicketingProvider:
         return mapping.get((severity or "medium").lower(), "Medium")
 
     async def create_ticket(self, ticket_data: TicketData) -> TicketResult:
+        labels = ["secamo", ticket_data.source_workflow, ticket_data.tenant_id]
+        if ticket_data.related_alert_id:
+            labels.append(str(ticket_data.related_alert_id))
+
         payload = {
             "project_key": self._default_project_key,
             "title": ticket_data.title,
             "description": ticket_data.description,
             "issue_type": "Incident",
             "priority": self._severity_to_priority(ticket_data.severity),
-            "labels": ["secamo", ticket_data.source_workflow, ticket_data.tenant_id],
+            "labels": labels,
+            "request_field_values": {
+                "summary": ticket_data.title,
+                "description": ticket_data.description,
+            },
         }
         result = await self._connector.execute_action("create_issue", payload)
         return self._to_ticket_result(result if isinstance(result, dict) else {})
@@ -59,13 +82,27 @@ class ConnectorTicketingProvider:
         next_status = update_fields.get("status")
         transition_name = status_map.get(str(next_status).lower()) if next_status else None
 
-        fields = {
-            **update_fields,
-            **({"transition_name": transition_name} if transition_name else {}),
+        fields: dict[str, Any] = {}
+        for key in ("summary", "description", "labels", "priority"):
+            if key in update_fields:
+                fields[key] = update_fields[key]
+
+        connector_payload: dict[str, Any] = {
+            "ticket_id": ticket_id,
+            "fields": fields,
         }
+        note = update_fields.get("note")
+        if isinstance(note, str) and note.strip():
+            connector_payload["comment"] = note.strip()
+        if transition_name:
+            connector_payload["transition_name"] = transition_name
+        resolution = update_fields.get("resolution")
+        if resolution:
+            connector_payload["resolution"] = str(resolution)
+
         result = await self._connector.execute_action(
             "update_issue",
-            {"ticket_id": ticket_id, "fields": fields},
+            connector_payload,
         )
         response = result if isinstance(result, dict) else {}
         response.setdefault("ticket_id", ticket_id)

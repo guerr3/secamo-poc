@@ -74,6 +74,29 @@ def _render_approval_email(request: HiTLRequest, action_urls: dict[str, str]) ->
     )
 
 
+def _render_jira_approval_description(request: HiTLRequest, action_urls: dict[str, str]) -> str:
+    metadata_lines = "\n".join(
+        f"- **{key}**: {value}"
+        for key, value in request.metadata.items()
+    )
+    action_lines = "\n".join(
+        f"- {action.replace('_', ' ').title()}: {url}"
+        for action, url in action_urls.items()
+    )
+
+    metadata_section = ""
+    if metadata_lines:
+        metadata_section = f"\n\nContext:\n{metadata_lines}"
+
+    return (
+        f"{request.description}\n\n"
+        "Approval links:\n"
+        f"{action_lines}"
+        f"{metadata_section}\n\n"
+        "Alternative: set status to Approved/Resolved and add a comment with the intended action."
+    )
+
+
 class _LazyBotoClient:
     def __init__(self, service_name: str, region_name: str) -> None:
         self._service_name = service_name
@@ -288,6 +311,53 @@ async def _dispatch_teams(
     return _dispatch_ok("teams", message_id=message_id)
 
 
+async def _dispatch_jira(
+    request: HiTLRequest,
+    binding: HitlCallbackBinding,
+) -> HitlChannelDispatchResult:
+    action_urls = {
+        action: _join_query_url(binding.callback_endpoint, binding.token, action)
+        for action in binding.allowed_actions
+    }
+
+    labels = [
+        f"secamo-wf:{binding.workflow_id}",
+        f"secamo-run:{binding.run_id}",
+        "secamo-hitl",
+    ]
+
+    if request.ticket_key:
+        labels.append(f"secamo-parent:{request.ticket_key}")
+
+    description = _render_jira_approval_description(request, action_urls)
+    action_result = await connector_execute_action(
+        request.tenant_id,
+        "jira",
+        "create_ticket",
+        {
+            "title": request.title,
+            "description": description,
+            "labels": labels,
+            "request_field_values": {
+                "summary": request.title,
+                "description": description,
+            },
+            "priority": request.metadata.get("severity"),
+        },
+    )
+
+    payload = action_result.data.payload
+    ticket_ref = str(payload.get("key") or payload.get("issueKey") or payload.get("id") or "").strip()
+
+    activity.logger.info(
+        "[%s] HiTL Jira ticket dispatched workflow_id=%s ticket_ref=%s",
+        request.tenant_id,
+        binding.workflow_id,
+        ticket_ref or "unknown",
+    )
+    return _dispatch_ok("jira", message_id=ticket_ref or None)
+
+
 @activity.defn
 async def request_hitl_approval(
     tenant_id: str,
@@ -309,6 +379,8 @@ async def request_hitl_approval(
             return await _dispatch_email(request, binding)
         if normalized == "teams":
             return await _dispatch_teams(request, binding)
+        if normalized == "jira":
+            return await _dispatch_jira(request, binding)
         return _dispatch_error(channel, "UnsupportedChannel", f"HiTL channel '{channel}' is not supported")
 
     for channel in request.channels:

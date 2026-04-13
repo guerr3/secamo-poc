@@ -36,6 +36,9 @@ class JiraConnector(BaseConnector):
             raise ConnectorConfigurationError("Missing jira_base_url in tenant secrets")
         return self.secrets.jira_base_url.rstrip("/")
 
+    def _uses_jsm_project(self) -> bool:
+        return (self.secrets.project_type or "standard").strip().lower() == "jsm"
+
     @staticmethod
     def _retry_delay_seconds(retry_after_header: str | None, attempt: int) -> float:
         if retry_after_header:
@@ -77,7 +80,7 @@ class JiraConnector(BaseConnector):
                 await asyncio.sleep(self._retry_delay_seconds(response.headers.get("Retry-After"), attempt))
                 continue
 
-            if response.status_code in (400, 401, 403, 404):
+            if response.status_code in (400, 401, 403, 404, 409, 422):
                 raise ConnectorPermanentError(
                     f"Jira request rejected: status={response.status_code} url={url}"
                 )
@@ -214,39 +217,132 @@ class JiraConnector(BaseConnector):
         base_url = self._base_url()
 
         if action in ("create_ticket", "create_issue"):
+            if self._uses_jsm_project():
+                service_desk_id = str(payload.get("service_desk_id") or self.secrets.jsm_service_desk_id or "").strip()
+                request_type_id = str(payload.get("request_type_id") or self.secrets.jsm_request_type_id or "").strip()
+                if not service_desk_id:
+                    raise ConnectorPermanentError(
+                        "Missing jsm_service_desk_id for JSM customer request creation"
+                    )
+                if not request_type_id:
+                    raise ConnectorPermanentError(
+                        "Missing jsm_request_type_id for JSM customer request creation"
+                    )
+
+                request_field_values = payload.get("request_field_values")
+                if not isinstance(request_field_values, dict):
+                    request_field_values = {}
+                request_field_values = {
+                    **request_field_values,
+                    "summary": request_field_values.get("summary") or payload["title"],
+                    "description": request_field_values.get("description") or payload.get("description", ""),
+                }
+
+                request_payload: dict[str, Any] = {
+                    "serviceDeskId": service_desk_id,
+                    "requestTypeId": request_type_id,
+                    "requestFieldValues": request_field_values,
+                }
+                raise_on_behalf_of = payload.get("raise_on_behalf_of")
+                if isinstance(raise_on_behalf_of, str) and raise_on_behalf_of.strip():
+                    request_payload["raiseOnBehalfOf"] = raise_on_behalf_of.strip()
+
+                request_participants = payload.get("request_participants")
+                if isinstance(request_participants, list) and request_participants:
+                    request_payload["requestParticipants"] = [
+                        str(item).strip() for item in request_participants if str(item).strip()
+                    ]
+
+                response = await self._request_with_retry(
+                    "POST",
+                    f"{base_url}/rest/servicedeskapi/request",
+                    json=request_payload,
+                )
+                return response.json()
+
             project_key = str(payload.get("project_key") or self.secrets.project_key or "SOC").strip()
             if not project_key:
                 raise ConnectorPermanentError("Missing Jira project key for ticket creation")
+
+            fields: dict[str, Any] = {
+                "project": {"key": project_key},
+                "summary": payload["title"],
+                "description": self._adf_text(payload.get("description", "")),
+                "issuetype": {"name": payload.get("issue_type", "Task")},
+            }
+            priority = payload.get("priority")
+            if isinstance(priority, str) and priority.strip():
+                fields["priority"] = {"name": priority.strip()}
+            labels = payload.get("labels")
+            if isinstance(labels, list) and labels:
+                fields["labels"] = [str(label) for label in labels if str(label).strip()]
+
             response = await self._request_with_retry(
                 "POST",
                 f"{base_url}/rest/api/3/issue",
-                json={
-                    "fields": {
-                        "project": {"key": project_key},
-                        "summary": payload["title"],
-                        "description": self._adf_text(payload.get("description", "")),
-                        "issuetype": {"name": payload.get("issue_type", "Task")},
-                    }
-                },
+                json={"fields": fields},
             )
             return response.json()
 
         if action in ("update_ticket", "update_issue"):
             issue_key = payload["ticket_id"]
-            await self._request_with_retry(
-                "PUT",
-                f"{base_url}/rest/api/3/issue/{issue_key}",
-                json={
-                    "fields": {
-                        **payload.get("fields", {}),
-                        **(
-                            {"description": self._adf_text(str(payload["fields"]["description"]))}
-                            if isinstance(payload.get("fields", {}).get("description"), str)
-                            else {}
-                        ),
-                    }
-                },
-            )
+
+            raw_fields = payload.get("fields") if isinstance(payload.get("fields"), dict) else {}
+            issue_fields: dict[str, Any] = {}
+            if "summary" in raw_fields:
+                issue_fields["summary"] = raw_fields.get("summary")
+            if "description" in raw_fields:
+                description_value = raw_fields.get("description")
+                issue_fields["description"] = (
+                    self._adf_text(str(description_value)) if isinstance(description_value, str) else description_value
+                )
+            if "labels" in raw_fields:
+                labels_value = raw_fields.get("labels")
+                if isinstance(labels_value, list):
+                    issue_fields["labels"] = [str(label) for label in labels_value if str(label).strip()]
+            if "priority" in raw_fields:
+                priority_value = raw_fields.get("priority")
+                if isinstance(priority_value, str) and priority_value.strip():
+                    issue_fields["priority"] = {"name": priority_value.strip()}
+                elif isinstance(priority_value, dict):
+                    issue_fields["priority"] = priority_value
+
+            if issue_fields:
+                await self._request_with_retry(
+                    "PUT",
+                    f"{base_url}/rest/api/3/issue/{issue_key}",
+                    json={"fields": issue_fields},
+                )
+
+            comment = payload.get("comment")
+            if isinstance(comment, str) and comment.strip():
+                await self._request_with_retry(
+                    "POST",
+                    f"{base_url}/rest/api/3/issue/{issue_key}/comment",
+                    json={"body": self._adf_text(comment.strip())},
+                )
+
+            transition_id = payload.get("transition_id")
+            transition_name = payload.get("transition_name")
+            resolution = payload.get("resolution")
+            if transition_id or transition_name or resolution:
+                resolved_transition_id = str(transition_id).strip() if transition_id else ""
+                if not resolved_transition_id:
+                    resolved_transition_id = await self._resolve_transition_id(
+                        issue_key,
+                        transition_name=str(transition_name) if transition_name else None,
+                    )
+
+                transition_request: dict[str, Any] = {"transition": {"id": resolved_transition_id}}
+                if resolution:
+                    transition_request["fields"] = {"resolution": {"name": str(resolution)}}
+
+                await self._request_with_retry(
+                    "POST",
+                    f"{base_url}/rest/api/3/issue/{issue_key}/transitions",
+                    json=transition_request,
+                )
+
             return {"ticket_id": issue_key, "updated": True}
 
         if action in ("close_ticket", "close_issue"):

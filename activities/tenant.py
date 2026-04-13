@@ -351,6 +351,7 @@ async def get_tenant_secrets(tenant_id: str, secret_type: str) -> TenantSecrets:
             "project_key": parameters.get("project_key"),
             "project_type": parameters.get("project_type", "standard"),
             "jsm_service_desk_id": parameters.get("jsm_service_desk_id"),
+            "jsm_request_type_id": parameters.get("jsm_request_type_id"),
             "virustotal_api_key": parameters.get("virustotal_api_key") or parameters.get("api_key"),
             "abuseipdb_api_key": parameters.get("abuseipdb_api_key") or parameters.get("api_key"),
         }
