@@ -26,6 +26,7 @@ def _generate_temp_password(length: int = 16) -> str:
 
 
 with workflow.unsafe.imports_passed_through():
+    from shared.config import QUEUE_POLLING, QUEUE_USER_LIFECYCLE
     from shared.models import (
         IdentityUser,
         LifecycleAction,
@@ -55,7 +56,7 @@ TIMEOUT = timedelta(seconds=30)
 class IamOnboardingWorkflow:
     """
     WF-01 — User Lifecycle Management (IAM provider-agnostic identity CRUD).
-    Task Queue: iam-graph
+    Task Queue: user-lifecycle
     Actions: create | update | delete | password_reset
     """
 
@@ -100,7 +101,7 @@ class IamOnboardingWorkflow:
                     iteration=0,
                 ),
                 workflow_id=polling_workflow_id,
-                task_queue="poller",
+                task_queue=QUEUE_POLLING,
                 parent_close_policy=workflow.ParentClosePolicy.ABANDON,
             )
 
@@ -179,7 +180,7 @@ class IamOnboardingWorkflow:
                     user_email=existing_user.email,
                 ),
                 id=f"{workflow.info().workflow_id}-deprovision",
-                task_queue="iam-graph",
+                task_queue=QUEUE_USER_LIFECYCLE,
             )
             result_msg = f"Gebruiker '{existing_user.email}' uitgeschakeld."
 

@@ -7,6 +7,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 from activities.tenant import get_tenant_config, validate_tenant_context
+from shared.config import QUEUE_EDR, QUEUE_TICKETING
 from shared.models import TenantConfig, ThreatIntelResult, TicketResult
 
 
@@ -36,7 +37,7 @@ async def resolve_threat_intel(
     indicator: str,
     config: TenantConfig,
     *,
-    task_queue: str = "soc-defender",
+    task_queue: str = QUEUE_EDR,
 ) -> ThreatIntelResult:
     """Run threat-intel enrichment through child workflow or return disabled fallback."""
     if not config.threat_intel_enabled:
@@ -71,7 +72,7 @@ async def create_soc_ticket(
     description: str,
     severity: str,
     source_workflow: str,
-    task_queue: str = "soc-defender",
+    task_queue: str = QUEUE_TICKETING,
 ) -> TicketResult:
     """Create a SOC ticket via reusable child workflow orchestration."""
     from shared.models import TicketCreationRequest

@@ -17,7 +17,7 @@ def test_route_worker_parity_fails_for_unregistered_workflow(mocker) -> None:
     registry.register(
         "microsoft_graph",
         "defender.alert",
-        (WorkflowRoute(workflow_name="NotRegisteredWorkflow", task_queue="soc-defender"),),
+        (WorkflowRoute(workflow_name="NotRegisteredWorkflow", task_queue="edr"),),
     )
     mocker.patch("workers.run_worker.build_default_route_registry", return_value=registry)
 

@@ -19,6 +19,15 @@ This walkthrough is the operator guide for the `terraform/environments/temporal-
 
 ## Deploy
 
+Preflight before planning/apply:
+
+```bash
+cd terraform/modules/ingress/layers/ingress
+./build.sh
+```
+
+This rebuilds the ingress Lambda layer copy of `shared/` modules so Terraform preconditions in `terraform/modules/ingress/main.tf` do not fail on drift.
+
 ```bash
 cd terraform/environments/temporal-test
 

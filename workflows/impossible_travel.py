@@ -4,6 +4,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from shared.config import QUEUE_EDR, QUEUE_INTERACTIONS
     from shared.models import (
         ApprovalDecision,
         IdentityUser,
@@ -28,7 +29,7 @@ TIMEOUT = timedelta(seconds=30)
 class ImpossibleTravelWorkflow:
     """
     WF-05 — Impossible Travel Alert Triage (Advanced HITL).
-    Task Queue: soc-defender
+    Task Queue: edr
 
     Flow: identity_get_user → threat_intel_lookup → provider_get_alerts →
           ticket_create → teams_send_adaptive_card → wait_for_approval →
@@ -139,7 +140,7 @@ class ImpossibleTravelWorkflow:
                 device_id=None,
             ),
             id=f"{workflow.info().workflow_id}-hitl",
-            task_queue="soc-defender",
+            task_queue=QUEUE_INTERACTIONS,
         )
 
         if decision is None:
@@ -168,7 +169,7 @@ class ImpossibleTravelWorkflow:
                 recent_alert_count=len(recent_alerts),
             ),
             id=f"{workflow.info().workflow_id}-incident-response",
-            task_queue="soc-defender",
+            task_queue=QUEUE_EDR,
         )
 
         result_msg = f"WF-05 afgerond — {action_result}"
