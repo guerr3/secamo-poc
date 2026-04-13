@@ -72,5 +72,5 @@ variable "evidence_bucket_name" {
 variable "secamo_sender_email" {
   description = "Sender email used by communication and HiTL email activities"
   type        = string
-  default     = "noreply@secamo.local"
+  default     = "secamo_poc@42xzkn.onmicrosoft.com"
 }

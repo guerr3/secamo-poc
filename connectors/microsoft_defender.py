@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+import ipaddress
 import secrets
 import string
 from typing import Any
@@ -188,6 +189,104 @@ class MicrosoftGraphConnector(BaseConnector):
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
         return "".join(secrets.choice(alphabet) for _ in range(length))
 
+    @staticmethod
+    def _coerce_non_empty_str(value: Any) -> str | None:
+        if isinstance(value, str):
+            stripped = value.strip()
+            return stripped or None
+        return None
+
+    @classmethod
+    def _first_non_empty_str(cls, *values: Any) -> str | None:
+        for value in values:
+            candidate = cls._coerce_non_empty_str(value)
+            if candidate is not None:
+                return candidate
+        return None
+
+    @staticmethod
+    def _is_valid_ip(value: str | None) -> bool:
+        if not value:
+            return False
+        try:
+            ipaddress.ip_address(value)
+            return True
+        except ValueError:
+            return False
+
+    @classmethod
+    def _extract_alert_evidence_fields(cls, item: dict[str, Any]) -> dict[str, str | None]:
+        source_ip: str | None = None
+        destination_ip: str | None = None
+        device_id: str | None = None
+        user_email: str | None = None
+
+        evidence_items = item.get("evidence")
+        if not isinstance(evidence_items, list):
+            evidence_items = []
+
+        for evidence in evidence_items:
+            if not isinstance(evidence, dict):
+                continue
+
+            evidence_type = str(evidence.get("@odata.type") or "").lower()
+
+            if "ipevidence" in evidence_type:
+                ip_candidate = cls._first_non_empty_str(
+                    evidence.get("ipAddress"),
+                    evidence.get("ipV4"),
+                    evidence.get("ipV6"),
+                    evidence.get("address"),
+                )
+                if source_ip is None and cls._is_valid_ip(ip_candidate):
+                    source_ip = ip_candidate
+                continue
+
+            if "networkconnectionevidence" in evidence_type:
+                source_candidate = cls._first_non_empty_str(
+                    evidence.get("sourceAddress"),
+                    evidence.get("sourceIpAddress"),
+                    evidence.get("ipAddress"),
+                )
+                destination_candidate = cls._first_non_empty_str(
+                    evidence.get("destinationAddress"),
+                    evidence.get("destinationIpAddress"),
+                )
+                if source_ip is None and cls._is_valid_ip(source_candidate):
+                    source_ip = source_candidate
+                if destination_ip is None and cls._is_valid_ip(destination_candidate):
+                    destination_ip = destination_candidate
+                continue
+
+            if "deviceevidence" in evidence_type:
+                device_candidate = cls._first_non_empty_str(
+                    evidence.get("deviceId"),
+                    evidence.get("mdeDeviceId"),
+                    evidence.get("azureAdDeviceId"),
+                    evidence.get("aadDeviceId"),
+                )
+                if device_id is None and device_candidate is not None:
+                    device_id = device_candidate
+                continue
+
+            if "userevidence" in evidence_type:
+                user_account = evidence.get("userAccount")
+                user_candidate = cls._first_non_empty_str(
+                    evidence.get("userPrincipalName"),
+                    evidence.get("email"),
+                    user_account.get("userPrincipalName") if isinstance(user_account, dict) else None,
+                    user_account.get("emailAddress") if isinstance(user_account, dict) else None,
+                )
+                if user_email is None and user_candidate is not None:
+                    user_email = user_candidate
+
+        return {
+            "source_ip": source_ip,
+            "destination_ip": destination_ip,
+            "device_id": device_id,
+            "user_email": user_email,
+        }
+
     def _map_event(self, item: dict[str, Any], resource_type: str, occurred_field: str, event_type: str, provider_event_type: str) -> Envelope:
         occurred_at = self._parse_iso_datetime(item.get(occurred_field))
         if occurred_at is None:
@@ -213,6 +312,7 @@ class MicrosoftGraphConnector(BaseConnector):
                 },
             )
         else:
+            evidence_fields = self._extract_alert_evidence_fields(item)
             payload = DefenderDetectionFindingEvent(
                 event_type="defender.alert",
                 activity_id=2004,
@@ -225,15 +325,10 @@ class MicrosoftGraphConnector(BaseConnector):
                 vendor_extensions={
                     "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
                     "resource_type": VendorExtension(source=self.provider, value=resource_type),
-                    "source_ip": VendorExtension(source=self.provider, value=item.get("ipAddress")),
-                    "device_id": VendorExtension(
-                        source=self.provider,
-                        value=(item.get("deviceEvidence") or [{}])[0].get("deviceId") if item.get("deviceEvidence") else None,
-                    ),
-                    "user_email": VendorExtension(
-                        source=self.provider,
-                        value=(item.get("userStates") or [{}])[0].get("userPrincipalName") if item.get("userStates") else None,
-                    ),
+                    "source_ip": VendorExtension(source=self.provider, value=evidence_fields["source_ip"]),
+                    "destination_ip": VendorExtension(source=self.provider, value=evidence_fields["destination_ip"]),
+                    "device_id": VendorExtension(source=self.provider, value=evidence_fields["device_id"]),
+                    "user_email": VendorExtension(source=self.provider, value=evidence_fields["user_email"]),
                 },
             )
 
@@ -284,6 +379,8 @@ class MicrosoftGraphConnector(BaseConnector):
             "$top": str(top),
             "$filter": combined_filter,
         }
+        if resource_type == "defender_alerts":
+            params["$expand"] = "evidence"
         if bool(resource_config.get("supports_orderby")):
             params["$orderby"] = f"{filter_field} asc"
 
@@ -330,23 +427,27 @@ class MicrosoftGraphConnector(BaseConnector):
             description = str(payload.get("description") or "")
             user_email = str(payload.get("user_email") or "").strip() or None
             device_id = str(payload.get("device_id") or "").strip() or None
+            alert_body: dict[str, Any] = {}
+            evidence_fields = {
+                "source_ip": None,
+                "destination_ip": None,
+                "device_id": None,
+                "user_email": None,
+            }
 
             if alert_id:
-                alert_url = f"https://graph.microsoft.com/v1.0/security/alerts_v2/{quote(alert_id)}"
+                alert_url = f"https://graph.microsoft.com/v1.0/security/alerts_v2/{quote(alert_id)}?$expand=evidence"
                 try:
                     alert_response = await self._request_with_retry("GET", alert_url, headers=headers)
                     alert_body = alert_response.json()
+                    evidence_fields = self._extract_alert_evidence_fields(alert_body)
                     severity = str(alert_body.get("severity") or severity).lower()
                     title = str(alert_body.get("title") or title)
                     description = str(alert_body.get("description") or description)
                     if user_email is None:
-                        states = alert_body.get("userStates") or []
-                        if states:
-                            user_email = str((states[0] or {}).get("userPrincipalName") or "").strip() or None
+                        user_email = evidence_fields["user_email"]
                     if device_id is None:
-                        evidence = alert_body.get("deviceEvidence") or []
-                        if evidence:
-                            device_id = str((evidence[0] or {}).get("deviceId") or "").strip() or None
+                        device_id = evidence_fields["device_id"]
                 except ConnectorPermanentError as exc:
                     if self._connector_error_status(exc) != 404:
                         raise
@@ -399,6 +500,9 @@ class MicrosoftGraphConnector(BaseConnector):
                 "device_display_name": device_display_name,
                 "device_os": device_os,
                 "device_compliance": device_compliance,
+                "source_ip": evidence_fields["source_ip"] if alert_id else None,
+                "destination_ip": evidence_fields["destination_ip"] if alert_id else None,
+                "evidence": alert_body.get("evidence", []) if alert_id else [],
             }
 
         if action in {"list_user_alerts", "get_user_alerts"}:

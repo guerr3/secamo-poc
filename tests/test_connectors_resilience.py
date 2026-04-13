@@ -120,6 +120,131 @@ async def test_graph_fetch_events_retries_on_429(mocker, graph_secrets):
 
     assert len(events) == 1
     assert len(calls) == 2
+    assert calls[0]["params"]["$expand"] == "evidence"
+
+
+@pytest.mark.asyncio
+async def test_graph_fetch_events_non_defender_does_not_expand_evidence(mocker, graph_secrets):
+    queue = [
+        _Resp(
+            200,
+            body={
+                "value": [
+                    {
+                        "id": "s1",
+                        "createdDateTime": "2026-03-22T00:00:00Z",
+                        "userPrincipalName": "alice@example.com",
+                        "ipAddress": "10.0.0.1",
+                    }
+                ]
+            },
+        ),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    events = await connector.fetch_events({"resource_type": "entra_signin_logs", "top": 1})
+
+    assert len(events) == 1
+    assert "$expand" not in calls[0]["params"]
+
+
+@pytest.mark.asyncio
+async def test_graph_fetch_events_maps_typed_evidence_fields(mocker, graph_secrets):
+    queue = [
+        _Resp(
+            200,
+            body={
+                "value": [
+                    {
+                        "id": "a-evidence-1",
+                        "createdDateTime": "2026-03-22T00:00:00Z",
+                        "severity": "high",
+                        "title": "Alert",
+                        "description": "Body",
+                        "evidence": [
+                            {
+                                "@odata.type": "#microsoft.graph.security.ipEvidence",
+                                "ipAddress": "8.8.8.8",
+                            },
+                            {
+                                "@odata.type": "#microsoft.graph.security.networkConnectionEvidence",
+                                "sourceAddress": "1.2.3.4",
+                                "destinationAddress": "5.6.7.8",
+                            },
+                            {
+                                "@odata.type": "#microsoft.graph.security.deviceEvidence",
+                                "deviceId": "device-123",
+                            },
+                            {
+                                "@odata.type": "#microsoft.graph.security.userEvidence",
+                                "userPrincipalName": "alice@example.com",
+                            },
+                        ],
+                    }
+                ]
+            },
+        ),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    events = await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
+
+    payload = events[0].payload
+    assert payload.vendor_extensions["source_ip"].value == "8.8.8.8"
+    assert payload.vendor_extensions["destination_ip"].value == "5.6.7.8"
+    assert payload.vendor_extensions["device_id"].value == "device-123"
+    assert payload.vendor_extensions["user_email"].value == "alice@example.com"
+
+
+@pytest.mark.asyncio
+async def test_graph_fetch_events_handles_empty_evidence_fields(mocker, graph_secrets):
+    queue = [
+        _Resp(
+            200,
+            body={
+                "value": [
+                    {
+                        "id": "a-evidence-2",
+                        "createdDateTime": "2026-03-22T00:00:00Z",
+                        "severity": "medium",
+                        "title": "Alert without evidence",
+                        "description": "Body",
+                        "evidence": [],
+                    }
+                ]
+            },
+        ),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    events = await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
+
+    payload = events[0].payload
+    assert payload.vendor_extensions["source_ip"].value is None
+    assert payload.vendor_extensions["destination_ip"].value is None
+    assert payload.vendor_extensions["device_id"].value is None
+    assert payload.vendor_extensions["user_email"].value is None
 
 
 @pytest.mark.asyncio

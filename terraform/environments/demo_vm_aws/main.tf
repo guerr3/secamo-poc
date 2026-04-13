@@ -31,6 +31,10 @@ data "aws_ami" "windows_server_2022" {
   }
 }
 
+data "aws_key_pair" "windows_access" {
+  key_name = var.key_pair_name
+}
+
 resource "aws_vpc" "demo_vm" {
   cidr_block           = var.vpc_cidr
   enable_dns_support   = true
@@ -147,8 +151,8 @@ resource "aws_instance" "windows" {
   associate_public_ip_address = var.public_ip_enabled
   vpc_security_group_ids      = [aws_security_group.windows_vm.id]
   iam_instance_profile        = aws_iam_instance_profile.vm.name
-  key_name                    = var.key_pair_name != "" ? var.key_pair_name : null
-  get_password_data           = var.key_pair_name != ""
+  key_name                    = data.aws_key_pair.windows_access.key_name
+  get_password_data           = true
 
   root_block_device {
     volume_type           = "gp3"

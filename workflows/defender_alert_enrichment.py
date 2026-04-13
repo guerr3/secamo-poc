@@ -1,9 +1,12 @@
 from datetime import timedelta
+import ipaddress
+from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
+    from activities.edr import edr_enrich_alert
     from shared.models import (
         AlertEnrichmentRequest,
         AlertEnrichmentResult,
@@ -29,6 +32,51 @@ class DefenderAlertEnrichmentWorkflow:
     WF-02 — Defender Alert Enrichment & Ticketing (SOC automation).
     Task Queue: soc-defender
     """
+
+    @staticmethod
+    def _extract_ip_from_evidence_value(value: Any) -> str | None:
+        if not isinstance(value, str):
+            return None
+        candidate = value.strip()
+        if not candidate:
+            return None
+        try:
+            ipaddress.ip_address(candidate)
+            return candidate
+        except ValueError:
+            return None
+
+    @classmethod
+    def _extract_ips_from_evidence(cls, enriched_payload: dict[str, Any]) -> tuple[str | None, str | None]:
+        evidence_items = enriched_payload.get("evidence")
+        if not isinstance(evidence_items, list):
+            return (None, None)
+
+        source_ip: str | None = None
+        destination_ip: str | None = None
+        for evidence in evidence_items:
+            if not isinstance(evidence, dict):
+                continue
+            evidence_type = str(evidence.get("@odata.type") or "").lower()
+            if "ipevidence" in evidence_type and source_ip is None:
+                source_ip = cls._extract_ip_from_evidence_value(evidence.get("ipAddress"))
+                continue
+            if "networkconnectionevidence" in evidence_type:
+                if source_ip is None:
+                    source_ip = (
+                        cls._extract_ip_from_evidence_value(evidence.get("sourceAddress"))
+                        or cls._extract_ip_from_evidence_value(evidence.get("sourceIpAddress"))
+                    )
+                if destination_ip is None:
+                    destination_ip = (
+                        cls._extract_ip_from_evidence_value(evidence.get("destinationAddress"))
+                        or cls._extract_ip_from_evidence_value(evidence.get("destinationIpAddress"))
+                    )
+
+            if source_ip and destination_ip:
+                break
+
+        return (source_ip, destination_ip)
 
     @workflow.run
     async def run(self, event: Envelope) -> str:
@@ -56,6 +104,23 @@ class DefenderAlertEnrichmentWorkflow:
             timeout=TIMEOUT,
         )
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
+
+        if not source_ip and not destination_ip and payload.alert_id:
+            try:
+                enriched_payload = await workflow.execute_activity(
+                    edr_enrich_alert,
+                    args=[event.tenant_id, payload.alert_id, None],
+                    start_to_close_timeout=TIMEOUT,
+                    retry_policy=runtime_retry,
+                )
+            except Exception as exc:
+                workflow.logger.warning("WF-02 fallback enrich for IP failed, continuing: %s", exc)
+            else:
+                recovered_source_ip, recovered_destination_ip = self._extract_ips_from_evidence(enriched_payload)
+                if source_ip is None:
+                    source_ip = recovered_source_ip
+                if destination_ip is None:
+                    destination_ip = recovered_destination_ip
 
         ticketing_enabled = config.auto_ticket_creation
 

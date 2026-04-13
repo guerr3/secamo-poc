@@ -82,9 +82,13 @@ variable "root_volume_size_gb" {
 }
 
 variable "key_pair_name" {
-  description = "Optional EC2 key pair name for Windows password decryption"
+  description = "EC2 key pair name required for Windows Administrator password retrieval"
   type        = string
-  default     = ""
+
+  validation {
+    condition     = trimspace(var.key_pair_name) != ""
+    error_message = "key_pair_name is required. AWS can only provide the Windows Administrator password when the instance is launched with a key pair."
+  }
 }
 
 variable "windows_ami_id" {

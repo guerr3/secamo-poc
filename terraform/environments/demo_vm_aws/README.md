@@ -60,6 +60,20 @@ terraform apply -var-file="demo_vm_aws.tfvars"
 1. Verify port 3389 is reachable only from rdp_allowed_cidr.
 1. Start an SSM session to verify managed-instance connectivity.
 
+## Important: Windows password retrieval behavior
+
+AWS only returns the Windows Administrator password for instances launched with a key pair.
+
+- If you launch without key_pair_name, the EC2 console cannot decrypt or show the Windows password.
+- This environment now requires key_pair_name to prevent that misconfiguration.
+- For an already-created instance without a key pair, recreate the instance with a valid key pair:
+
+```powershell
+terraform apply -var-file="demo_vm_aws.tfvars" -replace="aws_instance.windows"
+```
+
+After the replacement instance is running, use the EC2 console Get Windows Password action with the matching private key, or use AWS CLI get-password-data with your private key.
+
 ## Manual Microsoft Defender onboarding
 
 This environment intentionally does not auto-onboard the VM into Defender for Endpoint. After deployment:

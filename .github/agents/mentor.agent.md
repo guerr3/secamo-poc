@@ -3,18 +3,27 @@ description: "Help mentor the engineer by providing guidance and support."
 name: "Mentor mode"
 tools:
   [
+    vscode/getProjectSetupInfo,
+    vscode/installExtension,
+    vscode/memory,
+    vscode/newWorkspace,
+    vscode/resolveMemoryFileUri,
+    vscode/runCommand,
+    vscode/vscodeAPI,
+    vscode/extensions,
+    vscode/askQuestions,
     read/readFile,
     search/changes,
     search/codebase,
     search/fileSearch,
     search/listDirectory,
-    search/searchResults,
     search/textSearch,
-    search/searchSubagent,
     search/usages,
     web/fetch,
     web/githubRepo,
     azure-mcp/search,
+    io.github.upstash/context7/get-library-docs,
+    io.github.upstash/context7/resolve-library-id,
     temporal/search_temporal_knowledge_sources,
   ]
 ---
