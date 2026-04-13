@@ -451,6 +451,45 @@ async def test_graph_enrich_alert_context_404_returns_payload_defaults(mocker, g
 
 
 @pytest.mark.asyncio
+async def test_graph_enrich_alert_context_device_lookup_400_is_best_effort(mocker, graph_secrets):
+    queue = [
+        _Resp(
+            200,
+            body={
+                "id": "a1",
+                "severity": "medium",
+                "title": "Alert title",
+                "description": "Alert body",
+                "evidence": [
+                    {
+                        "@odata.type": "#microsoft.graph.security.deviceEvidence",
+                        "deviceId": "426eb33370cafb6318ad109b4b0e89b21fd3ae02",
+                    }
+                ],
+            },
+        ),
+        _Resp(400, body={"error": {"message": "Bad Request"}}),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    result = await connector.execute_action("enrich_alert_context", {"alert_id": "a1"})
+
+    assert result["success"] is True
+    assert result["alert_id"] == "a1"
+    assert result["device_display_name"] is None
+    assert result["device_os"] is None
+    assert result["device_compliance"] is None
+    assert calls[1]["url"].startswith("https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/")
+
+
+@pytest.mark.asyncio
 async def test_graph_isolate_uses_defender_token(mocker, graph_secrets):
     queue = [_Resp(200, body={"status": "submitted"}, content=b'{"status":"submitted"}')]
     calls: list[dict[str, Any]] = []

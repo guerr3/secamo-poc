@@ -627,7 +627,9 @@ class MicrosoftGraphConnector(BaseConnector):
                     elif "isCompliant" in device_body:
                         device_compliance = "compliant" if bool(device_body.get("isCompliant")) else "noncompliant"
                 except ConnectorPermanentError as exc:
-                    if self._connector_error_status(exc) != 404:
+                    # Some tenants return 400 for non-Intune device identifiers.
+                    # Device lookup is enrichment-only, so keep best-effort behavior.
+                    if self._connector_error_status(exc) not in {400, 404}:
                         raise
 
             return {
