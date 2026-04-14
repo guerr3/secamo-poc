@@ -26,8 +26,10 @@ def _generate_temp_password(length: int = 16) -> str:
 
 
 with workflow.unsafe.imports_passed_through():
-    from shared.config import QUEUE_POLLING, QUEUE_USER_LIFECYCLE
+    from shared.config import QUEUE_INTERACTIONS, QUEUE_POLLING, QUEUE_USER_LIFECYCLE, SECAMO_SENDER_EMAIL
     from shared.models import (
+        HiTLApprovalRequest,
+        HiTLRequest,
         IdentityUser,
         LifecycleAction,
         PollingManagerInput,
@@ -44,12 +46,48 @@ with workflow.unsafe.imports_passed_through():
         identity_update_user,
     )
     from activities.audit import create_audit_log
+    from workflows.child.hitl_approval import HiTLApprovalWorkflow
     from workflows.polling_manager import PollingManagerWorkflow
     from workflows.child.user_deprovisioning import UserDeprovisioningWorkflow
 
 # ── Module-level constants ────────────────────────────────────
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
+LICENSE_APPROVE_ACTION = "approve_license"
+LICENSE_REJECT_ACTION = "dismiss"
+
+
+def _build_license_approval_request(
+    *,
+    tenant_id: str,
+    workflow_id: str,
+    user_id: str,
+    user_email: str,
+    license_sku: str,
+    reviewer_email: str,
+    timeout_hours: int,
+) -> HiTLRequest:
+    return HiTLRequest(
+        workflow_id=workflow_id,
+        run_id="",
+        tenant_id=tenant_id,
+        title=f"License approval required for {user_email}",
+        description=(
+            f"Approve or reject license allocation for user {user_email}. "
+            f"Requested license SKU: {license_sku}."
+        ),
+        allowed_actions=[LICENSE_APPROVE_ACTION, LICENSE_REJECT_ACTION],
+        reviewer_email=reviewer_email,
+        channels=["email"],
+        timeout_hours=timeout_hours,
+        metadata={
+            "workflow": "WF-01",
+            "stage": "license_approval",
+            "user_id": user_id,
+            "user_email": user_email,
+            "license_sku": license_sku,
+        },
+    )
 
 
 @workflow.defn
@@ -130,21 +168,62 @@ class IamOnboardingWorkflow:
                     retry_policy=runtime_retry,
                 )
 
-                # Optioneel: licentie toekennen
-                if user_data.get("license_sku"):
-                    await workflow.execute_activity(
-                        identity_assign_license,
-                        args=[
-                            event.tenant_id,
-                            new_user.user_id,
-                            user_data["license_sku"],
-                        ],
-                        start_to_close_timeout=TIMEOUT,
-                        retry_policy=runtime_retry,
+                license_msg = ""
+                license_sku = str(user_data.get("license_sku") or "").strip()
+
+                if license_sku:
+                    approval_request = _build_license_approval_request(
+                        tenant_id=event.tenant_id,
+                        workflow_id=workflow.info().workflow_id,
+                        user_id=new_user.user_id,
+                        user_email=new_user.email,
+                        license_sku=license_sku,
+                        reviewer_email=SECAMO_SENDER_EMAIL,
+                        timeout_hours=config.hitl_timeout_hours,
                     )
+
+                    decision = await workflow.execute_child_workflow(
+                        HiTLApprovalWorkflow.run,
+                        HiTLApprovalRequest(
+                            tenant_id=event.tenant_id,
+                            hitl_request=approval_request,
+                            hitl_timeout_hours=config.hitl_timeout_hours,
+                            auto_isolate_on_timeout=False,
+                            escalation_enabled=False,
+                            edr_provider=config.edr_provider,
+                            ticketing_provider=config.ticketing_provider,
+                            device_id=None,
+                        ),
+                        id=f"{workflow.info().workflow_id}-license-approval",
+                        task_queue=QUEUE_INTERACTIONS,
+                    )
+
+                    if decision and decision.approved and decision.action == LICENSE_APPROVE_ACTION:
+                        await workflow.execute_activity(
+                            identity_assign_license,
+                            args=[
+                                event.tenant_id,
+                                new_user.user_id,
+                                license_sku,
+                            ],
+                            start_to_close_timeout=TIMEOUT,
+                            retry_policy=runtime_retry,
+                        )
+                        license_msg = (
+                            f" Licentie '{license_sku}' goedgekeurd en toegekend."
+                        )
+                    elif decision is None:
+                        license_msg = (
+                            f" Licentietoekenning voor '{license_sku}' in afwachting (timeout)."
+                        )
+                    else:
+                        license_msg = (
+                            f" Licentietoekenning voor '{license_sku}' afgewezen."
+                        )
 
                 result_msg = (
                     f"Gebruiker '{new_user.email}' aangemaakt (id={new_user.user_id})."
+                    f"{license_msg}"
                 )
 
         elif action == LifecycleAction.UPDATE:
