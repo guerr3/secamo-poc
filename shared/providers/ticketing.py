@@ -4,6 +4,7 @@ from typing import Any
 
 from connectors.base import BaseConnector
 from shared.models import TicketData, TicketResult
+from shared.providers.contracts import TenantSecrets
 
 
 class ConnectorTicketingProvider:
@@ -138,3 +139,33 @@ class ConnectorTicketingProvider:
             "created": fields.get("created", ""),
             "provider": self._ticketing_provider,
         }
+
+
+async def maybe_provision_ticketing_tenant(
+    tenant_id: str,
+    secret_type: str,
+    secrets: TenantSecrets,
+    *,
+    provider: str = "jira",
+) -> TenantSecrets:
+    """Optionally bootstrap provider-managed ticketing resources for a tenant.
+
+    Provisioning is currently only required for Jira Service Management tenants.
+    Other providers return secrets unchanged.
+    """
+    if secret_type != "ticketing":
+        return secrets
+
+    if provider.strip().lower() != "jira":
+        return secrets
+
+    if (secrets.project_type or "standard").strip().lower() != "jsm":
+        return secrets
+
+    if not secrets.jira_base_url or not secrets.jira_email or not secrets.jira_api_token:
+        return secrets
+
+    from connectors.jira_provisioner import JiraProvisioner
+
+    provisioner = JiraProvisioner()
+    return await provisioner.provision_jsm_tenant(tenant_id, secrets)

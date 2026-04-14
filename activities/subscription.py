@@ -9,17 +9,27 @@ from __future__ import annotations
 from temporalio import activity
 
 from activities._tenant_secrets import load_tenant_secrets
+from activities.tenant import get_tenant_config
 from shared.models.subscriptions import SubscriptionConfig, SubscriptionState
 from shared.providers.factory import get_subscription_provider
+from shared.providers.types import secret_type_for_provider
 from shared.providers.subscription import lookup_subscription_metadata_record
 
 
 async def _get_provider(tenant_id: str, secret_type: str):
-    secrets = load_tenant_secrets(tenant_id, secret_type or "graph")
+    config = await get_tenant_config(tenant_id)
+    provider_name = config.iam_provider
+    resolved_secret_type = secret_type or "graph"
+    try:
+        resolved_secret_type = secret_type_for_provider(provider_name)
+    except ValueError:
+        resolved_secret_type = secret_type or "graph"
+
+    secrets = load_tenant_secrets(tenant_id, resolved_secret_type)
     return await get_subscription_provider(
         tenant_id,
         secrets,
-        provider="microsoft_defender",
+        provider=provider_name,
     )
 
 

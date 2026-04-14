@@ -238,9 +238,12 @@ async def _dispatch_email(
             non_retryable=True,
         )
 
+    cfg = await get_tenant_config(request.tenant_id)
+    email_provider = cfg.edr_provider
+
     action_result = await connector_execute_action(
         request.tenant_id,
-        "microsoft_defender",
+        email_provider,
         "send_email",
         {
             "sender": SECAMO_SENDER_EMAIL,
@@ -311,9 +314,11 @@ async def _dispatch_teams(
     return _dispatch_ok("teams", message_id=message_id)
 
 
-async def _dispatch_jira(
+async def _dispatch_ticketing(
     request: HiTLRequest,
     binding: HitlCallbackBinding,
+    *,
+    channel_name: str,
 ) -> HitlChannelDispatchResult:
     action_urls = {
         action: _join_query_url(binding.callback_endpoint, binding.token, action)
@@ -329,10 +334,13 @@ async def _dispatch_jira(
     if request.ticket_key:
         labels.append(f"secamo-parent:{request.ticket_key}")
 
+    cfg = await get_tenant_config(request.tenant_id)
+    ticketing_provider = cfg.ticketing_provider
+
     description = _render_jira_approval_description(request, action_urls)
     action_result = await connector_execute_action(
         request.tenant_id,
-        "jira",
+        ticketing_provider,
         "create_ticket",
         {
             "title": request.title,
@@ -350,12 +358,20 @@ async def _dispatch_jira(
     ticket_ref = str(payload.get("key") or payload.get("issueKey") or payload.get("id") or "").strip()
 
     activity.logger.info(
-        "[%s] HiTL Jira ticket dispatched workflow_id=%s ticket_ref=%s",
+        "[%s] HiTL ticket dispatched workflow_id=%s provider=%s ticket_ref=%s",
         request.tenant_id,
         binding.workflow_id,
+        ticketing_provider,
         ticket_ref or "unknown",
     )
-    return _dispatch_ok("jira", message_id=ticket_ref or None)
+    return _dispatch_ok(channel_name, message_id=ticket_ref or None)
+
+
+async def _dispatch_jira(
+    request: HiTLRequest,
+    binding: HitlCallbackBinding,
+) -> HitlChannelDispatchResult:
+    return await _dispatch_ticketing(request, binding, channel_name="jira")
 
 
 @activity.defn
@@ -381,6 +397,8 @@ async def request_hitl_approval(
             return await _dispatch_teams(request, binding)
         if normalized == "jira":
             return await _dispatch_jira(request, binding)
+        if normalized == "ticketing":
+            return await _dispatch_ticketing(request, binding, channel_name="ticketing")
         return _dispatch_error(channel, "UnsupportedChannel", f"HiTL channel '{channel}' is not supported")
 
     for channel in request.channels:

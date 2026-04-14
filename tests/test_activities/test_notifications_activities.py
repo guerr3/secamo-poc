@@ -4,54 +4,60 @@ import pytest
 from temporalio.exceptions import ApplicationError
 
 from activities.communications import email_send, teams_send_adaptive_card, teams_send_notification
-from shared.providers.contracts import TenantSecrets
-
-
-class _Resp:
-    def __init__(self, status: int, headers: dict | None = None):
-        self.status_code = status
-        self.headers = headers or {}
-
-
-class _Client:
-    def __init__(self, resp: _Resp):
-        self.resp = resp
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc, tb):
-        return False
-
-    async def post(self, *args, **kwargs):
-        return self.resp
 
 
 @pytest.mark.asyncio
 async def test_teams_send_notification_happy(mocker):
-    mocker.patch("activities.communications.httpx.AsyncClient", return_value=_Client(_Resp(200, {"x-ms-request-id": "m1"})))
+    provider = mocker.AsyncMock()
+    provider.send_message.return_value = "m1"
+    mocker.patch(
+        "activities.communications._resolve_chatops_target",
+        new=mocker.AsyncMock(return_value=(provider, "alerts")),
+    )
+
     res = await teams_send_notification("t1", "https://example.webhook", "hello")
     assert res.success is True
+    assert res.message_id == "m1"
 
 
 @pytest.mark.asyncio
-async def test_teams_send_notification_loads_fallback_webhook_from_tenant_secrets(mocker):
-    mocker.patch("activities._tenant_secrets.load_tenant_secrets", return_value=TenantSecrets(client_id="c", client_secret="s", tenant_azure_id="t", teams_webhook_url="https://fallback.webhook"))
-    mocker.patch("activities.communications.httpx.AsyncClient", return_value=_Client(_Resp(200, {"x-ms-request-id": "m2"})))
+async def test_teams_send_notification_uses_configured_chatops_target(mocker):
+    provider = mocker.AsyncMock()
+    provider.send_message.return_value = "m2"
+    resolver = mocker.patch(
+        "activities.communications._resolve_chatops_target",
+        new=mocker.AsyncMock(return_value=(provider, "soc-alerts")),
+    )
+
     res = await teams_send_notification("t1", "", "hello")
     assert res.success is True
+    resolver.assert_awaited_once_with("t1", "")
+    provider.send_message.assert_awaited_once()
 
 
 @pytest.mark.asyncio
 async def test_teams_send_adaptive_card_error(mocker):
-    mocker.patch("activities.communications.httpx.AsyncClient", return_value=_Client(_Resp(500)))
+    provider = mocker.AsyncMock()
+    provider.send_message.side_effect = RuntimeError("boom")
+    mocker.patch(
+        "activities.communications._resolve_chatops_target",
+        new=mocker.AsyncMock(return_value=(provider, "alerts")),
+    )
+
     with pytest.raises(ApplicationError):
         await teams_send_adaptive_card("t1", "https://example.webhook", {"type": "AdaptiveCard"})
 
 
 @pytest.mark.asyncio
 async def test_email_send_happy(mocker):
-    mocker.patch("activities.communications._load_graph_secrets_async", return_value=TenantSecrets(client_id="c", client_secret="s", tenant_azure_id="t"))
+    mocker.patch(
+        "activities.communications.get_tenant_config",
+        new=mocker.AsyncMock(return_value=mocker.Mock(edr_provider="microsoft_defender")),
+    )
+    mocker.patch(
+        "activities.communications._load_secret_bundle_async",
+        new=mocker.AsyncMock(return_value={"client_id": "c"}),
+    )
     mocker.patch(
         "activities.communications.connector_execute_action",
         new=mocker.AsyncMock(

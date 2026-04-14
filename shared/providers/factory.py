@@ -281,7 +281,11 @@ async def get_subscription_provider(
 ) -> SubscriptionProvider:
     """Resolve and cache the subscription provider for a tenant."""
     provider_type = provider.strip().lower() or "microsoft_defender"
-    connector_provider = "microsoft_defender" if provider_type == "microsoft_graph" else provider_type
+    connector_provider = (
+        "microsoft_defender"
+        if provider_type in {"microsoft_graph", "entra_id"}
+        else provider_type
+    )
     cache_key = f"subscription:{tenant_id}:{connector_provider}"
     cached = _SUBSCRIPTION_PROVIDER_CACHE.get(cache_key)
     if cached is not None:

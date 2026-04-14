@@ -1,39 +1,97 @@
 from __future__ import annotations
 
 import asyncio
-import httpx
+import json
+
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from activities import _tenant_secrets
-from activities._activity_errors import application_error_from_http_status, raise_activity_error
+from activities._activity_errors import raise_activity_error
 from activities.provider_capabilities import connector_execute_action
+from activities.tenant import get_tenant_config
 from shared.config import SECAMO_SENDER_EMAIL
-from shared.models import NotificationResult
-from shared.providers.contracts import TenantSecrets
+from shared.models import ChatOpsMessage, NotificationResult
+from shared.providers.factory import get_chatops_provider
+from shared.providers.types import secret_type_for_provider
 from shared.ssm_client import get_secret_bundle
 
-# --- Email notification ---
 
-def _load_graph_secrets(tenant_id: str) -> TenantSecrets:
-    raw = get_secret_bundle(tenant_id, "graph")
-    return TenantSecrets(
-        client_id=raw.get("client_id", ""),
-        client_secret=raw.get("client_secret", ""),
-        tenant_azure_id=raw.get("tenant_azure_id", ""),
+async def _load_secret_bundle_async(tenant_id: str, secret_type: str) -> dict[str, str]:
+    return await asyncio.to_thread(get_secret_bundle, tenant_id, secret_type)
+
+
+def _secret_type_from_credentials_path(path_template: str) -> str:
+    normalized = path_template.replace("{tenant_id}", "tenant-placeholder").strip("/")
+    parts = [part for part in normalized.split("/") if part]
+    if not parts:
+        return "chatops"
+    return parts[-1]
+
+
+def _effective_chatops_provider_type(notification_provider: str, fallback_provider_type: str) -> str:
+    normalized = (notification_provider or "").strip().lower()
+    if normalized == "slack":
+        return "slack"
+    if normalized in {"teams", "email"}:
+        return "ms_teams"
+    return fallback_provider_type
+
+
+async def _resolve_chatops_target(tenant_id: str, target_channel: str):
+    config = await get_tenant_config(tenant_id)
+    if not config.chatops_config.enabled:
+        raise_activity_error(
+            f"[{tenant_id}] ChatOps is disabled for tenant",
+            error_type="ChatOpsDisabled",
+            non_retryable=True,
+        )
+
+    provider_type = _effective_chatops_provider_type(
+        config.notification_provider,
+        config.chatops_config.provider_type,
     )
+    if provider_type != config.chatops_config.provider_type:
+        config = config.model_copy(
+            update={
+                "chatops_config": config.chatops_config.model_copy(
+                    update={"provider_type": provider_type}
+                )
+            }
+        )
 
-async def _load_graph_secrets_async(tenant_id: str) -> TenantSecrets:
-    return await asyncio.to_thread(_load_graph_secrets, tenant_id)
+    secret_type = _secret_type_from_credentials_path(config.chatops_config.credentials_path)
+    secrets = await _load_secret_bundle_async(tenant_id, secret_type)
+    provider = await get_chatops_provider(tenant_id, secrets, config)
+
+    resolved_channel = target_channel.strip()
+    if not resolved_channel:
+        resolved_channel = config.chatops_config.default_channel or ""
+    if not resolved_channel and config.chatops_config.default_channels:
+        resolved_channel = config.chatops_config.default_channels[0]
+
+    if config.chatops_config.provider_type == "slack" and not resolved_channel:
+        raise_activity_error(
+            f"[{tenant_id}] missing ChatOps target channel for Slack",
+            error_type="MissingChatOpsChannel",
+            non_retryable=True,
+        )
+
+    return provider, resolved_channel
+
 
 def _result(success: bool, channel: str, message_id: str | None = None) -> NotificationResult:
     return NotificationResult(success=success, channel=channel, message_id=message_id)
+
 
 @activity.defn
 async def email_send(tenant_id: str, to: str, subject: str, body: str) -> NotificationResult:
     activity.logger.info(f"[{tenant_id}] email_send to={to}")
     try:
-        await _load_graph_secrets_async(tenant_id)
+        config = await get_tenant_config(tenant_id)
+        provider_name = config.edr_provider
+        secret_type = secret_type_for_provider(provider_name)
+        await _load_secret_bundle_async(tenant_id, secret_type)
+
         sender = SECAMO_SENDER_EMAIL
         if not sender:
             raise_activity_error(
@@ -41,9 +99,10 @@ async def email_send(tenant_id: str, to: str, subject: str, body: str) -> Notifi
                 error_type="MissingSenderEmail",
                 non_retryable=True,
             )
+
         result = await connector_execute_action(
             tenant_id,
-            "microsoft_defender",
+            provider_name,
             "send_email",
             {
                 "sender": sender,
@@ -55,6 +114,12 @@ async def email_send(tenant_id: str, to: str, subject: str, body: str) -> Notifi
         )
         payload = result.data.payload
         return _result(True, "email", message_id=str(payload.get("message_id") or "") or None)
+    except ValueError as exc:
+        raise_activity_error(
+            f"[{tenant_id}] email_send configuration error: {exc}",
+            error_type="EmailProviderConfigurationError",
+            non_retryable=True,
+        )
     except ApplicationError:
         raise
     except Exception as exc:
@@ -64,37 +129,20 @@ async def email_send(tenant_id: str, to: str, subject: str, body: str) -> Notifi
             non_retryable=False,
         )
 
-# --- Teams notification ---
 
 @activity.defn
 async def teams_send_notification(tenant_id: str, channel_webhook_url: str, message: str) -> NotificationResult:
     activity.logger.info(f"[{tenant_id}] teams_send_notification")
-    resolved_webhook_url = channel_webhook_url.strip()
-    if not resolved_webhook_url:
-        secrets = _tenant_secrets.load_tenant_secrets(tenant_id, "graph")
-        resolved_webhook_url = str(secrets.teams_webhook_url or "").strip()
-    if not resolved_webhook_url:
-        raise_activity_error(
-            f"[{tenant_id}] teams_send_notification missing webhook url",
-            error_type="MissingTeamsWebhook",
-            non_retryable=True,
-        )
-    payload = {"@type": "MessageCard", "text": message}
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                resolved_webhook_url,
-                headers={"Content-Type": "application/json"},
-                json=payload,
-            )
-        if response.status_code >= 400:
-            raise application_error_from_http_status(
-                tenant_id,
-                "microsoft_teams",
-                "teams_send_notification",
-                response.status_code,
-            )
-        return _result(True, "teams", message_id=response.headers.get("x-ms-request-id"))
+        provider, resolved_channel = await _resolve_chatops_target(tenant_id, channel_webhook_url)
+        message_id = await provider.send_message(
+            target_channel=resolved_channel,
+            message=ChatOpsMessage(
+                title="Secamo Notification",
+                body=message,
+            ),
+        )
+        return _result(True, "teams", message_id=message_id)
     except ApplicationError:
         raise
     except Exception as exc:
@@ -104,30 +152,26 @@ async def teams_send_notification(tenant_id: str, channel_webhook_url: str, mess
             non_retryable=False,
         )
 
+
 @activity.defn
 async def teams_send_adaptive_card(tenant_id: str, channel_webhook_url: str, card_payload: dict) -> NotificationResult:
     activity.logger.info(f"[{tenant_id}] teams_send_adaptive_card")
-    if not channel_webhook_url:
-        raise_activity_error(
-            f"[{tenant_id}] teams_send_adaptive_card missing webhook url",
-            error_type="MissingTeamsWebhook",
-            non_retryable=True,
-        )
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.post(
-                channel_webhook_url,
-                headers={"Content-Type": "application/json"},
-                json=card_payload,
-            )
-        if response.status_code >= 400:
-            raise application_error_from_http_status(
-                tenant_id,
-                "microsoft_teams",
-                "teams_send_adaptive_card",
-                response.status_code,
-            )
-        return _result(True, "teams", message_id=response.headers.get("x-ms-request-id"))
+        provider, resolved_channel = await _resolve_chatops_target(tenant_id, channel_webhook_url)
+
+        title = str(card_payload.get("title") or card_payload.get("summary") or "Secamo Card")
+        fallback_body = json.dumps(card_payload, ensure_ascii=True)
+        body = str(card_payload.get("text") or card_payload.get("body") or fallback_body)
+
+        message_id = await provider.send_message(
+            target_channel=resolved_channel,
+            message=ChatOpsMessage(
+                title=title,
+                body=body,
+                metadata={"card_payload": card_payload},
+            ),
+        )
+        return _result(True, "teams", message_id=message_id)
     except ApplicationError:
         raise
     except Exception as exc:

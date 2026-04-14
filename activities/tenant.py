@@ -6,13 +6,13 @@ from typing import Any
 import boto3
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
-from connectors.jira_provisioner import JiraProvisioner
 from shared.models import (
     PollingProviderConfig,
     TenantConfig,
 )
 from shared.models.subscriptions import SubscriptionConfig
 from shared.providers.contracts import TenantSecrets
+from shared.providers.ticketing import maybe_provision_ticketing_tenant
 
 
 ssm_client = None
@@ -252,17 +252,7 @@ def _parse_graph_subscriptions(raw_value: str | None) -> list[SubscriptionConfig
 
 
 async def _maybe_provision_jira_jsm_tenant(tenant_id: str, secret_type: str, secrets: TenantSecrets) -> TenantSecrets:
-    if secret_type != "ticketing":
-        return secrets
-
-    if (secrets.project_type or "standard").strip().lower() != "jsm":
-        return secrets
-
-    if not secrets.jira_base_url or not secrets.jira_email or not secrets.jira_api_token:
-        return secrets
-
-    provisioner = JiraProvisioner()
-    return await provisioner.provision_jsm_tenant(tenant_id, secrets)
+    return await maybe_provision_ticketing_tenant(tenant_id, secret_type, secrets, provider="jira")
 
 
 @activity.defn

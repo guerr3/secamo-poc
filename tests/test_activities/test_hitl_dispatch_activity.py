@@ -124,6 +124,10 @@ async def test_dispatch_jira_creates_ticket_with_workflow_labels(monkeypatch) ->
         captured["payload"] = payload
         return SimpleNamespace(data=SimpleNamespace(payload={"issueKey": "HELP-101"}))
 
+    async def _tenant_cfg(_tenant_id):
+        return SimpleNamespace(ticketing_provider="jira")
+
+    monkeypatch.setattr(hitl_module, "get_tenant_config", _tenant_cfg)
     monkeypatch.setattr(hitl_module, "connector_execute_action", _fake_connector_execute_action)
 
     result = await hitl_module._dispatch_jira(request, binding)
