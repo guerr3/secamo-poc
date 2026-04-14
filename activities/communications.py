@@ -86,24 +86,14 @@ def _result(success: bool, channel: str, message_id: str | None = None) -> Notif
     return NotificationResult(success=success, channel=channel, message_id=message_id)
 
 
-def _resolve_email_connector_provider(configured_provider: str) -> str:
-    tenant_provider = (configured_provider or "").strip().lower()
-    if tenant_provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
-        return tenant_provider
-
-    fallback_provider = EMAIL_PROVIDER.strip().lower()
-    if fallback_provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
-        return fallback_provider
-
-    if fallback_provider:
-        raise ValueError(
-            "EMAIL_PROVIDER must be one of "
-            f"{sorted(_EMAIL_ACTION_CAPABLE_PROVIDERS)}; got '{fallback_provider}'"
-        )
+def _resolve_email_connector_provider() -> str:
+    provider = EMAIL_PROVIDER.strip().lower() or "ses"
+    if provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
+        return provider
 
     raise ValueError(
-        "No email-capable connector provider resolved. "
-        f"Tenant provider='{configured_provider}' is unsupported for send_email and EMAIL_PROVIDER is unset."
+        "EMAIL_PROVIDER must be one of "
+        f"{sorted(_EMAIL_ACTION_CAPABLE_PROVIDERS)}; got '{provider}'"
     )
 
 
@@ -111,8 +101,7 @@ def _resolve_email_connector_provider(configured_provider: str) -> str:
 async def email_send(tenant_id: str, to: str, subject: str, body: str) -> NotificationResult:
     activity.logger.info(f"[{tenant_id}] email_send to={to}")
     try:
-        config = await get_tenant_config(tenant_id)
-        provider_name = _resolve_email_connector_provider(config.edr_provider)
+        provider_name = _resolve_email_connector_provider()
         secret_type = secret_type_for_provider(provider_name)
         await _load_secret_bundle_async(tenant_id, secret_type)
 

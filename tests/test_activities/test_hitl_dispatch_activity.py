@@ -141,21 +141,21 @@ async def test_dispatch_jira_creates_ticket_with_workflow_labels(monkeypatch) ->
     assert "secamo-parent:SEC-5" in captured["payload"]["labels"]
 
 
-def test_hitl_email_provider_prefers_tenant_provider(monkeypatch) -> None:
-    monkeypatch.setattr(hitl_module, "EMAIL_PROVIDER", "ses")
-    resolved = hitl_module._resolve_email_connector_provider("microsoft_defender")
-    assert resolved == "microsoft_defender"
-
-
-def test_hitl_email_provider_uses_env_fallback_for_unsupported_tenant_provider(monkeypatch) -> None:
-    monkeypatch.setattr(hitl_module, "EMAIL_PROVIDER", "ses")
-    resolved = hitl_module._resolve_email_connector_provider("crowdstrike")
+def test_hitl_email_provider_defaults_to_ses(monkeypatch) -> None:
+    monkeypatch.setattr(hitl_module, "EMAIL_PROVIDER", "")
+    resolved = hitl_module._resolve_email_connector_provider()
     assert resolved == "ses"
+
+
+def test_hitl_email_provider_uses_env_override(monkeypatch) -> None:
+    monkeypatch.setattr(hitl_module, "EMAIL_PROVIDER", "microsoft_defender")
+    resolved = hitl_module._resolve_email_connector_provider()
+    assert resolved == "microsoft_defender"
 
 
 def test_hitl_email_provider_raises_for_invalid_env_fallback(monkeypatch) -> None:
     monkeypatch.setattr(hitl_module, "EMAIL_PROVIDER", "not-a-provider")
     with pytest.raises(ApplicationError) as exc:
-        hitl_module._resolve_email_connector_provider("crowdstrike")
+        hitl_module._resolve_email_connector_provider()
 
     assert exc.value.type == "EmailProviderConfigurationError"

@@ -224,25 +224,13 @@ def _build_callback_binding(request: HiTLRequest) -> HitlCallbackBinding:
     )
 
 
-def _resolve_email_connector_provider(configured_provider: str) -> str:
-    tenant_provider = (configured_provider or "").strip().lower()
-    if tenant_provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
-        return tenant_provider
-
-    fallback_provider = EMAIL_PROVIDER.strip().lower()
-    if fallback_provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
-        return fallback_provider
-
-    if fallback_provider:
-        raise_activity_error(
-            f"Unsupported EMAIL_PROVIDER value '{fallback_provider}'",
-            error_type="EmailProviderConfigurationError",
-            non_retryable=True,
-        )
+def _resolve_email_connector_provider() -> str:
+    provider = EMAIL_PROVIDER.strip().lower() or "ses"
+    if provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
+        return provider
 
     raise_activity_error(
-        "No email-capable connector provider resolved. "
-        f"Tenant provider '{configured_provider}' is unsupported for send_email and EMAIL_PROVIDER is unset.",
+        f"Unsupported EMAIL_PROVIDER value '{provider}'",
         error_type="EmailProviderConfigurationError",
         non_retryable=True,
     )
@@ -265,8 +253,7 @@ async def _dispatch_email(
             non_retryable=True,
         )
 
-    cfg = await get_tenant_config(request.tenant_id)
-    email_provider = _resolve_email_connector_provider(cfg.edr_provider)
+    email_provider = _resolve_email_connector_provider()
 
     action_result = await connector_execute_action(
         request.tenant_id,

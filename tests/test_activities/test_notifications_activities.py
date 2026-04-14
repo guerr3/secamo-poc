@@ -50,10 +50,7 @@ async def test_teams_send_adaptive_card_error(mocker):
 
 @pytest.mark.asyncio
 async def test_email_send_happy(mocker):
-    mocker.patch(
-        "activities.communications.get_tenant_config",
-        new=mocker.AsyncMock(return_value=mocker.Mock(edr_provider="microsoft_defender")),
-    )
+    mocker.patch("activities.communications.EMAIL_PROVIDER", "")
     mocker.patch(
         "activities.communications._load_secret_bundle_async",
         new=mocker.AsyncMock(return_value={"client_id": "c"}),
@@ -71,12 +68,8 @@ async def test_email_send_happy(mocker):
 
 
 @pytest.mark.asyncio
-async def test_email_send_prefers_tenant_provider_over_env_fallback(mocker):
-    mocker.patch("activities.communications.EMAIL_PROVIDER", "ses")
-    mocker.patch(
-        "activities.communications.get_tenant_config",
-        new=mocker.AsyncMock(return_value=mocker.Mock(edr_provider="microsoft_defender")),
-    )
+async def test_email_send_defaults_to_ses_when_email_provider_unset(mocker):
+    mocker.patch("activities.communications.EMAIL_PROVIDER", "")
     connector_execute_action = mocker.patch(
         "activities.communications.connector_execute_action",
         new=mocker.AsyncMock(
@@ -93,16 +86,12 @@ async def test_email_send_prefers_tenant_provider_over_env_fallback(mocker):
     result = await email_send("t1", "dest@example.com", "Subject", "Body")
 
     assert result.success is True
-    assert connector_execute_action.await_args.args[1] == "microsoft_defender"
+    assert connector_execute_action.await_args.args[1] == "ses"
 
 
 @pytest.mark.asyncio
-async def test_email_send_falls_back_to_env_provider_when_tenant_not_email_capable(mocker):
-    mocker.patch("activities.communications.EMAIL_PROVIDER", "ses")
-    mocker.patch(
-        "activities.communications.get_tenant_config",
-        new=mocker.AsyncMock(return_value=mocker.Mock(edr_provider="crowdstrike")),
-    )
+async def test_email_send_uses_env_provider_override(mocker):
+    mocker.patch("activities.communications.EMAIL_PROVIDER", "microsoft_defender")
     connector_execute_action = mocker.patch(
         "activities.communications.connector_execute_action",
         new=mocker.AsyncMock(
@@ -119,5 +108,5 @@ async def test_email_send_falls_back_to_env_provider_when_tenant_not_email_capab
     result = await email_send("t1", "dest@example.com", "Subject", "Body")
 
     assert result.success is True
-    assert connector_execute_action.await_args.args[1] == "ses"
-    assert load_bundle.await_args.args[1] == "chatops"
+    assert connector_execute_action.await_args.args[1] == "microsoft_defender"
+    assert load_bundle.await_args.args[1] == "graph"
