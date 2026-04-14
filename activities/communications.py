@@ -9,11 +9,14 @@ from temporalio.exceptions import ApplicationError
 from activities._activity_errors import raise_activity_error
 from activities.provider_capabilities import connector_execute_action
 from activities.tenant import get_tenant_config
-from shared.config import SECAMO_SENDER_EMAIL
+from shared.config import EMAIL_PROVIDER, SECAMO_SENDER_EMAIL
 from shared.models import ChatOpsMessage, NotificationResult
 from shared.providers.factory import get_chatops_provider
 from shared.providers.types import secret_type_for_provider
 from shared.ssm_client import get_secret_bundle
+
+
+_EMAIL_ACTION_CAPABLE_PROVIDERS = {"microsoft_defender", "microsoft_graph", "ses"}
 
 
 async def _load_secret_bundle_async(tenant_id: str, secret_type: str) -> dict[str, str]:
@@ -83,12 +86,33 @@ def _result(success: bool, channel: str, message_id: str | None = None) -> Notif
     return NotificationResult(success=success, channel=channel, message_id=message_id)
 
 
+def _resolve_email_connector_provider(configured_provider: str) -> str:
+    tenant_provider = (configured_provider or "").strip().lower()
+    if tenant_provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
+        return tenant_provider
+
+    fallback_provider = EMAIL_PROVIDER.strip().lower()
+    if fallback_provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
+        return fallback_provider
+
+    if fallback_provider:
+        raise ValueError(
+            "EMAIL_PROVIDER must be one of "
+            f"{sorted(_EMAIL_ACTION_CAPABLE_PROVIDERS)}; got '{fallback_provider}'"
+        )
+
+    raise ValueError(
+        "No email-capable connector provider resolved. "
+        f"Tenant provider='{configured_provider}' is unsupported for send_email and EMAIL_PROVIDER is unset."
+    )
+
+
 @activity.defn
 async def email_send(tenant_id: str, to: str, subject: str, body: str) -> NotificationResult:
     activity.logger.info(f"[{tenant_id}] email_send to={to}")
     try:
         config = await get_tenant_config(tenant_id)
-        provider_name = config.edr_provider
+        provider_name = _resolve_email_connector_provider(config.edr_provider)
         secret_type = secret_type_for_provider(provider_name)
         await _load_secret_bundle_async(tenant_id, secret_type)
 

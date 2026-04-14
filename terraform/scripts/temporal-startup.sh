@@ -17,6 +17,7 @@
 #   ${tenant_table}         — DynamoDB table for tenant metadata
 #   ${hitl_token_table}     — DynamoDB table for HiTL approval tokens
 #   ${secamo_sender_email}  — Sender email for notification activities
+#   ${email_provider}       — Fallback connector provider for outbound email
 # ──────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -105,6 +106,7 @@ AUDIT_TABLE_NAME=${audit_table}
 TENANT_TABLE_NAME=${tenant_table}
 HITL_TOKEN_TABLE=${hitl_token_table}
 SECAMO_SENDER_EMAIL=${secamo_sender_email}
+EMAIL_PROVIDER=${email_provider}
 EOF
 
 # ── Start Temporal Stack ─────────────────────────────────────

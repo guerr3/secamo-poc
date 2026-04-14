@@ -79,20 +79,21 @@ Practical rule:
 
 ## Configuration Reference
 
-| Variable                     | Default                | Primary Usage                                                          |
-| ---------------------------- | ---------------------- | ---------------------------------------------------------------------- |
-| `TEMPORAL_ADDRESS`           | `temporal:7233`        | Temporal frontend endpoint used by workers and ingress dispatch paths. |
-| `TEMPORAL_NAMESPACE`         | `default`              | Temporal namespace for workflow execution.                             |
-| `SECAMO_SENDER_EMAIL`        | `noreply@secamo.local` | Sender identity for email notification activity.                       |
-| `EVIDENCE_BUCKET_NAME`       | empty                  | S3 bucket for evidence bundle writes.                                  |
-| `AUDIT_TABLE_NAME`           | empty                  | DynamoDB table for audit records.                                      |
-| `TENANT_TABLE_NAME`          | empty                  | Tenant table for active tenant lookup paths.                           |
-| `GRAPH_SUBSCRIPTIONS_TABLE`  | empty                  | DynamoDB metadata for Graph subscriptions.                             |
-| `HITL_TOKEN_TABLE`           | empty                  | DynamoDB table for HiTL callback tokens.                               |
-| `HITL_TOKEN_TTL_SECONDS`     | `900`                  | TTL window for HiTL callback token validity.                           |
-| `HITL_NAME_PREFIX`           | `secamo-temporal-test` | Prefix for generated HiTL response URLs and names.                     |
-| `GRAPH_NOTIFICATION_APP_IDS` | empty                  | Allowed app IDs for Graph notification token validation.               |
-| `LOG_LEVEL`                  | `INFO`                 | Logging level used by ingress/authorizer runtime handlers.             |
+| Variable                     | Default                | Primary Usage                                                                                                                    |
+| ---------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `TEMPORAL_ADDRESS`           | `temporal:7233`        | Temporal frontend endpoint used by workers and ingress dispatch paths.                                                           |
+| `TEMPORAL_NAMESPACE`         | `default`              | Temporal namespace for workflow execution.                                                                                       |
+| `SECAMO_SENDER_EMAIL`        | `noreply@secamo.local` | Sender identity for email notification activity.                                                                                 |
+| `EMAIL_PROVIDER`             | empty                  | Fallback connector for email actions when tenant provider is not email-capable (`ses`, `microsoft_defender`, `microsoft_graph`). |
+| `EVIDENCE_BUCKET_NAME`       | empty                  | S3 bucket for evidence bundle writes.                                                                                            |
+| `AUDIT_TABLE_NAME`           | empty                  | DynamoDB table for audit records.                                                                                                |
+| `TENANT_TABLE_NAME`          | empty                  | Tenant table for active tenant lookup paths.                                                                                     |
+| `GRAPH_SUBSCRIPTIONS_TABLE`  | empty                  | DynamoDB metadata for Graph subscriptions.                                                                                       |
+| `HITL_TOKEN_TABLE`           | empty                  | DynamoDB table for HiTL callback tokens.                                                                                         |
+| `HITL_TOKEN_TTL_SECONDS`     | `900`                  | TTL window for HiTL callback token validity.                                                                                     |
+| `HITL_NAME_PREFIX`           | `secamo-temporal-test` | Prefix for generated HiTL response URLs and names.                                                                               |
+| `GRAPH_NOTIFICATION_APP_IDS` | empty                  | Allowed app IDs for Graph notification token validation.                                                                         |
+| `LOG_LEVEL`                  | `INFO`                 | Logging level used by ingress/authorizer runtime handlers.                                                                       |
 
 ## Contributing
 

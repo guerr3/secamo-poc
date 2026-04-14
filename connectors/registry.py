@@ -7,6 +7,7 @@ from connectors.abuseipdb import AbuseIpdbConnector
 from connectors.errors import ConnectorConfigurationError
 from connectors.jira import JiraConnector
 from connectors.microsoft_defender import MicrosoftGraphConnector
+from connectors.ses import SesConnector
 from connectors.virustotal import VirusTotalConnector
 from connectors.stub_providers import (
     CrowdStrikeConnector,
@@ -39,6 +40,7 @@ _CONNECTOR_FACTORIES: dict[str, ConnectorFactory] = {
     "virustotal": _factory(VirusTotalConnector),
     "abuseipdb": _factory(AbuseIpdbConnector),
     "misp": _factory(MispConnector),
+    "ses": _factory(SesConnector),
 }
 
 

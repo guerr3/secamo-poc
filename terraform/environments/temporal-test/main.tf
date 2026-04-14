@@ -267,6 +267,26 @@ resource "aws_iam_role_policy" "temporal_storage" {
   })
 }
 
+resource "aws_iam_role_policy" "temporal_email" {
+  name = "${local.name_prefix}-email"
+  role = aws_iam_role.temporal.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ses:SendEmail",
+          "ses:SendRawEmail",
+          "ses:GetSendQuota"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_instance_profile" "temporal" {
   name = "${local.name_prefix}-profile"
   role = aws_iam_role.temporal.name
@@ -285,15 +305,16 @@ resource "aws_instance" "temporal" {
   key_name               = var.key_pair_name != "" ? var.key_pair_name : null
 
   user_data = templatefile("${path.module}/../../scripts/temporal-startup.sh", {
-    temporal_namespace = var.temporal_namespace
-    github_repo_url    = var.github_repo_url
-    environment        = "temporal-test"
-    region             = data.aws_region.current.name
-    evidence_bucket    = module.storage.evidence_bucket_name
-    audit_table        = module.storage.audit_table_name
-    tenant_table       = aws_dynamodb_table.tenants.name
-    hitl_token_table   = aws_dynamodb_table.hitl_tokens.name
+    temporal_namespace  = var.temporal_namespace
+    github_repo_url     = var.github_repo_url
+    environment         = "temporal-test"
+    region              = data.aws_region.current.name
+    evidence_bucket     = module.storage.evidence_bucket_name
+    audit_table         = module.storage.audit_table_name
+    tenant_table        = aws_dynamodb_table.tenants.name
+    hitl_token_table    = aws_dynamodb_table.hitl_tokens.name
     secamo_sender_email = var.secamo_sender_email
+    email_provider      = var.email_provider
   })
 
   user_data_replace_on_change = true
@@ -324,7 +345,8 @@ resource "aws_instance" "temporal" {
     aws_route_table_association.public,
     aws_iam_role_policy_attachment.ssm,
     aws_iam_role_policy.temporal_ssm_params,
-    aws_iam_role_policy.temporal_storage
+    aws_iam_role_policy.temporal_storage,
+    aws_iam_role_policy.temporal_email
   ]
 }
 

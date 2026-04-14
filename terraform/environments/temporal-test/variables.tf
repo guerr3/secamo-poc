@@ -74,3 +74,9 @@ variable "secamo_sender_email" {
   type        = string
   default     = "secamo_poc@42xzkn.onmicrosoft.com"
 }
+
+variable "email_provider" {
+  description = "Fallback connector provider for outbound email activities (for example: ses or microsoft_defender)"
+  type        = string
+  default     = ""
+}

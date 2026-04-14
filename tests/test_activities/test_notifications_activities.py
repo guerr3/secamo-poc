@@ -68,3 +68,56 @@ async def test_email_send_happy(mocker):
     )
     res = await email_send("t1", "dest@example.com", "Subject", "Body")
     assert res.success is True
+
+
+@pytest.mark.asyncio
+async def test_email_send_prefers_tenant_provider_over_env_fallback(mocker):
+    mocker.patch("activities.communications.EMAIL_PROVIDER", "ses")
+    mocker.patch(
+        "activities.communications.get_tenant_config",
+        new=mocker.AsyncMock(return_value=mocker.Mock(edr_provider="microsoft_defender")),
+    )
+    connector_execute_action = mocker.patch(
+        "activities.communications.connector_execute_action",
+        new=mocker.AsyncMock(
+            return_value=type("_ActionResult", (), {
+                "data": type("_Data", (), {"payload": {"message_id": "x2", "sent": True}})(),
+            })()
+        ),
+    )
+    mocker.patch(
+        "activities.communications._load_secret_bundle_async",
+        new=mocker.AsyncMock(return_value={"client_id": "c"}),
+    )
+
+    result = await email_send("t1", "dest@example.com", "Subject", "Body")
+
+    assert result.success is True
+    assert connector_execute_action.await_args.args[1] == "microsoft_defender"
+
+
+@pytest.mark.asyncio
+async def test_email_send_falls_back_to_env_provider_when_tenant_not_email_capable(mocker):
+    mocker.patch("activities.communications.EMAIL_PROVIDER", "ses")
+    mocker.patch(
+        "activities.communications.get_tenant_config",
+        new=mocker.AsyncMock(return_value=mocker.Mock(edr_provider="crowdstrike")),
+    )
+    connector_execute_action = mocker.patch(
+        "activities.communications.connector_execute_action",
+        new=mocker.AsyncMock(
+            return_value=type("_ActionResult", (), {
+                "data": type("_Data", (), {"payload": {"message_id": "x3", "sent": True}})(),
+            })()
+        ),
+    )
+    load_bundle = mocker.patch(
+        "activities.communications._load_secret_bundle_async",
+        new=mocker.AsyncMock(return_value={}),
+    )
+
+    result = await email_send("t1", "dest@example.com", "Subject", "Body")
+
+    assert result.success is True
+    assert connector_execute_action.await_args.args[1] == "ses"
+    assert load_bundle.await_args.args[1] == "chatops"

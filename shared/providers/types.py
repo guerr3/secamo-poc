@@ -33,6 +33,7 @@ _SECRET_TYPE_BY_PROVIDER: dict[str, ProviderSecretType] = {
     "teams": "chatops",
     "slack": "chatops",
     "email": "chatops",
+    "ses": "chatops",
 }
 
 

@@ -51,6 +51,22 @@ Suggested checks:
 2. Confirm namespace visibility via Temporal UI or CLI.
 3. Confirm worker/runtime connectivity from your local client config.
 
+## Email Provider Runtime
+
+For outbound email activity fallback behavior, `temporal-test` supports these inputs:
+
+- `secamo_sender_email`: sender identity used by email activities.
+- `email_provider`: optional fallback connector when tenant provider is not email-capable (`ses`, `microsoft_defender`, `microsoft_graph`).
+
+Example `terraform.tfvars` snippet:
+
+```hcl
+secamo_sender_email = "secamo@example.com"
+email_provider      = "ses"
+```
+
+When using SES fallback, ensure the sender identity is verified in SES and IAM includes send permissions.
+
 ## Destroy
 
 ```bash

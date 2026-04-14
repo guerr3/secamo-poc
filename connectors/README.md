@@ -19,6 +19,7 @@
 | `jira.py`               | Jira connector implementation.                                                  |
 | `jira_provisioner.py`   | Jira provisioning helper implementation.                                        |
 | `microsoft_defender.py` | Microsoft Defender/Graph connector implementation.                              |
+| `ses.py`                | AWS SES connector for outbound email actions.                                   |
 | `README.md`             | Module documentation.                                                           |
 | `registry.py`           | Connector factory registry and provider key resolution.                         |
 | `stub_providers.py`     | Stub connector implementations for planned providers.                           |
@@ -52,3 +53,10 @@ python -m pytest -q tests/test_stub_connectors.py tests/test_connectors_resilien
 3. Register the new provider key in `connectors/registry.py`.
 4. Add tests for success/failure behavior in `tests/`.
 5. Update this file table for the added module.
+
+## SES Notes
+
+- Provider key: `ses` (registered in `connectors/registry.py`).
+- Supported action: `send_email`.
+- Runtime must have IAM permissions for `ses:SendEmail` (and optionally `ses:SendRawEmail`, `ses:GetSendQuota`).
+- `SECAMO_SENDER_EMAIL` must be a verified identity/domain in SES for the target region.

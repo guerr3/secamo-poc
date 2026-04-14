@@ -19,5 +19,6 @@ QUEUE_POLLING        = "polling"
 
 # ── Shared runtime settings ──────────────────────────────────
 SECAMO_SENDER_EMAIL = os.environ.get("SECAMO_SENDER_EMAIL", "noreply@secamo.local")
+EMAIL_PROVIDER = os.environ.get("EMAIL_PROVIDER", "")
 EVIDENCE_BUCKET_NAME = os.environ.get("EVIDENCE_BUCKET_NAME", "")
 AUDIT_TABLE_NAME = os.environ.get("AUDIT_TABLE_NAME", "")

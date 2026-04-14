@@ -15,7 +15,7 @@ from temporalio.exceptions import ApplicationError
 from activities._activity_errors import raise_activity_error
 from activities.provider_capabilities import connector_execute_action
 from activities.tenant import get_tenant_config
-from shared.config import SECAMO_SENDER_EMAIL
+from shared.config import EMAIL_PROVIDER, SECAMO_SENDER_EMAIL
 from shared.models import (
     ChatOpsAction,
     ChatOpsMessage,
@@ -26,6 +26,9 @@ from shared.models import (
 )
 from shared.providers.factory import get_chatops_provider
 from shared.ssm_client import get_secret_bundle
+
+
+_EMAIL_ACTION_CAPABLE_PROVIDERS = {"microsoft_defender", "microsoft_graph", "ses"}
 
 
 def _render_metadata_rows(metadata: dict) -> str:
@@ -221,6 +224,30 @@ def _build_callback_binding(request: HiTLRequest) -> HitlCallbackBinding:
     )
 
 
+def _resolve_email_connector_provider(configured_provider: str) -> str:
+    tenant_provider = (configured_provider or "").strip().lower()
+    if tenant_provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
+        return tenant_provider
+
+    fallback_provider = EMAIL_PROVIDER.strip().lower()
+    if fallback_provider in _EMAIL_ACTION_CAPABLE_PROVIDERS:
+        return fallback_provider
+
+    if fallback_provider:
+        raise_activity_error(
+            f"Unsupported EMAIL_PROVIDER value '{fallback_provider}'",
+            error_type="EmailProviderConfigurationError",
+            non_retryable=True,
+        )
+
+    raise_activity_error(
+        "No email-capable connector provider resolved. "
+        f"Tenant provider '{configured_provider}' is unsupported for send_email and EMAIL_PROVIDER is unset.",
+        error_type="EmailProviderConfigurationError",
+        non_retryable=True,
+    )
+
+
 async def _dispatch_email(
     request: HiTLRequest,
     binding: HitlCallbackBinding,
@@ -239,7 +266,7 @@ async def _dispatch_email(
         )
 
     cfg = await get_tenant_config(request.tenant_id)
-    email_provider = cfg.edr_provider
+    email_provider = _resolve_email_connector_provider(cfg.edr_provider)
 
     action_result = await connector_execute_action(
         request.tenant_id,
