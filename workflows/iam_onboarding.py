@@ -26,29 +26,26 @@ def _generate_temp_password(length: int = 16) -> str:
 
 
 with workflow.unsafe.imports_passed_through():
-    from shared.config import QUEUE_INTERACTIONS, QUEUE_POLLING, QUEUE_USER_LIFECYCLE, SECAMO_SENDER_EMAIL
+    from shared.config import QUEUE_INTERACTIONS, SECAMO_SENDER_EMAIL
     from shared.models import (
         HiTLApprovalRequest,
         HiTLRequest,
         IdentityUser,
         LifecycleAction,
-        PollingManagerInput,
         TenantConfig,
-        UserDeprovisioningRequest,
     )
     from shared.models.canonical import Envelope, IamOnboardingEvent
-    from shared.workflow_helpers import bootstrap_tenant, start_child_workflow_idempotent
+    from shared.workflow_helpers import bootstrap_tenant
     from activities.identity import (
         identity_assign_license,
         identity_create_user,
         identity_get_user,
+        identity_revoke_sessions,
         identity_reset_password,
         identity_update_user,
     )
     from activities.audit import create_audit_log
     from workflows.child.hitl_approval import HiTLApprovalWorkflow
-    from workflows.polling_manager import PollingManagerWorkflow
-    from workflows.child.user_deprovisioning import UserDeprovisioningWorkflow
 
 # ── Module-level constants ────────────────────────────────────
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -122,26 +119,6 @@ class IamOnboardingWorkflow:
             timeout=TIMEOUT,
         )
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
-
-        for provider_cfg in config.polling_providers:
-            polling_workflow_id = (
-                f"polling-{event.tenant_id}-{provider_cfg.provider}-{provider_cfg.resource_type}"
-            )
-            await start_child_workflow_idempotent(
-                PollingManagerWorkflow.run,
-                PollingManagerInput(
-                    tenant_id=event.tenant_id,
-                    provider=provider_cfg.provider,
-                    resource_type=provider_cfg.resource_type,
-                    secret_type=provider_cfg.secret_type,
-                    poll_interval_seconds=provider_cfg.poll_interval_seconds,
-                    cursor=None,
-                    iteration=0,
-                ),
-                workflow_id=polling_workflow_id,
-                task_queue=QUEUE_POLLING,
-                parent_close_policy=workflow.ParentClosePolicy.ABANDON,
-            )
 
         # 3. Idempotency check — kijk of gebruiker al bestaat
         existing_user: IdentityUser | None = await workflow.execute_activity(
@@ -251,15 +228,21 @@ class IamOnboardingWorkflow:
                 raise ValueError(
                     f"Gebruiker '{user_email}' niet gevonden voor delete."
                 )
-            await workflow.execute_child_workflow(
-                UserDeprovisioningWorkflow.run,
-                UserDeprovisioningRequest(
-                    tenant_id=event.tenant_id,
-                    user_id=existing_user.user_id,
-                    user_email=existing_user.email,
-                ),
-                id=f"{workflow.info().workflow_id}-deprovision",
-                task_queue=QUEUE_USER_LIFECYCLE,
+            await workflow.execute_activity(
+                identity_revoke_sessions,
+                args=[event.tenant_id, existing_user.user_id],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=runtime_retry,
+            )
+            await workflow.execute_activity(
+                identity_update_user,
+                args=[
+                    event.tenant_id,
+                    existing_user.user_id,
+                    {"accountEnabled": False},
+                ],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=runtime_retry,
             )
             result_msg = f"Gebruiker '{existing_user.email}' uitgeschakeld."
 

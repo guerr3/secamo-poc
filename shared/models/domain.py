@@ -12,7 +12,7 @@ from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.models.canonical import DefenderDetectionFindingEvent, Envelope
+from shared.models.canonical import CustomerOnboardingEvent, DefenderDetectionFindingEvent, Envelope
 from shared.models.subscriptions import SubscriptionConfig
 from shared.providers.types import (
     AIProviderType,
@@ -416,6 +416,84 @@ class UserDeprovisioningRequest(BaseModel):
     tenant_id: str
     user_id: str
     user_email: str
+
+
+class OnboardingBootstrapStageRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    tenant_id: str
+    payload: CustomerOnboardingEvent
+    requester: str = "onboarding-api"
+
+
+class OnboardingBootstrapStageResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    tenant_id: str
+    config: TenantConfig
+    partial_onboarding: bool
+    notification_url: str = ""
+    display_name: str
+    analyst_email: str
+    welcome_email: str
+    requester: str = "onboarding-api"
+
+
+class OnboardingSubscriptionReconcileStageRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    tenant_id: str
+    config: TenantConfig
+    partial_onboarding: bool = False
+    notification_url: str = ""
+
+
+class OnboardingSubscriptionReconcileStageResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    created_subscription_ids: list[str] = Field(default_factory=list)
+    active_subscription_count: int = 0
+
+
+class OnboardingCommunicationsStageRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    tenant_id: str
+    config: TenantConfig
+    display_name: str
+    analyst_email: str
+    welcome_email: str
+    created_subscription_ids: list[str] = Field(default_factory=list)
+    active_subscription_count: int = 0
+
+
+class OnboardingCommunicationsStageResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    ticket: TicketResult
+
+
+class OnboardingComplianceEvidenceStageRequest(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    tenant_id: str
+    workflow_id: str
+    event_id: str
+    requester: str
+    display_name: str
+    created_subscription_ids: list[str] = Field(default_factory=list)
+
+
+class OnboardingComplianceEvidenceStageResult(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    audit_written: bool
+
+
+class PollingBootstrapInput(BaseModel):
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    tenant_id: str | None = None
 
 
 class PollingManagerInput(BaseModel):

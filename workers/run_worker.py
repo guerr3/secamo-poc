@@ -268,10 +268,16 @@ def load_workflows() -> dict:
     try:
         from workflows.customer_onboarding import CustomerOnboardingWorkflow
         from workflows.iam_onboarding import IamOnboardingWorkflow
+        from workflows.child.onboarding_bootstrap_stage import OnboardingBootstrapStageWorkflow
+        from workflows.child.onboarding_communications_stage import OnboardingCommunicationsStageWorkflow
+        from workflows.child.onboarding_compliance_evidence_stage import OnboardingComplianceEvidenceStageWorkflow
         from workflows.child.user_deprovisioning import UserDeprovisioningWorkflow
         user_lifecycle_workflows.extend([
             IamOnboardingWorkflow,
             CustomerOnboardingWorkflow,
+            OnboardingBootstrapStageWorkflow,
+            OnboardingCommunicationsStageWorkflow,
+            OnboardingComplianceEvidenceStageWorkflow,
             UserDeprovisioningWorkflow,
         ])
         logger.info("✓ IAM Onboarding workflow geladen")
@@ -284,6 +290,7 @@ def load_workflows() -> dict:
         from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
         from workflows.child.hitl_approval import HiTLApprovalWorkflow
         from workflows.child.incident_response import IncidentResponseWorkflow
+        from workflows.child.onboarding_subscription_reconcile_stage import OnboardingSubscriptionReconcileStageWorkflow
         from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
         from workflows.child.ticket_creation import TicketCreationWorkflow
         edr_workflows.extend([
@@ -291,6 +298,7 @@ def load_workflows() -> dict:
             ThreatIntelEnrichmentWorkflow,
             AlertEnrichmentWorkflow,
             IncidentResponseWorkflow,
+            OnboardingSubscriptionReconcileStageWorkflow,
         ])
         ticketing_workflows.append(TicketCreationWorkflow)
         interactions_workflows.append(HiTLApprovalWorkflow)
@@ -308,8 +316,9 @@ def load_workflows() -> dict:
         sys.exit(1)
 
     try:
+        from workflows.polling_bootstrap import PollingBootstrapWorkflow
         from workflows.polling_manager import PollingManagerWorkflow
-        polling_workflows.append(PollingManagerWorkflow)
+        polling_workflows.extend([PollingManagerWorkflow, PollingBootstrapWorkflow])
         logger.info("✓ Polling Manager workflow geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Polling Manager Workflow: {e}")

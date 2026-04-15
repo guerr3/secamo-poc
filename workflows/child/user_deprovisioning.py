@@ -4,7 +4,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from activities.identity import identity_delete_user, identity_revoke_sessions
+    from activities.identity import identity_revoke_sessions, identity_update_user
     from shared.models import UserDeprovisioningRequest
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -13,7 +13,7 @@ TIMEOUT = timedelta(seconds=30)
 
 @workflow.defn
 class UserDeprovisioningWorkflow:
-    """Reusable child workflow for user offboarding (session revoke + delete)."""
+    """Reusable child workflow for user offboarding (session revoke + disable)."""
 
     @workflow.run
     async def run(self, request: UserDeprovisioningRequest) -> bool:
@@ -29,11 +29,11 @@ class UserDeprovisioningWorkflow:
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
         )
-        deleted = await workflow.execute_activity(
-            identity_delete_user,
-            args=[request.tenant_id, request.user_id],
+        disabled = await workflow.execute_activity(
+            identity_update_user,
+            args=[request.tenant_id, request.user_id, {"accountEnabled": False}],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
         )
 
-        return bool(deleted)
+        return bool(disabled)

@@ -6,7 +6,7 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from activities.edr import edr_isolate_device
     from activities.evidence import collect_evidence_bundle
-    from activities.identity import identity_delete_user, identity_revoke_sessions
+    from activities.identity import identity_revoke_sessions, identity_update_user
     from activities.ticketing import ticket_update
     from shared.models import EvidenceBundle, IncidentResponseRequest
 
@@ -88,8 +88,8 @@ class IncidentResponseWorkflow:
                     retry_policy=RETRY_POLICY,
                 )
                 await workflow.execute_activity(
-                    identity_delete_user,
-                    args=[request.tenant_id, request.user.user_id],
+                    identity_update_user,
+                    args=[request.tenant_id, request.user.user_id, {"accountEnabled": False}],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,
                 )
