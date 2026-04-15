@@ -11,6 +11,11 @@ def test_resolve_webhook_route_signins_resource() -> None:
     assert route == ("ImpossibleTravelWorkflow", "edr")
 
 
+def test_resolve_webhook_route_riskyusers_resource() -> None:
+    route = resolve_webhook_route("microsoft_graph", "identityProtection/riskyUsers")
+    assert route == ("GenericSecuritySignalWorkflow", "edr")
+
+
 def test_resolve_webhook_route_unknown_resource() -> None:
     route = resolve_webhook_route("microsoft_graph", "users")
     assert route is None

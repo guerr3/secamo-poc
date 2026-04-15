@@ -128,6 +128,28 @@ class DefenderDetectionFindingEvent(StrictModel):
     vendor_extensions: VendorExtensions = Field(default_factory=dict)
 
 
+class DefenderSecuritySignalEvent(StrictModel):
+    """Generic provider-agnostic signal payload for non-alert Defender resources."""
+
+    event_type: Literal["defender.security_signal"]
+    # Custom extension UIDs (non-zero) reserved for generic provider signal events.
+    category_uid: Literal[99] = 99
+    class_uid: Literal[990002] = 990002
+    activity_id: int
+    activity_name: str | None = None
+    signal_id: str
+    provider_event_type: str
+    resource_type: str
+    title: str
+    description: str | None = None
+    severity_id: int
+    severity: str | None = None
+    status_id: int | None = None
+    status: str | None = None
+    message: str | None = None
+    vendor_extensions: VendorExtensions = Field(default_factory=dict)
+
+
 class HitlApprovalEvent(StrictModel):
     """First-class HiTL approval payload for callback-driven decisions."""
 
@@ -150,6 +172,7 @@ SecamoEventVariant: TypeAlias = Annotated[
     | CustomerOnboardingEvent
     | ImpossibleTravelEvent
     | DefenderDetectionFindingEvent
+    | DefenderSecuritySignalEvent
     | HitlApprovalEvent,
     Field(discriminator="event_type"),
 ]
@@ -206,6 +229,7 @@ __all__ = [
     "Correlation",
     "CustomerOnboardingEvent",
     "DefenderDetectionFindingEvent",
+    "DefenderSecuritySignalEvent",
     "Envelope",
     "HitlApprovalEvent",
     "IamOnboardingEvent",

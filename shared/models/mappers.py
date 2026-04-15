@@ -13,6 +13,7 @@ from shared.models.canonical import (
     Correlation,
     CustomerOnboardingEvent,
     DefenderDetectionFindingEvent,
+    DefenderSecuritySignalEvent,
     Envelope,
     HitlApprovalEvent,
     IamOnboardingEvent,
@@ -66,6 +67,7 @@ def build_envelope(
     occurred_at: datetime,
     payload: (
         DefenderDetectionFindingEvent
+        | DefenderSecuritySignalEvent
         | ImpossibleTravelEvent
         | IamOnboardingEvent
         | CustomerOnboardingEvent

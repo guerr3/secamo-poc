@@ -17,7 +17,13 @@ from connectors.errors import (
     ConnectorUnsupportedActionError,
 )
 from shared.graph_client import get_defender_token, get_graph_token
-from shared.models import DefenderDetectionFindingEvent, Envelope, ImpossibleTravelEvent, VendorExtension
+from shared.models import (
+    DefenderDetectionFindingEvent,
+    DefenderSecuritySignalEvent,
+    Envelope,
+    ImpossibleTravelEvent,
+    VendorExtension,
+)
 from shared.models.mappers import build_connector_correlation, build_envelope
 
 
@@ -25,11 +31,12 @@ class MicrosoftGraphConnector(BaseConnector):
     """Microsoft Graph/Defender connector implementation."""
 
     _MAX_ATTEMPTS = 3
+    _MIN_SUBSCRIPTION_MINUTES = 45
+    _SECURITY_ALERT_SUBSCRIPTION_MAX_MINUTES = 43200
 
     _RESOURCE_CONFIG: dict[str, dict[str, Any]] = {
         "defender_alerts": {
             "path": "/security/alerts_v2",
-            "event_type": "defender.alert",
             "occurred_field": "createdDateTime",
             "filter_field": "createdDateTime",
             "provider_event_type": "alert",
@@ -37,7 +44,6 @@ class MicrosoftGraphConnector(BaseConnector):
         },
         "entra_risky_users": {
             "path": "/identityProtection/riskyUsers",
-            "event_type": "entra.risky_user",
             "occurred_field": "riskLastUpdatedDateTime",
             "filter_field": "riskLastUpdatedDateTime",
             "provider_event_type": "risky_user",
@@ -46,7 +52,6 @@ class MicrosoftGraphConnector(BaseConnector):
         },
         "entra_signin_logs": {
             "path": "/auditLogs/signIns",
-            "event_type": "entra.signin_log",
             "occurred_field": "createdDateTime",
             "filter_field": "createdDateTime",
             "provider_event_type": "impossible_travel",
@@ -54,7 +59,6 @@ class MicrosoftGraphConnector(BaseConnector):
         },
         "intune_noncompliant_devices": {
             "path": "/deviceManagement/managedDevices",
-            "event_type": "intune.noncompliant_device",
             "occurred_field": "lastSyncDateTime",
             "filter_field": "lastSyncDateTime",
             "base_filter": "complianceState eq 'noncompliant'",
@@ -63,7 +67,6 @@ class MicrosoftGraphConnector(BaseConnector):
         },
         "entra_audit_logs": {
             "path": "/auditLogs/directoryAudits",
-            "event_type": "entra.audit_log",
             "occurred_field": "activityDateTime",
             "filter_field": "activityDateTime",
             "provider_event_type": "audit_log",
@@ -123,8 +126,9 @@ class MicrosoftGraphConnector(BaseConnector):
                 continue
 
             if response.status_code in (400, 401, 403, 404):
+                error_details = self._graph_error_details(response)
                 raise ConnectorPermanentError(
-                    f"Graph request rejected: status={response.status_code} url={url}"
+                    f"Graph request rejected: status={response.status_code} url={url}{error_details}"
                 )
 
             try:
@@ -136,8 +140,9 @@ class MicrosoftGraphConnector(BaseConnector):
                         break
                     await asyncio.sleep(self._retry_delay_seconds(response.headers.get("Retry-After"), attempt))
                     continue
+                error_details = self._graph_error_details(response)
                 raise ConnectorPermanentError(
-                    f"Graph request failed: status={response.status_code} url={url}"
+                    f"Graph request failed: status={response.status_code} url={url}{error_details}"
                 ) from exc
 
             return response
@@ -185,9 +190,55 @@ class MicrosoftGraphConnector(BaseConnector):
             return None
 
     @staticmethod
+    def _graph_error_details(response: httpx.Response) -> str:
+        try:
+            body = response.json()
+        except ValueError:
+            return ""
+        if not isinstance(body, dict):
+            return ""
+
+        error = body.get("error")
+        if not isinstance(error, dict):
+            return ""
+
+        code = str(error.get("code") or "").strip()
+        message = str(error.get("message") or "").strip()
+        parts: list[str] = []
+        if code:
+            parts.append(f"code={code}")
+        if message:
+            parts.append(f"message={message}")
+        return f" ({', '.join(parts)})" if parts else ""
+
+    @staticmethod
     def _generate_password(length: int = 16) -> str:
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
         return "".join(secrets.choice(alphabet) for _ in range(length))
+
+    @classmethod
+    def _normalize_subscription_resource(cls, resource: str) -> str:
+        normalized = resource.strip()
+        lowered = normalized.lower().lstrip("/")
+        if lowered.startswith("security/alerts_v2"):
+            suffix = normalized.lstrip("/")[len("security/alerts_v2"):]
+            normalized = f"security/alerts{suffix}"
+        return normalized
+
+    @classmethod
+    def _max_subscription_minutes_for_resource(cls, resource: str) -> int | None:
+        normalized = resource.strip().lower().lstrip("/")
+        if normalized.startswith("security/alerts"):
+            return cls._SECURITY_ALERT_SUBSCRIPTION_MAX_MINUTES
+        return None
+
+    @classmethod
+    def _clamp_subscription_minutes(cls, *, requested_minutes: int, resource: str) -> int:
+        bounded_minutes = max(requested_minutes, cls._MIN_SUBSCRIPTION_MINUTES)
+        max_minutes = cls._max_subscription_minutes_for_resource(resource)
+        if max_minutes is not None:
+            bounded_minutes = min(bounded_minutes, max_minutes)
+        return bounded_minutes
 
     @staticmethod
     def _coerce_non_empty_str(value: Any) -> str | None:
@@ -329,22 +380,17 @@ class MicrosoftGraphConnector(BaseConnector):
         url = "https://graph.microsoft.com/v1.0/security/alerts_v2"
         params = {
             "$top": str(max_top),
-            "$expand": "evidence",
             "$filter": f"createdDateTime gt {self._format_odata_datetime(since_dt)}",
         }
+        if bool(payload.get("include_evidence", False)):
+            params["$expand"] = "evidence"
 
-        try:
-            response = await self._request_with_retry("GET", url, headers=headers, params=params)
-        except ConnectorPermanentError as exc:
-            if self._connector_error_status(exc) != 400:
-                raise
-            # Fallback to a minimal supported query shape when the tenant rejects filtering.
-            response = await self._request_with_retry(
-                "GET",
-                url,
-                headers=headers,
-                params={"$top": str(max_top), "$expand": "evidence"},
-            )
+        response = await self._request_defender_alerts_with_fallback(
+            url=url,
+            headers=headers,
+            params=params,
+            allow_drop_expand=bool(payload.get("include_evidence", False)),
+        )
 
         body = response.json()
         alerts = [
@@ -360,19 +406,18 @@ class MicrosoftGraphConnector(BaseConnector):
         url: str,
         headers: dict[str, str],
         params: dict[str, str] | None,
+        allow_drop_expand: bool = False,
     ) -> httpx.Response:
         if params is None:
             return await self._request_with_retry("GET", url, headers=headers, params=None)
 
         attempts: list[dict[str, str] | None] = [dict(params)]
-        if "$filter" in params:
-            attempts.append({key: value for key, value in params.items() if key != "$filter"})
-        if "$expand" in params:
+        if allow_drop_expand and "$expand" in params:
             attempts.append(
                 {
                     key: value
                     for key, value in params.items()
-                    if key not in {"$filter", "$expand"}
+                    if key != "$expand"
                 }
             )
 
@@ -404,31 +449,122 @@ class MicrosoftGraphConnector(BaseConnector):
             raise last_error
         raise ConnectorPermanentError(f"Graph request rejected: status=400 url={url}")
 
-    def _map_event(self, item: dict[str, Any], resource_type: str, occurred_field: str, event_type: str, provider_event_type: str) -> Envelope:
+    @classmethod
+    def _severity_from_signal(cls, item: dict[str, Any]) -> tuple[int, str]:
+        raw = cls._first_non_empty_str(
+            item.get("severity"),
+            item.get("riskLevel"),
+            item.get("riskLevelAggregated"),
+            item.get("riskLevelDuringSignIn"),
+            item.get("riskScore"),
+            item.get("complianceState"),
+        )
+        normalized = (raw or "unknown").strip().lower()
+        mapping = {
+            "critical": 80,
+            "high": 60,
+            "medium": 40,
+            "low": 20,
+        }
+        if normalized in {"noncompliant", "atrisk", "atrisk", "compromised"}:
+            return 60, "high"
+        if normalized in {"compliant", "none", "unknown", "informational"}:
+            return 20, "low"
+        return mapping.get(normalized, 30), (normalized if normalized in mapping else "medium")
+
+    @classmethod
+    def _status_from_signal(cls, item: dict[str, Any]) -> str | None:
+        return cls._first_non_empty_str(
+            item.get("status"),
+            item.get("riskState"),
+            item.get("complianceState"),
+            item.get("result"),
+            item.get("activityResult"),
+        )
+
+    @classmethod
+    def _signal_title(
+        cls,
+        item: dict[str, Any],
+        *,
+        resource_type: str,
+        provider_event_type: str,
+        signal_id: str,
+    ) -> str:
+        candidate = cls._first_non_empty_str(
+            item.get("title"),
+            item.get("displayName"),
+            item.get("activityDisplayName"),
+            item.get("userPrincipalName"),
+            item.get("userDisplayName"),
+            item.get("deviceName"),
+            item.get("id"),
+        )
+        if candidate is not None:
+            return candidate
+        suffix = signal_id or "signal"
+        return f"{resource_type}:{provider_event_type}:{suffix}"
+
+    @classmethod
+    def _signal_description(cls, item: dict[str, Any]) -> str | None:
+        return cls._first_non_empty_str(
+            item.get("description"),
+            item.get("riskDetail"),
+            item.get("resultReason"),
+            item.get("activityDisplayName"),
+        )
+
+    def _map_security_signal_event(
+        self,
+        *,
+        item: dict[str, Any],
+        resource_type: str,
+        provider_event_type: str,
+        occurred_at: datetime,
+        external_id: str,
+    ) -> DefenderSecuritySignalEvent:
+        signal_id = external_id or f"{resource_type}:{provider_event_type}:{int(occurred_at.timestamp())}"
+        severity_id, severity = self._severity_from_signal(item)
+        status = self._status_from_signal(item)
+
+        return DefenderSecuritySignalEvent(
+            event_type="defender.security_signal",
+            activity_id=2100,
+            activity_name="poller.fetch",
+            signal_id=signal_id,
+            provider_event_type=provider_event_type,
+            resource_type=resource_type,
+            title=self._signal_title(
+                item,
+                resource_type=resource_type,
+                provider_event_type=provider_event_type,
+                signal_id=signal_id,
+            ),
+            description=self._signal_description(item),
+            severity_id=severity_id,
+            severity=severity,
+            status=status,
+            vendor_extensions={
+                "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
+                "resource_type": VendorExtension(source=self.provider, value=resource_type),
+                "user_principal_name": VendorExtension(
+                    source=self.provider,
+                    value=self._coerce_non_empty_str(item.get("userPrincipalName")),
+                ),
+                "entity_id": VendorExtension(
+                    source=self.provider,
+                    value=self._first_non_empty_str(item.get("id"), item.get("userId"), item.get("deviceId")),
+                ),
+            },
+        )
+
+    def _map_event(self, item: dict[str, Any], resource_type: str, occurred_field: str, provider_event_type: str) -> Envelope:
         occurred_at = self._parse_iso_datetime(item.get(occurred_field))
         if occurred_at is None:
             occurred_at = datetime.now(timezone.utc)
         external_id = str(item.get("id") or item.get("alertId") or "")
 
-        if resource_type == "entra_signin_logs":
-            user_principal_name = str(item.get("userPrincipalName") or "unknown@example.com")
-            source_ip = str(item.get("ipAddress") or "0.0.0.0")
-            destination_ip = str(item.get("resourceDisplayName") or "") or None
-            payload = ImpossibleTravelEvent(
-                event_type="defender.impossible_travel",
-                activity_id=3002,
-                activity_name="poller.fetch",
-                user_principal_name=user_principal_name,
-                source_ip=source_ip,
-                destination_ip=destination_ip,
-                severity_id=40,
-                severity="medium",
-                vendor_extensions={
-                    "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
-                    "resource_type": VendorExtension(source=self.provider, value=resource_type),
-                },
-            )
-        else:
+        if resource_type == "defender_alerts":
             evidence_fields = self._extract_alert_evidence_fields(item)
             payload = DefenderDetectionFindingEvent(
                 event_type="defender.alert",
@@ -447,6 +583,32 @@ class MicrosoftGraphConnector(BaseConnector):
                     "device_id": VendorExtension(source=self.provider, value=evidence_fields["device_id"]),
                     "user_email": VendorExtension(source=self.provider, value=evidence_fields["user_email"]),
                 },
+            )
+        elif resource_type == "entra_signin_logs":
+            user_principal_name = str(item.get("userPrincipalName") or "unknown@example.com")
+            source_ip = str(item.get("ipAddress") or "0.0.0.0")
+            destination_ip = str(item.get("resourceDisplayName") or "") or None
+            payload = ImpossibleTravelEvent(
+                event_type="defender.impossible_travel",
+                activity_id=3002,
+                activity_name="poller.fetch",
+                user_principal_name=user_principal_name,
+                source_ip=source_ip,
+                destination_ip=destination_ip,
+                severity_id=40,
+                severity="medium",
+                vendor_extensions={
+                    "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
+                    "resource_type": VendorExtension(source=self.provider, value=resource_type),
+                },
+            )
+        else:
+            payload = self._map_security_signal_event(
+                item=item,
+                resource_type=resource_type,
+                provider_event_type=provider_event_type,
+                occurred_at=occurred_at,
+                external_id=external_id,
             )
 
         correlation_id = external_id or f"{self.tenant_id}:{provider_event_type}:{int(occurred_at.timestamp())}"
@@ -496,8 +658,6 @@ class MicrosoftGraphConnector(BaseConnector):
             "$top": str(top),
             "$filter": combined_filter,
         }
-        if resource_type == "defender_alerts":
-            params["$expand"] = "evidence"
         if bool(resource_config.get("supports_orderby")):
             params["$orderby"] = f"{filter_field} asc"
 
@@ -532,7 +692,6 @@ class MicrosoftGraphConnector(BaseConnector):
                         item=item,
                         resource_type=resource_type,
                         occurred_field=resource_config["occurred_field"],
-                        event_type=resource_config["event_type"],
                         provider_event_type=resource_config["provider_event_type"],
                     )
                 )
@@ -561,30 +720,12 @@ class MicrosoftGraphConnector(BaseConnector):
 
             if alert_id:
                 alert_url = f"https://graph.microsoft.com/v1.0/security/alerts_v2/{quote(alert_id)}"
-                alert_response: httpx.Response | None = None
                 try:
-                    alert_response = await self._request_with_retry(
-                        "GET",
-                        alert_url,
-                        headers=headers,
-                        params={"$expand": "evidence"},
-                    )
+                    alert_response = await self._request_with_retry("GET", alert_url, headers=headers)
                 except ConnectorPermanentError as exc:
-                    status = self._connector_error_status(exc)
-                    if status == 400:
-                        try:
-                            alert_response = await self._request_with_retry(
-                                "GET",
-                                alert_url,
-                                headers=headers,
-                            )
-                        except ConnectorPermanentError as fallback_exc:
-                            if self._connector_error_status(fallback_exc) != 404:
-                                raise
-                    elif status != 404:
+                    if self._connector_error_status(exc) != 404:
                         raise
-
-                if alert_response is not None:
+                else:
                     alert_body = alert_response.json()
                     evidence_fields = self._extract_alert_evidence_fields(alert_body)
                     severity = str(alert_body.get("severity") or severity).lower()
@@ -874,7 +1015,7 @@ class MicrosoftGraphConnector(BaseConnector):
             token = await get_graph_token(self.secrets)
             headers = {"Authorization": f"Bearer {token}"}
 
-            resource = str(payload.get("resource") or "").strip()
+            resource = self._normalize_subscription_resource(str(payload.get("resource") or ""))
             notification_url = str(payload.get("notification_url") or "").strip()
             client_state = str(payload.get("client_state") or "").strip()
             if not resource or not notification_url or not client_state:
@@ -882,7 +1023,11 @@ class MicrosoftGraphConnector(BaseConnector):
                     "create_subscription requires payload.resource, payload.notification_url and payload.client_state"
                 )
 
-            expiration_minutes = max(int(payload.get("expiration_minutes") or 60), 45)
+            requested_minutes = int(payload.get("expiration_minutes") or 60)
+            expiration_minutes = self._clamp_subscription_minutes(
+                requested_minutes=requested_minutes,
+                resource=resource,
+            )
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=expiration_minutes)
             body: dict[str, Any] = {
                 "changeType": str(payload.get("change_type") or ",".join(payload.get("change_types") or ["created", "updated"])),
@@ -924,7 +1069,21 @@ class MicrosoftGraphConnector(BaseConnector):
             if not subscription_id:
                 raise ConnectorUnsupportedActionError("renew_subscription requires payload.subscription_id")
 
-            expiration_minutes = max(int(payload.get("expiration_minutes") or 60), 45)
+            resource_hint = self._normalize_subscription_resource(str(payload.get("resource") or ""))
+            if not resource_hint:
+                subscription_response = await self._request_with_retry(
+                    "GET",
+                    f"https://graph.microsoft.com/v1.0/subscriptions/{quote(subscription_id)}",
+                    headers=headers,
+                )
+                subscription_body = subscription_response.json()
+                resource_hint = self._normalize_subscription_resource(str(subscription_body.get("resource") or ""))
+
+            requested_minutes = int(payload.get("expiration_minutes") or 60)
+            expiration_minutes = self._clamp_subscription_minutes(
+                requested_minutes=requested_minutes,
+                resource=resource_hint,
+            )
             expires_at = datetime.now(timezone.utc) + timedelta(minutes=expiration_minutes)
             response = await self._request_with_retry(
                 "PATCH",
@@ -1028,17 +1187,6 @@ class MicrosoftGraphConnector(BaseConnector):
             url = f"https://graph.microsoft.com/v1.0/security/alerts_v2/{quote(alert_id)}"
             response = await self._request_with_retry("GET", url, headers=headers)
             return response.json()
-
-        if action == "get_user_alerts":
-            token = await get_graph_token(self.secrets)
-            headers = {"Authorization": f"Bearer {token}"}
-            user_email = payload["user_email"]
-            escaped_email = self._escape_odata_literal(user_email)
-            filt = f"userStates/any(u:u/userPrincipalName eq '{escaped_email}')"
-            url = "https://graph.microsoft.com/v1.0/security/alerts_v2"
-            response = await self._request_with_retry("GET", url, headers=headers, params={"$filter": filt})
-            body = response.json()
-            return {"alerts": body.get("value", [])}
 
         if action == "get_user":
             token = await get_graph_token(self.secrets)

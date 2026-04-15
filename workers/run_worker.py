@@ -289,6 +289,7 @@ def load_workflows() -> dict:
 
     try:
         from workflows.defender_alert_enrichment import DefenderAlertEnrichmentWorkflow
+        from workflows.generic_security_signal import GenericSecuritySignalWorkflow
         from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
         from workflows.child.hitl_approval import HiTLApprovalWorkflow
         from workflows.child.incident_response import IncidentResponseWorkflow
@@ -300,6 +301,7 @@ def load_workflows() -> dict:
             ThreatIntelEnrichmentWorkflow,
             AlertEnrichmentWorkflow,
             IncidentResponseWorkflow,
+            GenericSecuritySignalWorkflow,
             OnboardingSubscriptionReconcileStageWorkflow,
         ])
         ticketing_workflows.append(TicketCreationWorkflow)

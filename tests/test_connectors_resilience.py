@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -7,6 +8,7 @@ import pytest
 from connectors.errors import ConnectorPermanentError
 from connectors.jira import JiraConnector
 from connectors.microsoft_defender import MicrosoftGraphConnector
+from shared.models import DefenderSecuritySignalEvent
 from shared.providers.contracts import TenantSecrets
 
 
@@ -121,7 +123,7 @@ async def test_graph_fetch_events_retries_on_429(mocker, graph_secrets):
 
     assert len(events) == 1
     assert len(calls) == 2
-    assert calls[0]["params"]["$expand"] == "evidence"
+    assert "$expand" not in calls[0]["params"]
 
 
 @pytest.mark.asyncio
@@ -154,6 +156,42 @@ async def test_graph_fetch_events_non_defender_does_not_expand_evidence(mocker, 
 
     assert len(events) == 1
     assert "$expand" not in calls[0]["params"]
+
+
+@pytest.mark.asyncio
+async def test_graph_fetch_events_non_alert_resource_maps_to_security_signal(mocker, graph_secrets):
+    queue = [
+        _Resp(
+            200,
+            body={
+                "value": [
+                    {
+                        "id": "risk-1",
+                        "riskLastUpdatedDateTime": "2026-03-22T00:00:00Z",
+                        "riskLevel": "high",
+                        "riskState": "atRisk",
+                        "userPrincipalName": "alice@example.com",
+                    }
+                ]
+            },
+        ),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    events = await connector.fetch_events({"resource_type": "entra_risky_users", "top": 1})
+
+    assert len(events) == 1
+    assert isinstance(events[0].payload, DefenderSecuritySignalEvent)
+    assert events[0].payload.event_type == "defender.security_signal"
+    assert events[0].payload.provider_event_type == "risky_user"
+    assert events[0].payload.resource_type == "entra_risky_users"
 
 
 @pytest.mark.asyncio
@@ -288,7 +326,7 @@ async def test_graph_list_user_alerts_filters_client_side(mocker, graph_secrets)
     result = await connector.execute_action("list_user_alerts", {"user_email": "user@example.com"})
 
     assert [alert["id"] for alert in result["alerts"]] == ["a1", "a2"]
-    assert calls[0]["params"]["$expand"] == "evidence"
+    assert "$expand" not in calls[0]["params"]
     assert "createdDateTime gt" in calls[0]["params"]["$filter"]
 
 
@@ -317,12 +355,11 @@ async def test_graph_list_user_alerts_fallback_on_400(mocker, graph_secrets):
     )
 
     connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action("list_user_alerts", {"user_email": "user@example.com"})
+    with pytest.raises(ConnectorPermanentError):
+        await connector.execute_action("list_user_alerts", {"user_email": "user@example.com"})
 
-    assert [alert["id"] for alert in result["alerts"]] == ["a1"]
+    assert len(calls) == 1
     assert "$filter" in calls[0]["params"]
-    assert "$filter" not in calls[1]["params"]
-    assert calls[1]["params"]["$expand"] == "evidence"
 
 
 @pytest.mark.asyncio
@@ -352,28 +389,25 @@ async def test_graph_fetch_events_defender_fallback_removes_filter_on_400(mocker
     )
 
     connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    events = await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
+    with pytest.raises(ConnectorPermanentError):
+        await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
 
-    assert len(events) == 1
+    assert len(calls) == 1
     assert "$filter" in calls[0]["params"]
-    assert "$filter" not in calls[1]["params"]
-    assert calls[1]["params"]["$expand"] == "evidence"
 
 
 @pytest.mark.asyncio
-async def test_graph_fetch_events_defender_fallback_removes_expand_after_second_400(mocker, graph_secrets):
+async def test_graph_list_user_alerts_include_evidence_fallback_drops_expand_on_400(mocker, graph_secrets):
     queue = [
-        _Resp(400, body={"error": {"message": "Unsupported filter"}}),
         _Resp(400, body={"error": {"message": "Unsupported expand"}}),
         _Resp(
             200,
             body={
                 "value": [
                     {
-                        "id": "a2",
+                        "id": "a-evidence",
                         "createdDateTime": "2026-03-22T00:00:00Z",
-                        "severity": "medium",
-                        "title": "Alert without expand",
+                        "userStates": [{"userPrincipalName": "user@example.com"}],
                     }
                 ]
             },
@@ -388,19 +422,21 @@ async def test_graph_fetch_events_defender_fallback_removes_expand_after_second_
     )
 
     connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    events = await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
+    result = await connector.execute_action(
+        "list_user_alerts",
+        {"user_email": "user@example.com", "include_evidence": True},
+    )
 
-    assert len(events) == 1
+    assert [alert["id"] for alert in result["alerts"]] == ["a-evidence"]
     assert "$filter" in calls[0]["params"]
-    assert "$filter" not in calls[1]["params"]
-    assert "$expand" in calls[1]["params"]
-    assert "$expand" not in calls[2]["params"]
+    assert "$filter" in calls[1]["params"]
+    assert "$expand" in calls[0]["params"]
+    assert "$expand" not in calls[1]["params"]
 
 
 @pytest.mark.asyncio
-async def test_graph_enrich_alert_context_fallback_removes_expand_on_400(mocker, graph_secrets):
+async def test_graph_enrich_alert_context_uses_plain_get_alert(mocker, graph_secrets):
     queue = [
-        _Resp(400, body={"error": {"message": "Unsupported expand"}}),
         _Resp(
             200,
             body={
@@ -427,8 +463,7 @@ async def test_graph_enrich_alert_context_fallback_removes_expand_on_400(mocker,
     assert result["alert_id"] == "a1"
     assert result["title"] == "Alert title"
     assert result["description"] == "Alert body"
-    assert calls[0]["params"]["$expand"] == "evidence"
-    assert calls[1]["params"] is None
+    assert calls[0]["params"] is None
 
 
 @pytest.mark.asyncio
@@ -447,7 +482,7 @@ async def test_graph_enrich_alert_context_404_returns_payload_defaults(mocker, g
 
     assert result["success"] is True
     assert result["alert_id"] == "missing-id"
-    assert calls[0]["params"]["$expand"] == "evidence"
+    assert calls[0]["params"] is None
 
 
 @pytest.mark.asyncio
@@ -640,9 +675,10 @@ async def test_graph_phase1_device_actions_use_defender_token(mocker, graph_secr
 @pytest.mark.asyncio
 async def test_graph_subscription_actions_use_graph_token(mocker, graph_secrets):
     queue = [
-        _Resp(201, body={"id": "sub-1", "resource": "security/alerts_v2", "expirationDateTime": "2026-03-31T01:00:00Z", "notificationUrl": "https://hook", "clientState": "secamo:t1:alerts"}),
-        _Resp(200, body={"id": "sub-1", "resource": "security/alerts_v2", "expirationDateTime": "2026-03-31T02:00:00Z", "notificationUrl": "https://hook", "clientState": "secamo:t1:alerts"}),
-        _Resp(200, body={"value": [{"id": "sub-1", "resource": "security/alerts_v2", "clientState": "secamo:t1:alerts"}]}),
+        _Resp(201, body={"id": "sub-1", "resource": "security/alerts", "expirationDateTime": "2026-03-31T01:00:00Z", "notificationUrl": "https://hook", "clientState": "secamo:t1:alerts"}),
+        _Resp(200, body={"id": "sub-1", "resource": "security/alerts", "expirationDateTime": "2026-03-31T01:00:00Z"}),
+        _Resp(200, body={"id": "sub-1", "resource": "security/alerts", "expirationDateTime": "2026-03-31T02:00:00Z", "notificationUrl": "https://hook", "clientState": "secamo:t1:alerts"}),
+        _Resp(200, body={"value": [{"id": "sub-1", "resource": "security/alerts", "clientState": "secamo:t1:alerts"}]}),
         _Resp(204, body={}, content=b""),
     ]
     calls: list[dict[str, Any]] = []
@@ -674,7 +710,72 @@ async def test_graph_subscription_actions_use_graph_token(mocker, graph_secrets)
     assert renewed["id"] == "sub-1"
     assert listed["subscriptions"][0]["id"] == "sub-1"
     assert deleted["deleted"] is True
+    assert calls[0]["json"]["resource"] == "security/alerts"
     assert all(call["headers"]["Authorization"] == "Bearer graph-tok" for call in calls)
+
+
+@pytest.mark.asyncio
+async def test_graph_subscription_create_clamps_security_alert_lifetime(mocker, graph_secrets):
+    queue = [
+        _Resp(
+            201,
+            body={
+                "id": "sub-long",
+                "resource": "security/alerts",
+                "expirationDateTime": "2026-03-31T02:00:00Z",
+                "notificationUrl": "https://hook",
+                "clientState": "secamo:t1:alerts",
+            },
+        )
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="graph-tok"))
+    mocker.patch("connectors.microsoft_defender.get_defender_token", new=mocker.AsyncMock(return_value="defender-tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    await connector.execute_action(
+        "create_subscription",
+        {
+            "resource": "security/alerts_v2",
+            "change_types": ["created", "updated"],
+            "notification_url": "https://hook",
+            "client_state": "secamo:t1:alerts",
+            "expiration_minutes": 999999,
+        },
+    )
+
+    request_body = calls[0]["json"]
+    assert request_body["resource"] == "security/alerts"
+    expires_at = datetime.fromisoformat(request_body["expirationDateTime"].replace("Z", "+00:00"))
+    now = datetime.now(timezone.utc)
+    delta_minutes = (expires_at - now).total_seconds() / 60
+    assert 43000 <= delta_minutes <= 43210
+
+
+@pytest.mark.asyncio
+async def test_graph_request_with_retry_includes_graph_error_code_and_message(mocker, graph_secrets):
+    queue = [
+        _Resp(400, body={"error": {"code": "BadRequest", "message": "Unsupported query parameter"}}),
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    with pytest.raises(ConnectorPermanentError, match="code=BadRequest"):
+        await connector._request_with_retry(
+            "GET",
+            "https://graph.microsoft.com/v1.0/security/alerts_v2",
+            headers={"Authorization": "Bearer tok"},
+        )
 
 
 @pytest.mark.asyncio

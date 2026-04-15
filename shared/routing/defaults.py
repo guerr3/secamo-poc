@@ -55,6 +55,16 @@ def build_default_route_registry() -> RouteRegistry:
         (WorkflowRoute(workflow_name="ImpossibleTravelWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
+        "microsoft_defender",
+        "defender.security_signal",
+        (WorkflowRoute(workflow_name="GenericSecuritySignalWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register(
+        "microsoft_defender",
+        "security_signal",
+        (WorkflowRoute(workflow_name="GenericSecuritySignalWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register(
         "crowdstrike",
         "defender.alert",
         (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue=QUEUE_EDR),),
@@ -111,6 +121,16 @@ def build_default_route_registry() -> RouteRegistry:
     )
     registry.register(
         "microsoft_graph",
+        "defender.security_signal",
+        (WorkflowRoute(workflow_name="GenericSecuritySignalWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register(
+        "microsoft_graph",
+        "security_signal",
+        (WorkflowRoute(workflow_name="GenericSecuritySignalWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register(
+        "microsoft_graph",
         "iam.onboarding",
         (WorkflowRoute(workflow_name="IamOnboardingWorkflow", task_queue=QUEUE_USER_LIFECYCLE),),
     )
@@ -132,11 +152,14 @@ def build_default_route_registry() -> RouteRegistry:
 
     registry.register_polling_resource("microsoft_defender", "defender_alerts", "alert")
     registry.register_polling_resource("microsoft_defender", "entra_signin_logs", "impossible_travel")
+    registry.register_polling_resource("microsoft_defender", "entra_risky_users", "defender.security_signal")
+    registry.register_polling_resource("microsoft_defender", "intune_noncompliant_devices", "defender.security_signal")
+    registry.register_polling_resource("microsoft_defender", "entra_audit_logs", "defender.security_signal")
 
     registry.register_webhook_resource("microsoft_graph", "security/alerts", "defender.alert")
     registry.register_webhook_resource("microsoft_graph", "security/alerts_v2", "defender.alert")
     registry.register_webhook_resource("microsoft_graph", "auditlogs/signins", "defender.impossible_travel")
-    registry.register_webhook_resource("microsoft_graph", "identityprotection/riskyusers", "defender.impossible_travel")
+    registry.register_webhook_resource("microsoft_graph", "identityprotection/riskyusers", "defender.security_signal")
 
     return registry
 
