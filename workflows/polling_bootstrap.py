@@ -42,6 +42,7 @@ class PollingBootstrapWorkflow:
             return "Polling bootstrap skipped: no active tenants"
 
         started_children = 0
+        duplicate_provider_configs = 0
         for tenant_id in tenant_ids:
             config: TenantConfig = await workflow.execute_activity(
                 get_tenant_config,
@@ -50,7 +51,14 @@ class PollingBootstrapWorkflow:
                 retry_policy=RETRY_POLICY,
             )
 
+            seen_provider_resources: set[tuple[str, str]] = set()
             for provider_cfg in config.polling_providers:
+                provider_resource = (provider_cfg.provider, provider_cfg.resource_type)
+                if provider_resource in seen_provider_resources:
+                    duplicate_provider_configs += 1
+                    continue
+                seen_provider_resources.add(provider_resource)
+
                 polling_workflow_id = (
                     f"polling-{tenant_id}-{provider_cfg.provider}-{provider_cfg.resource_type}"
                 )
@@ -73,5 +81,6 @@ class PollingBootstrapWorkflow:
 
         return (
             f"Polling bootstrap reconciled {started_children} polling managers "
-            f"across {len(tenant_ids)} tenant(s)."
+            f"across {len(tenant_ids)} tenant(s). "
+            f"Skipped duplicate provider configs: {duplicate_provider_configs}."
         )

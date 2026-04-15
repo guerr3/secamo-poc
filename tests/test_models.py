@@ -14,8 +14,12 @@ from shared.models import (
     DefenderDetectionFindingEvent,
     Envelope,
     GraphNotificationEnvelope,
+    HiTLCaseInput,
+    HiTLRequest,
     HitlApprovalEvent,
     IamIngressRequest,
+    SecurityCaseInput,
+    UserLifecycleCaseInput,
     VendorExtension,
     to_approval_decision,
 )
@@ -213,7 +217,7 @@ class TestExtraFieldsIgnored:
 class TestRoutingResolution:
     def test_provider_event_route(self):
         route = resolve_provider_event_route("microsoft_defender", "alert")
-        assert route == ("DefenderAlertEnrichmentWorkflow", "edr")
+        assert route == ("CaseIntakeWorkflow", "edr")
 
     def test_polling_route_prefers_payload_provider_event_type(self):
         route = resolve_polling_route(
@@ -221,4 +225,55 @@ class TestRoutingResolution:
             resource_type="defender_alerts",
             payload={"provider_event_type": "impossible_travel"},
         )
-        assert route == ("ImpossibleTravelWorkflow", "edr")
+        assert route == ("CaseIntakeWorkflow", "edr")
+
+
+class TestCaseContracts:
+    def test_security_case_input_rejects_unknown_case_type(self) -> None:
+        with pytest.raises(Exception):
+            SecurityCaseInput(
+                tenant_id="tenant-001",
+                case_type="unknown_case",  # type: ignore[arg-type]
+                severity="high",
+                alert_id="alert-001",
+            )
+
+    def test_security_case_input_defaults_allowed_actions(self) -> None:
+        case = SecurityCaseInput(
+            tenant_id="tenant-001",
+            case_type="defender_alert",
+            severity="high",
+            alert_id="alert-001",
+        )
+
+        assert case.allowed_actions == ["dismiss", "isolate", "disable_user"]
+
+    def test_user_lifecycle_case_input_accepts_expected_values(self) -> None:
+        case = UserLifecycleCaseInput(
+            tenant_id="tenant-001",
+            action="create",
+            user_id="user-001",
+            user_email="user@example.com",
+            requester="admin@example.com",
+        )
+
+        assert case.action == "create"
+        assert case.user_email == "user@example.com"
+
+    def test_hitl_case_input_wraps_hitl_request(self) -> None:
+        hitl_request = HiTLRequest(
+            workflow_id="wf-001",
+            run_id="",
+            tenant_id="tenant-001",
+            title="Approval",
+            description="Please review",
+            allowed_actions=["dismiss"],
+            reviewer_email="analyst@example.com",
+        )
+
+        case = HiTLCaseInput(
+            tenant_id="tenant-001",
+            hitl_request=hitl_request,
+        )
+
+        assert case.hitl_request.workflow_id == "wf-001"

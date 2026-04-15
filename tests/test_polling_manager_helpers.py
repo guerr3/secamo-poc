@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 from shared.models import Correlation, DefenderDetectionFindingEvent, Envelope, StoragePartition
 from workflows.polling_manager import _child_workflow_id, _extract_provider_event_id
@@ -65,3 +66,10 @@ def test_child_workflow_id_sanitizes_event_identifier() -> None:
     )
 
     assert workflow_id == "microsoft_defender-defender_alerts-tenant-1-alert_with__spaces"
+
+
+def test_polling_manager_refreshes_config_each_iteration() -> None:
+    source = Path("workflows/polling_manager.py").read_text(encoding="utf-8")
+
+    assert "get_tenant_config" in source
+    assert "if input.iteration == 0" not in source

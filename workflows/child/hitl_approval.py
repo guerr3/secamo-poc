@@ -1,7 +1,7 @@
 from datetime import timedelta
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, SearchAttributeKey
 
 with workflow.unsafe.imports_passed_through():
     from activities.edr import edr_isolate_device
@@ -11,6 +11,8 @@ with workflow.unsafe.imports_passed_through():
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
+TENANT_ID_SEARCH_ATTRIBUTE = SearchAttributeKey.for_keyword("TenantId")
+HITL_STATUS_SEARCH_ATTRIBUTE = SearchAttributeKey.for_keyword("HiTLStatus")
 
 
 def _rebind_hitl_request_for_child(
@@ -39,6 +41,14 @@ class HiTLApprovalWorkflow:
 
     @workflow.run
     async def run(self, request: HiTLApprovalRequest) -> ApprovalDecision | None:
+        if workflow.patched("hitl-search-attributes-v1"):
+            workflow.upsert_search_attributes(
+                [
+                    TENANT_ID_SEARCH_ATTRIBUTE.value_set(request.tenant_id),
+                    HITL_STATUS_SEARCH_ATTRIBUTE.value_set("pending"),
+                ]
+            )
+
         child_hitl_request = _rebind_hitl_request_for_child(
             request.hitl_request,
             child_workflow_id=workflow.info().workflow_id,
@@ -70,6 +80,11 @@ class HiTLApprovalWorkflow:
         try:
             await workflow.wait_condition(lambda: self._approval is not None, timeout=approval_timeout)
         except TimeoutError:
+            if workflow.patched("hitl-search-attributes-v1"):
+                workflow.upsert_search_attributes(
+                    [HITL_STATUS_SEARCH_ATTRIBUTE.value_set("timed_out")]
+                )
+
             if request.auto_isolate_on_timeout and request.device_id:
                 await workflow.execute_activity(
                     edr_isolate_device,
@@ -97,5 +112,10 @@ class HiTLApprovalWorkflow:
                     retry_policy=RETRY_POLICY,
                 )
             return None
+
+        if workflow.patched("hitl-search-attributes-v1"):
+            workflow.upsert_search_attributes(
+                [HITL_STATUS_SEARCH_ATTRIBUTE.value_set("resolved")]
+            )
 
         return self._approval

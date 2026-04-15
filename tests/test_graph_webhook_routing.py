@@ -3,17 +3,17 @@ from shared.routing import resolve_webhook_route
 
 def test_resolve_webhook_route_alerts_v2_resource() -> None:
     route = resolve_webhook_route("microsoft_graph", "/security/alerts_v2/abc-123")
-    assert route == ("DefenderAlertEnrichmentWorkflow", "edr")
+    assert route == ("CaseIntakeWorkflow", "edr")
 
 
 def test_resolve_webhook_route_signins_resource() -> None:
     route = resolve_webhook_route("microsoft_graph", "auditLogs/signIns")
-    assert route == ("ImpossibleTravelWorkflow", "edr")
+    assert route == ("CaseIntakeWorkflow", "edr")
 
 
 def test_resolve_webhook_route_riskyusers_resource() -> None:
     route = resolve_webhook_route("microsoft_graph", "identityProtection/riskyUsers")
-    assert route == ("GenericSecuritySignalWorkflow", "edr")
+    assert route == ("CaseIntakeWorkflow", "edr")
 
 
 def test_resolve_webhook_route_unknown_resource() -> None:

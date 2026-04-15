@@ -1,4 +1,3 @@
-import secrets
 import string
 from datetime import timedelta
 
@@ -6,21 +5,20 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 
-def _generate_temp_password(length: int = 16) -> str:
-    """Generate a cryptographically random temporary password."""
+def _generate_legacy_temp_password(length: int = 16) -> str:
+    """Deterministic fallback for replaying pre-patch workflow histories."""
+
+    seeded_random = workflow.new_random()
     alphabet = string.ascii_letters + string.digits + string.punctuation
-    # Guarantee at least one of each required class
     password = [
-        secrets.choice(string.ascii_uppercase),
-        secrets.choice(string.ascii_lowercase),
-        secrets.choice(string.digits),
-        secrets.choice("!@#$%^&*"),
+        seeded_random.choice(string.ascii_uppercase),
+        seeded_random.choice(string.ascii_lowercase),
+        seeded_random.choice(string.digits),
+        seeded_random.choice("!@#$%^&*"),
     ]
-    password += [secrets.choice(alphabet) for _ in range(length - len(password))]
-    # Shuffle to avoid predictable prefix
+    password += [seeded_random.choice(alphabet) for _ in range(max(length - len(password), 0))]
     shuffled = list(password)
-    secrets_module = secrets.SystemRandom()
-    secrets_module.shuffle(shuffled)
+    seeded_random.shuffle(shuffled)
     return "".join(shuffled)
 
 
@@ -37,6 +35,7 @@ with workflow.unsafe.imports_passed_through():
     from shared.models.canonical import Envelope, IamOnboardingEvent
     from shared.workflow_helpers import bootstrap_tenant
     from activities.identity import (
+        identity_generate_temp_password,
         identity_assign_license,
         identity_create_user,
         identity_get_user,
@@ -251,12 +250,23 @@ class IamOnboardingWorkflow:
                 raise ValueError(
                     f"Gebruiker '{user_email}' niet gevonden voor password reset."
                 )
+
+            if workflow.patched("wf01-password-generation-activity-v1"):
+                temp_password = await workflow.execute_activity(
+                    identity_generate_temp_password,
+                    args=[16],
+                    start_to_close_timeout=TIMEOUT,
+                    retry_policy=runtime_retry,
+                )
+            else:
+                temp_password = _generate_legacy_temp_password()
+
             await workflow.execute_activity(
                 identity_reset_password,
                 args=[
                     event.tenant_id,
                     existing_user.user_id,
-                    _generate_temp_password(),
+                    temp_password,
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,

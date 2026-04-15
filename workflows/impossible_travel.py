@@ -44,6 +44,12 @@ class ImpossibleTravelWorkflow:
         payload = event.payload
         source_ip = payload.source_ip
         destination_ip = payload.destination_ip
+        device_extension = payload.vendor_extensions.get("device_id")
+        device_id = (
+            str(device_extension.value)
+            if device_extension is not None and isinstance(device_extension.value, str)
+            else None
+        )
 
         workflow.logger.info(
             f"WF-05 gestart — tenant={event.tenant_id}, "
@@ -119,6 +125,7 @@ class ImpossibleTravelWorkflow:
                 "severity": payload.severity,
                 "source_ip": source_ip,
                 "destination_ip": destination_ip,
+                "device_id": device_id,
                 "risk_indicator": "malicious" if threat_intel.is_malicious else "clean",
                 "risk_score": threat_intel.reputation_score,
                 "recent_alert_count": len(recent_alerts),
@@ -137,7 +144,7 @@ class ImpossibleTravelWorkflow:
                 escalation_enabled=config.escalation_enabled,
                 edr_provider=config.edr_provider,
                 ticketing_provider=config.ticketing_provider,
-                device_id=None,
+                device_id=device_id,
             ),
             id=f"{workflow.info().workflow_id}-hitl",
             task_queue=QUEUE_INTERACTIONS,
@@ -158,7 +165,7 @@ class ImpossibleTravelWorkflow:
                 decision=decision,
                 user=user,
                 user_email=payload.user_principal_name,
-                device_id=None,
+                device_id=device_id,
                 ticket_id=ticket.ticket_id,
                 evidence_bundle_enabled=config.evidence_bundle_enabled,
                 edr_provider=config.edr_provider,

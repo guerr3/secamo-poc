@@ -50,7 +50,12 @@ class IncidentResponseWorkflow:
             action_result = "Alert dismissed als false positive."
 
         elif request.decision.action == "isolate":
-            resolved_device_id = request.device_id or "unknown-device"
+            if workflow.patched("incident-response-require-device-id-v1"):
+                if not request.device_id:
+                    raise ValueError("IncidentResponse isolate action requires device_id")
+                resolved_device_id = request.device_id
+            else:
+                resolved_device_id = request.device_id or "unknown-device"
             await workflow.execute_activity(
                 edr_isolate_device,
                 args=[

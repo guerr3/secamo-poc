@@ -76,25 +76,24 @@ class PollingManagerWorkflow:
         effective_secret_type = input.secret_type
         effective_poll_interval = input.poll_interval_seconds
 
-        if input.iteration == 0:
-            config: TenantConfig = await workflow.execute_activity(
-                get_tenant_config,
-                args=[input.tenant_id],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=RETRY_POLICY,
-            )
+        config: TenantConfig = await workflow.execute_activity(
+            get_tenant_config,
+            args=[input.tenant_id],
+            start_to_close_timeout=TIMEOUT,
+            retry_policy=RETRY_POLICY,
+        )
 
-            provider_cfg = next(
-                (
-                    item
-                    for item in config.polling_providers
-                    if item.provider == input.provider and item.resource_type == input.resource_type
-                ),
-                None,
-            )
-            if provider_cfg is not None:
-                effective_secret_type = provider_cfg.secret_type
-                effective_poll_interval = provider_cfg.poll_interval_seconds
+        provider_cfg = next(
+            (
+                item
+                for item in config.polling_providers
+                if item.provider == input.provider and item.resource_type == input.resource_type
+            ),
+            None,
+        )
+        if provider_cfg is not None:
+            effective_secret_type = provider_cfg.secret_type
+            effective_poll_interval = provider_cfg.poll_interval_seconds
 
         fetch_result = await workflow.execute_activity(
             edr_fetch_events,

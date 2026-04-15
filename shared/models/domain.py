@@ -140,6 +140,44 @@ class IdentityRiskContext(BaseModel):
     risk_detail: str | None = None
 
 
+class SecurityCaseInput(BaseModel):
+    """Normalized SOC case intake contract for unified parent orchestration."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    tenant_id: str
+    case_type: Literal["defender_alert", "impossible_travel", "risky_user", "generic_signal"]
+    severity: Literal["low", "medium", "high", "critical"]
+    alert_id: str
+    allowed_actions: list[str] = Field(default_factory=lambda: ["dismiss", "isolate", "disable_user"])
+    auto_remediate: bool = False
+    identity: str | None = None
+    device: str | None = None
+    identity_risk: str | None = None
+    source_event: Envelope | None = None
+
+
+class UserLifecycleCaseInput(BaseModel):
+    """Typed user-lifecycle case request for future intake extension points."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    tenant_id: str
+    action: Literal["create", "update", "delete", "password_reset"]
+    user_id: str
+    user_email: str
+    requester: str
+
+
+class HiTLCaseInput(BaseModel):
+    """Typed wrapper for HiTL approval case execution requests."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    tenant_id: str
+    hitl_request: "HiTLRequest"
+
+
 # ──────────────────────────────────────────────
 # WF-02  Defender Alert Enrichment & Ticketing
 # ──────────────────────────────────────────────

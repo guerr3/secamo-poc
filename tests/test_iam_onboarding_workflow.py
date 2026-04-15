@@ -1,8 +1,17 @@
+from pathlib import Path
+
 from workflows.iam_onboarding import (
     LICENSE_APPROVE_ACTION,
     LICENSE_REJECT_ACTION,
     _build_license_approval_request,
 )
+
+
+def test_iam_workflow_uses_activity_password_generation() -> None:
+    source = Path("workflows/iam_onboarding.py").read_text(encoding="utf-8")
+
+    assert "identity_generate_temp_password" in source
+    assert "secrets.choice" not in source
 
 
 def test_build_license_approval_request_uses_email_channel_and_expected_actions() -> None:

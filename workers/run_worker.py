@@ -288,6 +288,7 @@ def load_workflows() -> dict:
         sys.exit(1)
 
     try:
+        from workflows.case_intake import CaseIntakeWorkflow
         from workflows.defender_alert_enrichment import DefenderAlertEnrichmentWorkflow
         from workflows.generic_security_signal import GenericSecuritySignalWorkflow
         from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
@@ -297,6 +298,7 @@ def load_workflows() -> dict:
         from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
         from workflows.child.ticket_creation import TicketCreationWorkflow
         edr_workflows.extend([
+            CaseIntakeWorkflow,
             DefenderAlertEnrichmentWorkflow,
             ThreatIntelEnrichmentWorkflow,
             AlertEnrichmentWorkflow,

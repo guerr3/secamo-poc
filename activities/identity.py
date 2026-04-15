@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import secrets
+import string
 from typing import Any
 
 from temporalio import activity
@@ -78,3 +80,26 @@ async def identity_assign_license(tenant_id: str, user_id: str, sku_id: str) -> 
 async def identity_reset_password(tenant_id: str, user_id: str, temp_password: str) -> bool:
     provider = await _get_identity_provider(tenant_id)
     return await provider.reset_password(user_id, temp_password)
+
+
+def _generate_temp_password(length: int = 16) -> str:
+    """Generate a cryptographically random temporary password."""
+
+    alphabet = string.ascii_letters + string.digits + string.punctuation
+    password = [
+        secrets.choice(string.ascii_uppercase),
+        secrets.choice(string.ascii_lowercase),
+        secrets.choice(string.digits),
+        secrets.choice("!@#$%^&*"),
+    ]
+    password += [secrets.choice(alphabet) for _ in range(max(length - len(password), 0))]
+    shuffled = list(password)
+    secrets.SystemRandom().shuffle(shuffled)
+    return "".join(shuffled)
+
+
+@activity.defn
+async def identity_generate_temp_password(length: int = 16) -> str:
+    """Generate a temporary password in activity context to preserve workflow determinism."""
+
+    return _generate_temp_password(length)
