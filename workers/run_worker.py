@@ -173,6 +173,7 @@ def load_activities_by_queue() -> dict[str, list]:
             edr_run_antivirus_scan,
             edr_unisolate_device,
         )
+        from activities.polling_dedup import polling_mark_event_processed
         from activities.threat_intel import threat_intel_lookup, threat_intel_fanout
         from activities.risk import calculate_risk_score
         edr_activities.extend([
@@ -190,7 +191,7 @@ def load_activities_by_queue() -> dict[str, list]:
             edr_list_risky_users,
             threat_intel_lookup, threat_intel_fanout, calculate_risk_score,
         ])
-        polling_activities.extend([edr_fetch_events])
+        polling_activities.extend([edr_fetch_events, polling_mark_event_processed])
         logger.info("✓ SOC capability activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Graph Alerts activities: {e}")
@@ -228,6 +229,7 @@ def load_activities_by_queue() -> dict[str, list]:
         user_lifecycle_activities.append(create_audit_log)
         edr_activities.extend([create_audit_log, collect_evidence_bundle])
         audit_activities.extend([create_audit_log, collect_evidence_bundle])
+        polling_activities.append(create_audit_log)
         logger.info("✓ Audit activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Audit activities: {e}")

@@ -38,6 +38,7 @@ _SYMBOL_TO_MODULE = {
     "subscription_metadata_lookup": "activities.subscription",
     "subscription_metadata_store": "activities.subscription",
     "subscription_renew": "activities.subscription",
+    "polling_mark_event_processed": "activities.polling_dedup",
     "connector_fetch_events": "activities.provider_capabilities",
     "connector_execute_action": "activities.provider_capabilities",
     "connector_health_check": "activities.provider_capabilities",

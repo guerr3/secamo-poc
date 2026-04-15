@@ -4,7 +4,7 @@ from datetime import timedelta
 from typing import Any
 
 from temporalio import workflow
-from temporalio.common import RetryPolicy
+from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 
 from activities.tenant import get_tenant_config, validate_tenant_context
 from shared.config import QUEUE_EDR, QUEUE_TICKETING
@@ -100,7 +100,8 @@ async def start_child_workflow_idempotent(
     workflow_id: str,
     task_queue: str,
     parent_close_policy: workflow.ParentClosePolicy = workflow.ParentClosePolicy.ABANDON,
-) -> None:
+    id_reuse_policy: WorkflowIDReusePolicy = WorkflowIDReusePolicy.ALLOW_DUPLICATE,
+) -> bool:
     """Start child workflow while tolerating deterministic duplicate starts."""
     from temporalio.exceptions import WorkflowAlreadyStartedError
 
@@ -111,9 +112,12 @@ async def start_child_workflow_idempotent(
             id=workflow_id,
             task_queue=task_queue,
             parent_close_policy=parent_close_policy,
+            id_reuse_policy=id_reuse_policy,
         )
+        return True
     except WorkflowAlreadyStartedError:
         workflow.logger.info("Child workflow already running: %s", workflow_id)
+        return False
 
 
 async def emit_workflow_observability(
