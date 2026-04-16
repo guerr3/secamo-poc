@@ -39,13 +39,7 @@ class OnboardingSubscriptionReconcileStageWorkflow:
         existing_keys: set[tuple[str, tuple[str, ...]]] = set()
         has_desired_graph_subscriptions = bool(config.graph_subscriptions)
 
-        if has_desired_graph_subscriptions and not notification_url:
-            workflow.logger.warning(
-                "Onboarding subscription reconcile: graph notification URL missing; continuing without creating subscriptions (partial=%s)",
-                request.partial_onboarding,
-            )
-
-        if has_desired_graph_subscriptions:
+        if has_desired_graph_subscriptions and notification_url:
             existing_subscriptions: list[SubscriptionState] = await workflow.execute_activity(
                 subscription_list,
                 args=[request.tenant_id, "graph"],
@@ -61,13 +55,6 @@ class OnboardingSubscriptionReconcileStageWorkflow:
             for desired in config.graph_subscriptions:
                 key = (desired.resource, tuple(sorted(desired.change_types)))
                 if key in existing_keys:
-                    continue
-
-                if not notification_url:
-                    workflow.logger.warning(
-                        "Onboarding subscription reconcile: skipping subscription create for resource=%s reason=missing_notification_url",
-                        desired.resource,
-                    )
                     continue
 
                 try:
@@ -91,6 +78,12 @@ class OnboardingSubscriptionReconcileStageWorkflow:
                         desired.resource,
                         exc,
                     )
+        elif has_desired_graph_subscriptions and not notification_url:
+            for desired in config.graph_subscriptions:
+                workflow.logger.warning(
+                    "Onboarding subscription reconcile: skipping subscription create for resource=%s reason=missing_notification_url",
+                    desired.resource,
+                )
 
         return OnboardingSubscriptionReconcileStageResult(
             created_subscription_ids=created_subscription_ids,

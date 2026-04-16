@@ -124,8 +124,8 @@ class PollingManagerWorkflow:
                 retry_policy=RETRY_POLICY,
             )
             for subscription in active_subscriptions:
-                expires_at = _as_utc(subscription.expires_at)
-                if expires_at is None or expires_at > renewal_cutoff:
+                expires_at_utc = _as_utc(subscription.expires_at)
+                if expires_at_utc is None or expires_at_utc > renewal_cutoff:
                     continue
 
                 try:

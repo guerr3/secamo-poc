@@ -416,7 +416,6 @@ resource "aws_api_gateway_deployment" "ingress" {
       aws_api_gateway_method.graph_notifications_tenant_get.id,
       aws_api_gateway_method.hitl_respond_get.id,
       aws_api_gateway_method.hitl_jira_post.id,
-      aws_api_gateway_method.graph_notifications_tenant_get.authorization,
       aws_api_gateway_method.graph_notifications_tenant_post.authorization,
       aws_api_gateway_method.graph_notifications_tenant_post.authorizer_id,
       aws_api_gateway_method.hitl_jira_post.authorization,
