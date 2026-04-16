@@ -10,8 +10,9 @@ with workflow.unsafe.imports_passed_through():
     from activities.audit import create_audit_log
     from activities.edr import edr_fetch_events
     from activities.polling_dedup import polling_mark_event_processed
+    from activities.subscription import subscription_list, subscription_renew
     from activities.tenant import get_tenant_config
-    from shared.models import PollingManagerInput, TenantConfig
+    from shared.models import PollingManagerInput, SubscriptionState, TenantConfig
     from shared.models.canonical import Envelope
     from shared.routing import build_default_route_registry
     from shared.routing.registry import UnroutableEventError
@@ -21,6 +22,9 @@ with workflow.unsafe.imports_passed_through():
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
 _ROUTE_REGISTRY = build_default_route_registry()
+POLL_TYPE_GRAPH_SUBSCRIPTION_RENEWAL = "graph_subscription_renewal"
+GRAPH_RENEWAL_LOOKAHEAD_HOURS = 48
+GRAPH_RENEWAL_EXPIRATION_HOURS = 72
 
 
 def _as_utc(occurred_at: datetime | None) -> datetime | None:
@@ -47,6 +51,14 @@ def _format_cursor(occurred_at: datetime | None, fallback: str | None) -> str | 
     if occurred_at is None:
         return fallback
     return occurred_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _normalize_poll_types(raw_poll_types: list[str] | None) -> set[str]:
+    return {
+        poll_type.strip().lower()
+        for poll_type in (raw_poll_types or [])
+        if poll_type and poll_type.strip()
+    }
 
 
 def _child_workflow_id(
@@ -78,6 +90,7 @@ class PollingManagerWorkflow:
 
         effective_secret_type = input.secret_type
         effective_poll_interval = input.poll_interval_seconds
+        effective_poll_types: set[str] = set()
 
         config: TenantConfig = await workflow.execute_activity(
             get_tenant_config,
@@ -97,6 +110,45 @@ class PollingManagerWorkflow:
         if provider_cfg is not None:
             effective_secret_type = provider_cfg.secret_type
             effective_poll_interval = provider_cfg.poll_interval_seconds
+            effective_poll_types = _normalize_poll_types(provider_cfg.poll_types)
+
+        renewed_count = 0
+        renewal_failed_count = 0
+        if POLL_TYPE_GRAPH_SUBSCRIPTION_RENEWAL in effective_poll_types:
+            current_time_utc = workflow.now()
+            renewal_cutoff = current_time_utc + timedelta(hours=GRAPH_RENEWAL_LOOKAHEAD_HOURS)
+            active_subscriptions: list[SubscriptionState] = await workflow.execute_activity(
+                subscription_list,
+                args=[input.tenant_id, "graph"],
+                start_to_close_timeout=TIMEOUT,
+                retry_policy=RETRY_POLICY,
+            )
+            for subscription in active_subscriptions:
+                expires_at_utc = _as_utc(subscription.expires_at)
+                if expires_at_utc is None or expires_at_utc > renewal_cutoff:
+                    continue
+
+                try:
+                    await workflow.execute_activity(
+                        subscription_renew,
+                        args=[
+                            input.tenant_id,
+                            subscription.subscription_id,
+                            GRAPH_RENEWAL_EXPIRATION_HOURS,
+                            "graph",
+                        ],
+                        start_to_close_timeout=TIMEOUT,
+                        retry_policy=RETRY_POLICY,
+                    )
+                    renewed_count += 1
+                except Exception as exc:
+                    renewal_failed_count += 1
+                    workflow.logger.warning(
+                        "PollingManager failed to renew graph subscription tenant=%s subscription_id=%s reason=%s",
+                        input.tenant_id,
+                        subscription.subscription_id,
+                        exc,
+                    )
 
         fetch_result = await workflow.execute_activity(
             edr_fetch_events,
@@ -210,7 +262,7 @@ class PollingManagerWorkflow:
             (
                 "PollingManager cycle stats tenant=%s provider=%s resource_type=%s iter=%s "
                 "fetched=%s new=%s dedup_skipped=%s fail_open=%s "
-                "started=%s duplicate_start=%s unroutable=%s cursor_in=%s cursor_out=%s"
+                "started=%s duplicate_start=%s unroutable=%s renewed=%s renewal_failed=%s cursor_in=%s cursor_out=%s"
             ),
             input.tenant_id,
             input.provider,
@@ -223,6 +275,8 @@ class PollingManagerWorkflow:
             started_count,
             duplicate_start_count,
             unroutable_count,
+            renewed_count,
+            renewal_failed_count,
             input.cursor,
             new_cursor,
         )
@@ -236,7 +290,8 @@ class PollingManagerWorkflow:
                     "polling_cycle",
                     (
                         f"fetched={fetched_count} new={new_count} dedup_skipped={dedup_skipped_count} "
-                        f"started={started_count} duplicate_start={duplicate_start_count}"
+                        f"started={started_count} duplicate_start={duplicate_start_count} "
+                        f"renewed={renewed_count} renewal_failed={renewal_failed_count}"
                     ),
                     {
                         "provider": input.provider,
@@ -249,6 +304,8 @@ class PollingManagerWorkflow:
                         "started": started_count,
                         "duplicate_start": duplicate_start_count,
                         "unroutable": unroutable_count,
+                        "renewed": renewed_count,
+                        "renewal_failed": renewal_failed_count,
                         "cursor_in": input.cursor,
                         "cursor_out": new_cursor,
                     },

@@ -336,6 +336,24 @@ resource "aws_api_gateway_integration" "graph_notifications_tenant_post" {
   uri                     = aws_lambda_function.proxy.invoke_arn
 }
 
+# ── GET /api/v1/graph/notifications/{tenant_id} ────────────
+
+resource "aws_api_gateway_method" "graph_notifications_tenant_get" {
+  rest_api_id   = aws_api_gateway_rest_api.ingress.id
+  resource_id   = aws_api_gateway_resource.graph_notifications_tenant.id
+  http_method   = "GET"
+  authorization = "NONE"
+}
+
+resource "aws_api_gateway_integration" "graph_notifications_tenant_get" {
+  rest_api_id             = aws_api_gateway_rest_api.ingress.id
+  resource_id             = aws_api_gateway_resource.graph_notifications_tenant.id
+  http_method             = aws_api_gateway_method.graph_notifications_tenant_get.http_method
+  integration_http_method = "POST"
+  type                    = "AWS_PROXY"
+  uri                     = aws_lambda_function.proxy.invoke_arn
+}
+
 # ── GET /api/v1/hitl/respond ───────────────────────────────
 
 resource "aws_api_gateway_method" "hitl_respond_get" {
@@ -395,6 +413,7 @@ resource "aws_api_gateway_deployment" "ingress" {
       aws_api_gateway_method.event_tenant_post.id,
       aws_api_gateway_method.internal_post.id,
       aws_api_gateway_method.graph_notifications_tenant_post.id,
+      aws_api_gateway_method.graph_notifications_tenant_get.id,
       aws_api_gateway_method.hitl_respond_get.id,
       aws_api_gateway_method.hitl_jira_post.id,
       aws_api_gateway_method.graph_notifications_tenant_post.authorization,
@@ -404,6 +423,7 @@ resource "aws_api_gateway_deployment" "ingress" {
       aws_api_gateway_integration.event_tenant_post.id,
       aws_api_gateway_integration.internal_post.id,
       aws_api_gateway_integration.graph_notifications_tenant_post.id,
+      aws_api_gateway_integration.graph_notifications_tenant_get.id,
       aws_api_gateway_integration.hitl_respond_get.id,
       aws_api_gateway_integration.hitl_jira_post.id,
       aws_api_gateway_authorizer.lambda.id,

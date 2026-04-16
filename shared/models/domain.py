@@ -105,6 +105,7 @@ class PollingProviderConfig(BaseModel):
     resource_type: str
     secret_type: str = "graph"
     poll_interval_seconds: int = 300
+    poll_types: list[str] = Field(default_factory=list)
 
 
 class IdentityUser(BaseModel):
@@ -552,5 +553,4 @@ class PollingManagerInput(BaseModel):
     poll_interval_seconds: int = 300
     cursor: str | None = None
     iteration: int = 0
-
 
