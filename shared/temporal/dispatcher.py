@@ -28,6 +28,28 @@ _SOC_SIGNAL_NORMALIZERS = {
 }
 
 
+def workflow_input_for_route(
+    route: WorkflowRoute,
+    envelope: Envelope,
+    *,
+    envelope_fallback_as_dict: bool = True,
+) -> dict[str, Any] | Envelope:
+    """Shape routed workflow input using shared ingress normalization rules."""
+
+    if route.workflow_name == "IamOnboardingWorkflow":
+        case_input = normalize_iam_onboarding_case(envelope)
+        return case_input.model_dump(mode="json")
+
+    normalizer = _SOC_SIGNAL_NORMALIZERS.get(route.workflow_name)
+    if normalizer is not None:
+        case_input = normalizer(envelope, auto_remediate=False)
+        return case_input.model_dump(mode="json")
+
+    if envelope_fallback_as_dict:
+        return envelope.model_dump(mode="json")
+    return envelope
+
+
 @runtime_checkable
 class WorkflowStarter(Protocol):
     """Protocol for starting workflows from routed ingress envelopes."""
@@ -52,14 +74,7 @@ class _WorkflowRouteDispatcher(RouteDispatcher):
 
     @staticmethod
     def _workflow_input_for_route(route: WorkflowRoute, envelope: Envelope) -> dict[str, Any]:
-        if route.workflow_name == "IamOnboardingWorkflow":
-            case_input = normalize_iam_onboarding_case(envelope)
-            return case_input.model_dump(mode="json")
-        normalizer = _SOC_SIGNAL_NORMALIZERS.get(route.workflow_name)
-        if normalizer is not None:
-            case_input = normalizer(envelope, auto_remediate=False)
-            return case_input.model_dump(mode="json")
-        return envelope.model_dump(mode="json")
+        return workflow_input_for_route(route, envelope, envelope_fallback_as_dict=True)
 
     async def dispatch(self, route: WorkflowRoute, envelope: Envelope) -> None:
         workflow_input = self._workflow_input_for_route(route, envelope)

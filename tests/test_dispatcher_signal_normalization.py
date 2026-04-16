@@ -10,7 +10,7 @@ from shared.models.canonical import (
     StoragePartition,
 )
 from shared.routing.contracts import WorkflowRoute
-from shared.temporal.dispatcher import _WorkflowRouteDispatcher
+from shared.temporal.dispatcher import _WorkflowRouteDispatcher, workflow_input_for_route
 
 
 def _correlation() -> Correlation:
@@ -154,3 +154,16 @@ def test_unknown_workflow_receives_raw_envelope_dict() -> None:
     )
 
     assert workflow_input["event_id"].startswith("evt-")
+
+
+def test_shared_helper_can_preserve_envelope_for_unknown_workflows() -> None:
+    envelope = _security_signal_envelope(provider_event_type="signin_log")
+
+    workflow_input = workflow_input_for_route(
+        _route("SomeUnknownWorkflow"),
+        envelope,
+        envelope_fallback_as_dict=False,
+    )
+
+    assert isinstance(workflow_input, Envelope)
+    assert workflow_input.event_id == envelope.event_id

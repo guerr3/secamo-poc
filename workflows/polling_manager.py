@@ -14,6 +14,8 @@ with workflow.unsafe.imports_passed_through():
     from shared.models import PollingManagerInput, TenantConfig
     from shared.models.canonical import Envelope
     from shared.routing import build_default_route_registry
+    from shared.routing.registry import UnroutableEventError
+    from shared.temporal.dispatcher import workflow_input_for_route
     from shared.workflow_helpers import start_child_workflow_idempotent
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -152,11 +154,18 @@ class PollingManagerWorkflow:
 
             new_count += 1
 
-            routes = _ROUTE_REGISTRY.resolve_polling(
-                provider=input.provider,
-                resource_type=input.resource_type,
-                payload=event.payload,
-            )
+            try:
+                routes = _ROUTE_REGISTRY.resolve(event)
+            except UnroutableEventError:
+                workflow.logger.warning(
+                    "No polling route configured for provider=%s resource_type=%s event_id=%s",
+                    input.provider,
+                    input.resource_type,
+                    event.event_id,
+                )
+                unroutable_count += 1
+                continue
+
             if not routes:
                 workflow.logger.warning(
                     "No polling route configured for provider=%s resource_type=%s event_id=%s",
@@ -170,7 +179,11 @@ class PollingManagerWorkflow:
             route = routes[0]
             workflow_name = route.workflow_name
             task_queue = route.task_queue
-            envelope = event
+            workflow_input = workflow_input_for_route(
+                route,
+                event,
+                envelope_fallback_as_dict=False,
+            )
             child_workflow_id = _child_workflow_id(
                 provider=input.provider,
                 resource_type=input.resource_type,
@@ -180,7 +193,7 @@ class PollingManagerWorkflow:
 
             child_started = await start_child_workflow_idempotent(
                 workflow_name,
-                envelope,
+                workflow_input,
                 workflow_id=child_workflow_id,
                 task_queue=task_queue,
                 parent_close_policy=workflow.ParentClosePolicy.ABANDON,

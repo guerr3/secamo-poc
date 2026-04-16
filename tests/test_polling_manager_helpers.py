@@ -73,3 +73,17 @@ def test_polling_manager_refreshes_config_each_iteration() -> None:
 
     assert "get_tenant_config" in source
     assert "if input.iteration == 0" not in source
+
+
+def test_polling_manager_uses_envelope_rule_resolution() -> None:
+    source = Path("workflows/polling_manager.py").read_text(encoding="utf-8")
+
+    assert "_ROUTE_REGISTRY.resolve(event)" in source
+    assert "resolve_polling(" not in source
+
+
+def test_polling_manager_reuses_shared_route_input_shaping() -> None:
+    source = Path("workflows/polling_manager.py").read_text(encoding="utf-8")
+
+    assert "workflow_input_for_route(" in source
+    assert "envelope_fallback_as_dict=False" in source
