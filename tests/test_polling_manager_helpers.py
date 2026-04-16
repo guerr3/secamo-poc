@@ -87,3 +87,13 @@ def test_polling_manager_reuses_shared_route_input_shaping() -> None:
 
     assert "workflow_input_for_route(" in source
     assert "envelope_fallback_as_dict=False" in source
+
+
+def test_polling_manager_supports_graph_subscription_renewal_poll_type() -> None:
+    source = Path("workflows/polling_manager.py").read_text(encoding="utf-8")
+
+    assert "POLL_TYPE_GRAPH_SUBSCRIPTION_RENEWAL" in source
+    assert "subscription_list" in source
+    assert "subscription_renew" in source
+    assert "GRAPH_RENEWAL_LOOKAHEAD_HOURS = 48" in source
+    assert "GRAPH_RENEWAL_EXPIRATION_HOURS = 72" in source

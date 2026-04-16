@@ -3,7 +3,6 @@ from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy
-from temporalio.exceptions import ApplicationError
 
 with workflow.unsafe.imports_passed_through():
     from activities.subscription import subscription_create, subscription_list
@@ -34,28 +33,19 @@ class OnboardingSubscriptionReconcileStageWorkflow:
     ) -> OnboardingSubscriptionReconcileStageResult:
         config = request.config
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
+        notification_url = (request.notification_url or "").strip()
 
         created_subscription_ids: list[str] = []
         existing_keys: set[tuple[str, tuple[str, ...]]] = set()
         has_desired_graph_subscriptions = bool(config.graph_subscriptions)
 
-        if has_desired_graph_subscriptions and not request.notification_url:
-            if request.partial_onboarding:
-                workflow.logger.warning(
-                    "Onboarding subscription reconcile in partial mode: graph notification URL missing; skipping graph subscription bootstrap"
-                )
-                return OnboardingSubscriptionReconcileStageResult(
-                    created_subscription_ids=[],
-                    active_subscription_count=0,
-                )
-
-            raise ApplicationError(
-                "Graph notification URL could not be resolved during onboarding provisioning",
-                type="MissingGraphNotificationUrl",
-                non_retryable=True,
+        if has_desired_graph_subscriptions and not notification_url:
+            workflow.logger.warning(
+                "Onboarding subscription reconcile: graph notification URL missing; continuing without creating subscriptions (partial=%s)",
+                request.partial_onboarding,
             )
 
-        if has_desired_graph_subscriptions and request.notification_url:
+        if has_desired_graph_subscriptions:
             existing_subscriptions: list[SubscriptionState] = await workflow.execute_activity(
                 subscription_list,
                 args=[request.tenant_id, "graph"],
@@ -73,20 +63,34 @@ class OnboardingSubscriptionReconcileStageWorkflow:
                 if key in existing_keys:
                     continue
 
-                state: SubscriptionState = await workflow.execute_activity(
-                    subscription_create,
-                    args=[
-                        request.tenant_id,
-                        desired,
-                        "graph",
-                        request.notification_url,
-                        f"secamo:{request.tenant_id}:{_resource_slug(desired.resource)}",
-                    ],
-                    start_to_close_timeout=TIMEOUT,
-                    retry_policy=runtime_retry,
-                )
-                created_subscription_ids.append(state.subscription_id)
-                existing_keys.add(key)
+                if not notification_url:
+                    workflow.logger.warning(
+                        "Onboarding subscription reconcile: skipping subscription create for resource=%s reason=missing_notification_url",
+                        desired.resource,
+                    )
+                    continue
+
+                try:
+                    state: SubscriptionState = await workflow.execute_activity(
+                        subscription_create,
+                        args=[
+                            request.tenant_id,
+                            desired,
+                            "graph",
+                            notification_url,
+                            f"secamo:{request.tenant_id}:{_resource_slug(desired.resource)}",
+                        ],
+                        start_to_close_timeout=TIMEOUT,
+                        retry_policy=runtime_retry,
+                    )
+                    created_subscription_ids.append(state.subscription_id)
+                    existing_keys.add(key)
+                except Exception as exc:
+                    workflow.logger.warning(
+                        "Onboarding subscription reconcile: failed to create subscription for resource=%s reason=%s",
+                        desired.resource,
+                        exc,
+                    )
 
         return OnboardingSubscriptionReconcileStageResult(
             created_subscription_ids=created_subscription_ids,
