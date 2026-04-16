@@ -9,9 +9,23 @@ from __future__ import annotations
 from typing import Any, Protocol, runtime_checkable
 
 from shared.normalization.iam.onboarding_event import normalize_iam_onboarding_case
+from shared.normalization.soc import (
+    normalize_audit_log_case,
+    normalize_noncompliant_device_case,
+    normalize_risky_user_case,
+    normalize_signin_log_case,
+)
 from shared.models.canonical import Envelope
 from shared.routing.contracts import DispatchReport, WorkflowRoute
 from shared.routing.registry import RouteDispatcher, RouteRegistry
+
+
+_SOC_SIGNAL_NORMALIZERS = {
+    "SigninAnomalyDetectionWorkflow": normalize_signin_log_case,
+    "RiskyUserTriageWorkflow": normalize_risky_user_case,
+    "DeviceComplianceRemediationWorkflow": normalize_noncompliant_device_case,
+    "AuditLogAnomalyWorkflow": normalize_audit_log_case,
+}
 
 
 @runtime_checkable
@@ -40,6 +54,10 @@ class _WorkflowRouteDispatcher(RouteDispatcher):
     def _workflow_input_for_route(route: WorkflowRoute, envelope: Envelope) -> dict[str, Any]:
         if route.workflow_name == "IamOnboardingWorkflow":
             case_input = normalize_iam_onboarding_case(envelope)
+            return case_input.model_dump(mode="json")
+        normalizer = _SOC_SIGNAL_NORMALIZERS.get(route.workflow_name)
+        if normalizer is not None:
+            case_input = normalizer(envelope, auto_remediate=False)
             return case_input.model_dump(mode="json")
         return envelope.model_dump(mode="json")
 

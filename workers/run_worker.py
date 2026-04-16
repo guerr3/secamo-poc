@@ -299,6 +299,10 @@ def load_workflows() -> dict:
         sys.exit(1)
 
     try:
+        from workflows.audit_log_anomaly import AuditLogAnomalyWorkflow
+        from workflows.device_compliance_remediation import DeviceComplianceRemediationWorkflow
+        from workflows.risky_user_triage import RiskyUserTriageWorkflow
+        from workflows.signin_anomaly_detection import SigninAnomalyDetectionWorkflow
         from workflows.soc_alert_triage import SocAlertTriageWorkflow
         from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
         from workflows.child.hitl_approval import HiTLApprovalWorkflow
@@ -308,6 +312,10 @@ def load_workflows() -> dict:
         from workflows.child.ticket_creation import TicketCreationWorkflow
         edr_workflows.extend([
             SocAlertTriageWorkflow,
+            SigninAnomalyDetectionWorkflow,
+            RiskyUserTriageWorkflow,
+            DeviceComplianceRemediationWorkflow,
+            AuditLogAnomalyWorkflow,
             ThreatIntelEnrichmentWorkflow,
             AlertEnrichmentWorkflow,
             IncidentResponseWorkflow,

@@ -22,6 +22,38 @@ def _is_critical_defender_alert(envelope: Envelope) -> bool:
     return envelope.payload.severity_id >= 60
 
 
+def _is_signin_log_signal(envelope: Envelope) -> bool:
+    payload = envelope.payload
+    return (
+        getattr(payload, "event_type", None) == "defender.security_signal"
+        and getattr(payload, "provider_event_type", None) == "signin_log"
+    )
+
+
+def _is_risky_user_signal(envelope: Envelope) -> bool:
+    payload = envelope.payload
+    return (
+        getattr(payload, "event_type", None) == "defender.security_signal"
+        and getattr(payload, "provider_event_type", None) == "risky_user"
+    )
+
+
+def _is_noncompliant_device_signal(envelope: Envelope) -> bool:
+    payload = envelope.payload
+    return (
+        getattr(payload, "event_type", None) == "defender.security_signal"
+        and getattr(payload, "provider_event_type", None) == "noncompliant_device"
+    )
+
+
+def _is_audit_log_signal(envelope: Envelope) -> bool:
+    payload = envelope.payload
+    return (
+        getattr(payload, "event_type", None) == "defender.security_signal"
+        and getattr(payload, "provider_event_type", None) == "audit_log"
+    )
+
+
 def build_default_route_registry() -> RouteRegistry:
     """Build default in-memory route registry for currently supported providers/events."""
 
@@ -32,6 +64,26 @@ def build_default_route_registry() -> RouteRegistry:
         name="critical-defender-alert",
         predicate=_is_critical_defender_alert,
         routes=(WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register_rule(
+        name="signin-log-signal",
+        predicate=_is_signin_log_signal,
+        routes=(WorkflowRoute(workflow_name="SigninAnomalyDetectionWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register_rule(
+        name="risky-user-signal",
+        predicate=_is_risky_user_signal,
+        routes=(WorkflowRoute(workflow_name="RiskyUserTriageWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register_rule(
+        name="noncompliant-device-signal",
+        predicate=_is_noncompliant_device_signal,
+        routes=(WorkflowRoute(workflow_name="DeviceComplianceRemediationWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register_rule(
+        name="audit-log-signal",
+        predicate=_is_audit_log_signal,
+        routes=(WorkflowRoute(workflow_name="AuditLogAnomalyWorkflow", task_queue=QUEUE_EDR),),
     )
 
     registry.register(
