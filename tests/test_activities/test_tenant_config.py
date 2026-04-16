@@ -31,6 +31,18 @@ class _FakeSsmClientWithPolling:
         }
 
 
+class _FakeSsmClientWithPollingTypes:
+    def get_parameters_by_path(self, Path: str, WithDecryption: bool, **kwargs) -> dict:
+        return {
+            "Parameters": [
+                {
+                    "Name": f"{Path}polling_providers",
+                    "Value": "microsoft_graph:security_alerts:graph:300:graph_subscription_renewal",
+                }
+            ]
+        }
+
+
 class _FakeSsmClientWithGraphSubscriptions:
     def get_parameters_by_path(self, Path: str, WithDecryption: bool, **kwargs) -> dict:
         return {
@@ -89,6 +101,21 @@ async def test_get_tenant_config_parses_polling_providers(monkeypatch: pytest.Mo
     assert cfg.polling_providers[1].resource_type == "tickets"
     assert cfg.polling_providers[1].secret_type == "ticketing"
     assert cfg.polling_providers[1].poll_interval_seconds == 120
+    assert cfg.polling_providers[1].poll_types == []
+
+
+@pytest.mark.asyncio
+async def test_get_tenant_config_parses_optional_poll_types(monkeypatch: pytest.MonkeyPatch) -> None:
+    from activities import tenant as tenant_module
+
+    monkeypatch.setattr(tenant_module, "ssm_client", _FakeSsmClientWithPollingTypes())
+    env = ActivityEnvironment()
+
+    cfg: TenantConfig = await env.run(get_tenant_config, "tenant-demo-001")
+
+    assert len(cfg.polling_providers) == 1
+    assert cfg.polling_providers[0].provider == "microsoft_graph"
+    assert cfg.polling_providers[0].poll_types == ["graph_subscription_renewal"]
 
 
 @pytest.mark.asyncio

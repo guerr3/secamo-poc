@@ -190,6 +190,11 @@ def _parse_polling_providers(raw_value: str | None) -> list[PollingProviderConfi
         resource_type = parts[1]
         secret_type = parts[2] if len(parts) > 2 and parts[2] else "graph"
         poll_interval_seconds = _parse_int(parts[3] if len(parts) > 3 else None, 300)
+        poll_types = [
+            poll_type.strip().lower()
+            for poll_type in (parts[4].split("+") if len(parts) > 4 and parts[4] else [])
+            if poll_type.strip()
+        ]
 
         providers.append(
             PollingProviderConfig(
@@ -197,6 +202,7 @@ def _parse_polling_providers(raw_value: str | None) -> list[PollingProviderConfi
                 resource_type=resource_type,
                 secret_type=secret_type,
                 poll_interval_seconds=poll_interval_seconds,
+                poll_types=poll_types,
             )
         )
 
