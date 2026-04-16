@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 
 with workflow.unsafe.imports_passed_through():
+    from datetime import datetime, timezone
     from activities.audit import create_audit_log
     from activities.edr import edr_fetch_events
     from activities.polling_dedup import polling_mark_event_processed

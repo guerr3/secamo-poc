@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
+from shared.normalization.iam.onboarding_event import normalize_iam_onboarding_case
 from shared.models.canonical import Envelope
 from shared.routing.contracts import DispatchReport, WorkflowRoute
 from shared.routing.registry import RouteDispatcher, RouteRegistry
@@ -35,8 +36,15 @@ class _WorkflowRouteDispatcher(RouteDispatcher):
     def __init__(self, starter: WorkflowStarter) -> None:
         self._starter = starter
 
+    @staticmethod
+    def _workflow_input_for_route(route: WorkflowRoute, envelope: Envelope) -> dict[str, Any]:
+        if route.workflow_name == "IamOnboardingWorkflow":
+            case_input = normalize_iam_onboarding_case(envelope)
+            return case_input.model_dump(mode="json")
+        return envelope.model_dump(mode="json")
+
     async def dispatch(self, route: WorkflowRoute, envelope: Envelope) -> None:
-        workflow_input = envelope.model_dump(mode="json")
+        workflow_input = self._workflow_input_for_route(route, envelope)
         workflow_id = (
             f"ingress-{envelope.tenant_id}-{route.workflow_name}-{envelope.payload.event_type}-{envelope.event_id}"
         )

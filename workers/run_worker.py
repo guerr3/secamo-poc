@@ -43,6 +43,7 @@ def _validate_route_worker_parity(workflows_map: dict[str, list]) -> None:
         group: {wf.__name__ for wf in workflows_map.get(group, [])}
         for group in ["user_lifecycle", "edr", "ticketing", "interactions", "audit", "polling"]
     }
+    routed_workflow_names = {group: set() for group in group_to_workflow_names}
 
     registry = build_default_route_registry()
     errors: list[str] = []
@@ -55,6 +56,7 @@ def _validate_route_worker_parity(workflows_map: dict[str, list]) -> None:
             continue
 
         group = queue_to_group[route.task_queue]
+        routed_workflow_names[group].add(route.workflow_name)
         if route.workflow_name not in group_to_workflow_names.get(group, set()):
             errors.append(
                 f"workflow '{route.workflow_name}' mapped to queue '{route.task_queue}' is not registered"
@@ -63,6 +65,15 @@ def _validate_route_worker_parity(workflows_map: dict[str, list]) -> None:
     if errors:
         message = "route/worker parity validation failed: " + "; ".join(sorted(set(errors)))
         raise RuntimeError(message)
+
+    for group, registered in group_to_workflow_names.items():
+        missing_routes = sorted(name for name in registered if name not in routed_workflow_names[group])
+        for workflow_name in missing_routes:
+            logger.warning(
+                "workflow '%s' registered in group '%s' has no matching route mapping",
+                workflow_name,
+                group,
+            )
 
 
 def load_activities_by_queue() -> dict[str, list]:
@@ -288,9 +299,7 @@ def load_workflows() -> dict:
         sys.exit(1)
 
     try:
-        from workflows.case_intake import CaseIntakeWorkflow
-        from workflows.defender_alert_enrichment import DefenderAlertEnrichmentWorkflow
-        from workflows.generic_security_signal import GenericSecuritySignalWorkflow
+        from workflows.soc_alert_triage import SocAlertTriageWorkflow
         from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
         from workflows.child.hitl_approval import HiTLApprovalWorkflow
         from workflows.child.incident_response import IncidentResponseWorkflow
@@ -298,27 +307,17 @@ def load_workflows() -> dict:
         from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
         from workflows.child.ticket_creation import TicketCreationWorkflow
         edr_workflows.extend([
-            CaseIntakeWorkflow,
-            DefenderAlertEnrichmentWorkflow,
+            SocAlertTriageWorkflow,
             ThreatIntelEnrichmentWorkflow,
             AlertEnrichmentWorkflow,
             IncidentResponseWorkflow,
-            GenericSecuritySignalWorkflow,
             OnboardingSubscriptionReconcileStageWorkflow,
         ])
         ticketing_workflows.append(TicketCreationWorkflow)
         interactions_workflows.append(HiTLApprovalWorkflow)
-        logger.info("✓ Defender Alert Enrichment workflow geladen")
+        logger.info("✓ SOC alert triage workflow geladen")
     except ImportError as e:
-        logger.error(f"✗ Fout bij het laden van Defender Alert Enrichment Workflow: {e}")
-        sys.exit(1)
-
-    try:
-        from workflows.impossible_travel import ImpossibleTravelWorkflow
-        edr_workflows.append(ImpossibleTravelWorkflow)
-        logger.info("✓ Impossible Travel workflow geladen")
-    except ImportError as e:
-        logger.error(f"✗ Fout bij het laden van Impossible Travel Workflow: {e}")
+        logger.error(f"✗ Fout bij het laden van SOC Alert Triage Workflow: {e}")
         sys.exit(1)
 
     try:

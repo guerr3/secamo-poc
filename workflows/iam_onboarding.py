@@ -22,31 +22,29 @@ def _generate_legacy_temp_password(length: int = 16) -> str:
     return "".join(shuffled)
 
 
-
 with workflow.unsafe.imports_passed_through():
-    from shared.config import QUEUE_INTERACTIONS, SECAMO_SENDER_EMAIL
+    from activities.audit import create_audit_log
+    from activities.identity import (
+        identity_assign_license,
+        identity_create_user,
+        identity_generate_temp_password,
+        identity_get_user,
+        identity_reset_password,
+        identity_revoke_sessions,
+        identity_update_user,
+    )
+    from shared.config import QUEUE_INTERACTIONS
     from shared.models import (
         HiTLApprovalRequest,
         HiTLRequest,
         IdentityUser,
         LifecycleAction,
         TenantConfig,
+        UserLifecycleCaseInput,
     )
-    from shared.models.canonical import Envelope, IamOnboardingEvent
     from shared.workflow_helpers import bootstrap_tenant
-    from activities.identity import (
-        identity_generate_temp_password,
-        identity_assign_license,
-        identity_create_user,
-        identity_get_user,
-        identity_revoke_sessions,
-        identity_reset_password,
-        identity_update_user,
-    )
-    from activities.audit import create_audit_log
     from workflows.child.hitl_approval import HiTLApprovalWorkflow
 
-# ── Module-level constants ────────────────────────────────────
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
 LICENSE_APPROVE_ACTION = "approve_license"
@@ -89,79 +87,79 @@ def _build_license_approval_request(
 @workflow.defn
 class IamOnboardingWorkflow:
     """
-    WF-01 — User Lifecycle Management (IAM provider-agnostic identity CRUD).
+    WF-01 - User lifecycle management workflow.
     Task Queue: user-lifecycle
     Actions: create | update | delete | password_reset
     """
 
     @workflow.run
-    async def run(self, event: Envelope) -> str:
-        if not isinstance(event.payload, IamOnboardingEvent):
-            raise ValueError("WF-01 requires iam.onboarding payload in Envelope input")
-
-        payload = event.payload
-        user_data = payload.user_data
-        if not user_data or not user_data.get("email"):
-            raise ValueError("WF-01 requires payload.user_data.email")
-
-        action = LifecycleAction(payload.action)
-        user_email = str(user_data["email"])
+    async def run(self, case: UserLifecycleCaseInput) -> str:
+        action = LifecycleAction(case.action)
+        user_email = case.user_email
 
         workflow.logger.info(
-            f"WF-01 gestart — tenant={event.tenant_id}, "
-            f"action={action.value}, user={user_email}"
+            "WF-01 started - tenant=%s action=%s user=%s",
+            case.tenant_id,
+            action.value,
+            user_email,
         )
 
         config: TenantConfig = await bootstrap_tenant(
-            tenant_id=event.tenant_id,
+            tenant_id=case.tenant_id,
             retry_policy=RETRY_POLICY,
             timeout=TIMEOUT,
         )
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
 
-        # 3. Idempotency check — kijk of gebruiker al bestaat
+        # Idempotency guard: check whether the user already exists.
         existing_user: IdentityUser | None = await workflow.execute_activity(
             identity_get_user,
-            args=[event.tenant_id, user_email],
+            args=[case.tenant_id, user_email],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
 
-        # 4. Actie-specifieke branch
         result_msg = ""
 
         if action == LifecycleAction.CREATE:
             if existing_user:
                 result_msg = (
-                    f"Gebruiker '{user_email}' bestaat al "
-                    f"(id={existing_user.user_id}). Overgeslagen."
+                    f"User '{user_email}' already exists "
+                    f"(id={existing_user.user_id}). Skipped."
                 )
             else:
                 new_user: IdentityUser = await workflow.execute_activity(
                     identity_create_user,
-                    args=[event.tenant_id, user_data],
+                    args=[
+                        case.tenant_id,
+                        {
+                            "email": user_email,
+                            "user_id": case.user_id,
+                        },
+                    ],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=runtime_retry,
                 )
 
+                # UserLifecycleCaseInput intentionally does not carry profile/license attributes.
                 license_msg = ""
-                license_sku = str(user_data.get("license_sku") or "").strip()
+                license_sku = ""
 
                 if license_sku:
                     approval_request = _build_license_approval_request(
-                        tenant_id=event.tenant_id,
+                        tenant_id=case.tenant_id,
                         workflow_id=workflow.info().workflow_id,
                         user_id=new_user.user_id,
                         user_email=new_user.email,
                         license_sku=license_sku,
-                        reviewer_email=SECAMO_SENDER_EMAIL,
+                        reviewer_email=config.soc_analyst_email or case.requester,
                         timeout_hours=config.hitl_timeout_hours,
                     )
 
                     decision = await workflow.execute_child_workflow(
                         HiTLApprovalWorkflow.run,
                         HiTLApprovalRequest(
-                            tenant_id=event.tenant_id,
+                            tenant_id=case.tenant_id,
                             hitl_request=approval_request,
                             hitl_timeout_hours=config.hitl_timeout_hours,
                             auto_isolate_on_timeout=False,
@@ -178,78 +176,63 @@ class IamOnboardingWorkflow:
                         await workflow.execute_activity(
                             identity_assign_license,
                             args=[
-                                event.tenant_id,
+                                case.tenant_id,
                                 new_user.user_id,
                                 license_sku,
                             ],
                             start_to_close_timeout=TIMEOUT,
                             retry_policy=runtime_retry,
                         )
-                        license_msg = (
-                            f" Licentie '{license_sku}' goedgekeurd en toegekend."
-                        )
+                        license_msg = f" License '{license_sku}' approved and assigned."
                     elif decision is None:
-                        license_msg = (
-                            f" Licentietoekenning voor '{license_sku}' in afwachting (timeout)."
-                        )
+                        license_msg = f" License assignment for '{license_sku}' is pending (timeout)."
                     else:
-                        license_msg = (
-                            f" Licentietoekenning voor '{license_sku}' afgewezen."
-                        )
+                        license_msg = f" License assignment for '{license_sku}' was rejected."
 
                 result_msg = (
-                    f"Gebruiker '{new_user.email}' aangemaakt (id={new_user.user_id})."
+                    f"User '{new_user.email}' created (id={new_user.user_id})."
                     f"{license_msg}"
                 )
 
         elif action == LifecycleAction.UPDATE:
             if not existing_user:
-                raise ValueError(
-                    f"Gebruiker '{user_email}' niet gevonden voor update."
-                )
+                raise ValueError(f"User '{user_email}' not found for update.")
             await workflow.execute_activity(
                 identity_update_user,
                 args=[
-                    event.tenant_id,
+                    case.tenant_id,
                     existing_user.user_id,
-                    {
-                        "department": user_data.get("department", ""),
-                        "jobTitle": user_data.get("role", ""),
-                    },
+                    {},
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,
             )
-            result_msg = f"Gebruiker '{existing_user.email}' bijgewerkt."
+            result_msg = f"User '{existing_user.email}' updated."
 
         elif action == LifecycleAction.DELETE:
             if not existing_user:
-                raise ValueError(
-                    f"Gebruiker '{user_email}' niet gevonden voor delete."
-                )
+                raise ValueError(f"User '{user_email}' not found for delete.")
             await workflow.execute_activity(
                 identity_revoke_sessions,
-                args=[event.tenant_id, existing_user.user_id],
+                args=[case.tenant_id, existing_user.user_id],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,
             )
             await workflow.execute_activity(
                 identity_update_user,
                 args=[
-                    event.tenant_id,
+                    case.tenant_id,
                     existing_user.user_id,
                     {"accountEnabled": False},
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,
             )
-            result_msg = f"Gebruiker '{existing_user.email}' uitgeschakeld."
+            result_msg = f"User '{existing_user.email}' disabled."
 
         elif action == LifecycleAction.PASSWORD_RESET:
             if not existing_user:
-                raise ValueError(
-                    f"Gebruiker '{user_email}' niet gevonden voor password reset."
-                )
+                raise ValueError(f"User '{user_email}' not found for password reset.")
 
             if workflow.patched("wf01-password-generation-activity-v1"):
                 temp_password = await workflow.execute_activity(
@@ -264,31 +247,30 @@ class IamOnboardingWorkflow:
             await workflow.execute_activity(
                 identity_reset_password,
                 args=[
-                    event.tenant_id,
+                    case.tenant_id,
                     existing_user.user_id,
                     temp_password,
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=runtime_retry,
             )
-            result_msg = f"Wachtwoord gereset voor '{existing_user.email}'."
+            result_msg = f"Password reset for '{existing_user.email}'."
 
-        # 5. Audit log
         await workflow.execute_activity(
             create_audit_log,
             args=[
-                event.tenant_id,
+                case.tenant_id,
                 workflow.info().workflow_id,
                 action.value,
                 result_msg,
                 {
-                    "requester": str(event.metadata.get("requester") or "ingress-api"),
-                    "ticket_id": str(event.metadata.get("ticket_id") or ""),
+                    "requester": case.requester,
+                    "ticket_id": "",
                 },
             ],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
 
-        workflow.logger.info(f"WF-01 afgerond — {result_msg}")
+        workflow.logger.info("WF-01 completed - %s", result_msg)
         return result_msg

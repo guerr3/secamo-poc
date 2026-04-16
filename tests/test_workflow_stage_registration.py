@@ -13,7 +13,7 @@ def test_onboarding_stage_workflows_are_registered() -> None:
     assert "OnboardingCommunicationsStageWorkflow" in user_lifecycle_names
     assert "OnboardingComplianceEvidenceStageWorkflow" in user_lifecycle_names
     assert "OnboardingSubscriptionReconcileStageWorkflow" in edr_names
-    assert "CaseIntakeWorkflow" in edr_names
+    assert "SocAlertTriageWorkflow" in edr_names
 
 
 def test_polling_operational_workflow_is_registered() -> None:

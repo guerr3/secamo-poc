@@ -10,6 +10,8 @@ env/
 dist/
 build/
 
+testing_payloads.json
+
 terraform/modules/ingress/layers/ingress/python/
 
 # ── Environment & Secrets ────────────────────────────────────

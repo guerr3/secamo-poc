@@ -1,0 +1,9 @@
+{
+  "tenant_id": "tenant-demo-001",
+  "provider": "microsoft_defender",
+  "resource_type": "defender_alerts",
+  "secret_type": "graph",
+  "poll_interval_seconds": 300,
+  "cursor": null,
+  "iteration": 0
+}

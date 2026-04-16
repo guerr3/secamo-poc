@@ -16,12 +16,17 @@ TIMEOUT = timedelta(seconds=30)
 
 @workflow.defn
 class IncidentResponseWorkflow:
-    """Reusable child workflow for post-approval SOC response actions."""
+    """Reusable child workflow for post-approval SOC response actions.
+
+    HiTLApprovalWorkflow may also trigger device isolation on timeout; this is
+    intentional policy separation between approval timeout handling and explicit
+    analyst-driven incident response actions.
+    """
 
     @workflow.run
     async def run(self, request: IncidentResponseRequest) -> str:
         workflow.logger.info(
-            "IncidentResponseWorkflow gestart — tenant=%s action=%s",
+            "IncidentResponseWorkflow started - tenant=%s action=%s",
             request.tenant_id,
             request.decision.action,
         )
@@ -39,7 +44,7 @@ class IncidentResponseWorkflow:
                         "status": "closed",
                         "resolution": "false_positive",
                         "note": (
-                            f"Dismissed door {request.decision.reviewer}: "
+                            f"Dismissed by {request.decision.reviewer}: "
                             f"{request.decision.comments}"
                         ),
                     },
@@ -47,7 +52,7 @@ class IncidentResponseWorkflow:
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
-            action_result = "Alert dismissed als false positive."
+            action_result = "Alert dismissed as false positive."
 
         elif request.decision.action == "isolate":
             if workflow.patched("incident-response-require-device-id-v1"):
@@ -74,7 +79,7 @@ class IncidentResponseWorkflow:
                     {
                         "status": "in_progress",
                         "note": (
-                            f"Device {resolved_device_id} geisoleerd door "
+                            f"Device {resolved_device_id} isolated by "
                             f"{request.decision.reviewer}."
                         ),
                     },
@@ -82,7 +87,7 @@ class IncidentResponseWorkflow:
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
-            action_result = f"Device '{resolved_device_id}' geisoleerd."
+            action_result = f"Device '{resolved_device_id}' isolated."
 
         elif request.decision.action == "disable_user":
             if request.user:
@@ -98,6 +103,20 @@ class IncidentResponseWorkflow:
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=RETRY_POLICY,
                 )
+                ticket_note = (
+                    f"User {request.user_email} disabled by "
+                    f"{request.decision.reviewer}."
+                )
+                action_result = f"User '{request.user_email}' disabled."
+            else:
+                ticket_note = (
+                    f"User object for {request.user_email} was not resolved. "
+                    "Skipped session revoke and account disable operations."
+                )
+                action_result = (
+                    f"User '{request.user_email}' was not disabled because no identity user object was resolved."
+                )
+
             await workflow.execute_activity(
                 ticket_update,
                 args=[
@@ -106,16 +125,12 @@ class IncidentResponseWorkflow:
                     request.ticket_id,
                     {
                         "status": "in_progress",
-                        "note": (
-                            f"Gebruiker {request.user_email} uitgeschakeld door "
-                            f"{request.decision.reviewer}."
-                        ),
+                        "note": ticket_note,
                     },
                 ],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
-            action_result = f"Gebruiker '{request.user_email}' uitgeschakeld."
 
         evidence_url = "disabled-by-config"
         if request.evidence_bundle_enabled:

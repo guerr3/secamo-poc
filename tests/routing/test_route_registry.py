@@ -74,14 +74,14 @@ def test_route_registry_resolves_multiple_routes() -> None:
         "microsoft_defender",
         "defender.alert",
         (
-            WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="edr"),
+            WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue="edr"),
             WorkflowRoute(workflow_name="IncidentCorrelatorWorkflow", task_queue="edr"),
         ),
     )
 
     resolved = registry.resolve(_sample_envelope())
     assert len(resolved) == 2
-    assert resolved[0].workflow_name == "DefenderAlertEnrichmentWorkflow"
+    assert resolved[0].workflow_name == "SocAlertTriageWorkflow"
     assert resolved[1].workflow_name == "IncidentCorrelatorWorkflow"
 
 
@@ -90,7 +90,7 @@ def test_route_registry_resolves_provider_specific_fallbacks() -> None:
     registry.register(
         "microsoft_defender",
         "defender.alert",
-        (WorkflowRoute(workflow_name="DefenderAlertEnrichmentWorkflow", task_queue="edr"),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue="edr"),),
     )
     registry.register(
         "crowdstrike",
@@ -104,7 +104,7 @@ def test_route_registry_resolves_provider_specific_fallbacks() -> None:
     defender_route = registry.resolve(defender_envelope)
     crowdstrike_route = registry.resolve(crowdstrike_envelope)
 
-    assert defender_route[0].workflow_name == "DefenderAlertEnrichmentWorkflow"
+    assert defender_route[0].workflow_name == "SocAlertTriageWorkflow"
     assert crowdstrike_route[0].workflow_name == "CrowdStrikeSpecificWorkflow"
 
 

@@ -94,7 +94,9 @@ def _to_security_case_input(event: Envelope) -> SecurityCaseInput:
             source_event=event,
         )
 
-    raise ValueError("CaseIntakeWorkflow requires defender.alert, impossible_travel, or security_signal payload")
+    raise ValueError(
+        "SocAlertTriageWorkflow requires defender.alert, impossible_travel, or security_signal payload"
+    )
 
 
 def _build_alert_payload(case_input: SecurityCaseInput) -> DefenderDetectionFindingEvent:
@@ -168,11 +170,12 @@ def _resolve_threat_indicator(case_input: SecurityCaseInput) -> str:
 
 
 @workflow.defn
-class CaseIntakeWorkflow:
-    """Unified SOC intake workflow for defender alerts, impossible travel, and security signals."""
+class SocAlertTriageWorkflow:
+    """Unified SOC alert triage workflow for defender alerts, impossible travel, and security signals."""
 
     @workflow.run
     async def run(self, event: Envelope) -> str:
+        workflow.patched("soc-alert-triage-rename-v1")
         case_input = _to_security_case_input(event)
 
         workflow.upsert_search_attributes(
@@ -192,7 +195,7 @@ class CaseIntakeWorkflow:
         case_input = case_input.model_copy(update={"auto_remediate": bool(config.auto_isolate_on_timeout)})
 
         workflow.logger.info(
-            "CaseIntakeWorkflow started tenant=%s case_type=%s alert_id=%s",
+            "SocAlertTriageWorkflow started tenant=%s case_type=%s alert_id=%s",
             case_input.tenant_id,
             case_input.case_type,
             case_input.alert_id,
@@ -230,6 +233,7 @@ class CaseIntakeWorkflow:
             ),
             id=f"{child_prefix}-threat-intel",
             task_queue=QUEUE_EDR,
+            execution_timeout=timedelta(minutes=5),
         )
 
         alert_payload = _build_alert_payload(case_input)
@@ -244,6 +248,7 @@ class CaseIntakeWorkflow:
             ),
             id=f"{child_prefix}-alert-enrichment",
             task_queue=QUEUE_EDR,
+            execution_timeout=timedelta(minutes=5),
         )
 
         risk = enrichment_result.risk_score
@@ -267,6 +272,7 @@ class CaseIntakeWorkflow:
             ),
             id=f"{child_prefix}-ticket-creation",
             task_queue=QUEUE_TICKETING,
+            execution_timeout=timedelta(minutes=5),
         )
 
         hitl_request = HiTLRequest(
@@ -308,6 +314,7 @@ class CaseIntakeWorkflow:
             ),
             id=f"{child_prefix}-hitl-approval",
             task_queue=QUEUE_INTERACTIONS,
+            execution_timeout=timedelta(minutes=5),
         )
 
         remediation_result = "remediation skipped"
@@ -336,6 +343,7 @@ class CaseIntakeWorkflow:
                 ),
                 id=f"{child_prefix}-incident-response",
                 task_queue=QUEUE_EDR,
+                execution_timeout=timedelta(minutes=5),
             )
 
         await emit_workflow_observability(

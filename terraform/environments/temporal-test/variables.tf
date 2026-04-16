@@ -78,5 +78,5 @@ variable "secamo_sender_email" {
 variable "email_provider" {
   description = "Fallback connector provider for outbound email activities (for example: ses or microsoft_defender)"
   type        = string
-  default     = ""
+  default     = "ses"
 }

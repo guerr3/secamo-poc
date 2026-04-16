@@ -11,7 +11,7 @@ def test_incident_response_requires_device_id_for_isolate() -> None:
 
 
 def test_impossible_travel_propagates_device_id_to_child_requests() -> None:
-    source = Path("workflows/impossible_travel.py").read_text(encoding="utf-8")
+    source = Path("workflows/soc_alert_triage.py").read_text(encoding="utf-8")
 
-    assert "device_extension = payload.vendor_extensions.get(\"device_id\")" in source
-    assert "device_id=device_id" in source
+    assert "case_input.device" in source
+    assert "device_id=case_input.device" in source

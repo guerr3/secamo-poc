@@ -31,68 +31,68 @@ def build_default_route_registry() -> RouteRegistry:
     registry.register_rule(
         name="critical-defender-alert",
         predicate=_is_critical_defender_alert,
-        routes=(WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        routes=(WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
 
     registry.register(
         "microsoft_defender",
         "defender.alert",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "microsoft_defender",
         "defender.impossible_travel",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "microsoft_defender",
         "alert",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "microsoft_defender",
         "impossible_travel",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "microsoft_defender",
         "defender.security_signal",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "microsoft_defender",
         "security_signal",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "crowdstrike",
         "defender.alert",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "crowdstrike",
         "defender.impossible_travel",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "crowdstrike",
         "detection_summary",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "crowdstrike",
         "impossible_travel",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "sentinelone",
         "defender.alert",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "sentinelone",
         "alert",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "jira",
@@ -112,22 +112,22 @@ def build_default_route_registry() -> RouteRegistry:
     registry.register(
         "microsoft_graph",
         "defender.alert",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "microsoft_graph",
         "defender.impossible_travel",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "microsoft_graph",
         "defender.security_signal",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "microsoft_graph",
         "security_signal",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "microsoft_graph",
@@ -142,12 +142,12 @@ def build_default_route_registry() -> RouteRegistry:
     registry.register(
         "defender",
         "alert",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
         "defender",
         "defender.alert",
-        (WorkflowRoute(workflow_name="CaseIntakeWorkflow", task_queue=QUEUE_EDR),),
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
 
     registry.register_polling_resource("microsoft_defender", "defender_alerts", "alert")
