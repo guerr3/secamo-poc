@@ -11,17 +11,21 @@
 
 ## File Reference
 
-| File                         | Responsibility                                               |
-| ---------------------------- | ------------------------------------------------------------ |
-| `__init__.py`                | Child workflow export surface.                               |
-| `alert_enrichment.py`        | Child workflow for alert enrichment and risk context.        |
-| `hitl_approval.py`           | Child workflow for human-in-the-loop approval signal flow.   |
-| `incident_response.py`       | Child workflow for decision-based incident response actions. |
-| `README.md`                  | Module documentation.                                        |
-| `threat_intel_enrichment.py` | Child workflow for threat intel fanout stage.                |
-| `ticket_creation.py`         | Child workflow for ticket creation stage.                    |
-| `user_deprovisioning.py`     | Child workflow for user deprovisioning stage.                |
-| `__pycache__/`               | Generated Python bytecode cache directory.                   |
+| File                                         | Responsibility                                                          |
+| -------------------------------------------- | ----------------------------------------------------------------------- |
+| `__init__.py`                                | Child workflow export surface.                                          |
+| `alert_enrichment.py`                        | Child workflow for alert enrichment and risk context.                   |
+| `hitl_approval.py`                           | Child workflow for human-in-the-loop approval signal flow.              |
+| `incident_response.py`                       | Child workflow for decision-based incident response actions.            |
+| `onboarding_bootstrap_stage.py`              | Child workflow for tenant/bootstrap provisioning and config resolution. |
+| `onboarding_communications_stage.py`         | Child workflow for onboarding notifications and ticket creation.        |
+| `onboarding_compliance_evidence_stage.py`    | Child workflow for onboarding compliance/audit evidence.                |
+| `onboarding_subscription_reconcile_stage.py` | Child workflow for Graph subscription reconciliation.                   |
+| `README.md`                                  | Module documentation.                                                   |
+| `threat_intel_enrichment.py`                 | Child workflow for threat intel fanout stage.                           |
+| `ticket_creation.py`                         | Child workflow for ticket creation stage.                               |
+| `user_deprovisioning.py`                     | Child workflow for user deprovisioning stage.                           |
+| `__pycache__/`                               | Generated Python bytecode cache directory.                              |
 
 ## Key Concepts
 

@@ -134,12 +134,10 @@ terraform/
 ├── .gitignore                          ← Voorkomt dat state/secrets in Git komen
 │
 ├── environments/                       ← Omgevings-specifieke configuraties
-│   └── poc/                            ← PoC omgeving (hier run je terraform)
-│       ├── providers.tf                ← AWS provider + versie constraints
-│       ├── backend.tf                  ← Waar het state file wordt opgeslagen
-│       ├── variables.tf                ← Alle input variabelen voor deze omgeving
-│       ├── main.tf                     ← Module calls (het "wiring diagram")
-│       └── outputs.tf                  ← Endpoints en IDs die je nodig hebt
+│   ├── poc/                            ← Modulaire AWS PoC omgeving
+│   ├── temporal-test/                  ← Single-node Temporal validatie omgeving
+│   ├── demo_tenant/                    ← Tenant-scoped demo omgeving (AWS + Azure)
+│   └── demo_vm_aws/                    ← Standalone AWS Windows VM demo omgeving
 │
 ├── modules/                            ← Herbruikbare bouwblokken
 │   ├── vpc/                            ← Networking (VPC, subnets, NAT)
@@ -158,12 +156,12 @@ terraform/
 
 ### Waarom deze structuur?
 
-| Patroon                                                  | Voordeel                                                      |
-| -------------------------------------------------------- | ------------------------------------------------------------- |
-| `environments/<env>/`                                    | Meerdere omgevingen (poc, staging, prod) met eigen variabelen |
-| `modules/<component>/`                                   | Herbruikbaarheid — dezelfde VPC-module voor elke omgeving     |
-| Elk module heeft `main.tf`, `variables.tf`, `outputs.tf` | Consistentie — je weet altijd waar je moet kijken             |
-| `scripts/` apart                                         | Scheiding van concerns — Terraform config vs. runtime scripts |
+| Patroon                                                  | Voordeel                                                                                                 |
+| -------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| `environments/<env>/`                                    | Meerdere omgevingen (`poc`, `temporal-test`, `demo_tenant`, `demo_vm_aws`) met eigen state en variabelen |
+| `modules/<component>/`                                   | Herbruikbaarheid — dezelfde VPC-module voor elke omgeving                                                |
+| Elk module heeft `main.tf`, `variables.tf`, `outputs.tf` | Consistentie — je weet altijd waar je moet kijken                                                        |
+| `scripts/` apart                                         | Scheiding van concerns — Terraform config vs. runtime scripts                                            |
 
 ### Belangrijk: Waar run je Terraform?
 
@@ -241,13 +239,14 @@ Elke environment is een **volledig onafhankelijke Terraform deployment** met:
 
 ### Huidige opzet
 
-We hebben nu alleen `poc/`. Later kun je toevoegen:
+De repository bevat momenteel deze omgevingen:
 
 ```
 environments/
-├── poc/          ← t3.medium, db.t4g.small, single-AZ
-├── staging/      ← t3.large, db.t4g.medium, multi-AZ
-└── prod/         ← t3.xlarge, db.r6g.large, multi-AZ, deletion protection
+├── poc/              ← modulaire AWS stack
+├── temporal-test/    ← self-hosted Temporal validatie
+├── demo_tenant/      ← tenant demo footprint (AWS + Azure)
+└── demo_vm_aws/      ← losse AWS demo VM
 ```
 
 Elke omgeving heeft een **eigen state file** in S3 (key verschilt per env):
@@ -715,9 +714,12 @@ terraform apply -target=module.compute
     │  │  ┌────────────────────────┐  │      │
     │  │  │ EC2 Worker (t3.medium) │  │      │
     │  │  │   ┌─── Temporal ───┐  │  │      │
-    │  │  │   │ iam-graph      │  │  │      │
-    │  │  │   │ soc-defender   │  │  │      │
+    │  │  │   │ user-lifecycle │  │  │      │
+    │  │  │   │ edr            │  │  │      │
+    │  │  │   │ ticketing      │  │  │      │
+    │  │  │   │ interactions   │  │  │      │
     │  │  │   │ audit          │  │  │      │
+    │  │  │   │ polling        │  │  │      │
     │  │  │   └────────────────┘  │  │      │
     │  │  └───────────┬───────────┘  │      │
     │  │              │              │      │
@@ -734,4 +736,4 @@ terraform apply -target=module.compute
 
 ---
 
-> **Volgende stap:** Voer de [prerequisite-checklist](#checklist-vóór-terraform-init) uit en run `terraform init` vanuit `terraform/environments/poc/`.
+> **Volgende stap:** Voer de [prerequisite-checklist](#checklist-vóór-terraform-init) uit en run `terraform init` vanuit de environment map waarmee je wilt werken (bijvoorbeeld `terraform/environments/poc/` of `terraform/environments/temporal-test/`).

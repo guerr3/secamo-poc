@@ -68,10 +68,12 @@ Queue names are defined in [shared/config.py](../shared/config.py).
 
 Current queues:
 
-- `iam-graph`
-- `soc-defender`
+- `user-lifecycle`
+- `edr`
+- `ticketing`
+- `interactions`
 - `audit`
-- `poller`
+- `polling`
 
 Workflow/activity registration by queue is in [workers/run_worker.py](../workers/run_worker.py).
 
@@ -240,7 +242,7 @@ Reference examples:
 Follow existing integration patterns:
 
 - Reuse token caching/client logic in [shared/graph_client.py](../shared/graph_client.py).
-- Keep Graph/Defender side effects in activities (for example [activities/graph_users.py](../activities/graph_users.py), [activities/graph_alerts.py](../activities/graph_alerts.py)).
+- Keep Graph/Defender side effects in activities (for example [activities/identity.py](../activities/identity.py), [activities/edr.py](../activities/edr.py), [activities/subscription.py](../activities/subscription.py)).
 - Keep ingress tenant resolution and validation logic aligned with [terraform/modules/ingress/src/ingress/handler.py](../terraform/modules/ingress/src/ingress/handler.py).
 
 ## Testing Requirements

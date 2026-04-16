@@ -1,13 +1,22 @@
 # Terraform - infrastructure definitions for ingress, runtime, and storage layers
 
-> This module provisions AWS infrastructure and deployment assets for PoC and temporal-test environments.
+> This module provisions infrastructure for multiple isolated runtime environments.
 
 ## Responsibilities
 
 - Define reusable infrastructure modules for network, security, compute, ingress, storage, and database.
-- Define environment entrypoints for PoC and temporal-test deployments.
-- Provide bootstrap scripts and compose assets for local/test Temporal runtime.
+- Define environment entrypoints with isolated state and lifecycle.
+- Provide bootstrap scripts and compose assets for local/self-hosted Temporal runtime.
 - Keep runtime infrastructure aligned with ingress/worker/activity operational requirements.
+
+## Environment Inventory
+
+| Environment                  | Purpose                                                 |
+| ---------------------------- | ------------------------------------------------------- |
+| `environments/poc`           | Main modular AWS PoC environment.                       |
+| `environments/temporal-test` | Single-node Temporal validation environment on EC2.     |
+| `environments/demo_tenant`   | Tenant-scoped demo environment (AWS + Azure resources). |
+| `environments/demo_vm_aws`   | Standalone AWS Windows VM demo/testing environment.     |
 
 ## File Reference
 
@@ -24,27 +33,21 @@
 | `temporal-compose/`  | Compose files and helper scripts for Temporal stack startup.        |
 | `walkthrough.md`     | Terraform quick-start workflow guide.                               |
 
-## Key Concepts
-
-- Module composition: environment roots wire reusable modules to keep infrastructure concerns separated.
-- Environment isolation: `environments/poc` and `environments/temporal-test` use independent state and lifecycle control.
-- Runtime coupling: ingress Lambda, worker hosts, and persistence stores are provisioned to match orchestration layer boundaries.
-
 ## Usage
 
-Run Terraform from an environment directory.
+Run Terraform from an environment directory:
 
 ```bash
-cd terraform/environments/poc
+cd terraform/environments/<environment>
 terraform init
 terraform plan
 terraform apply
 ```
 
-## Testing
+## Validation
 
 ```bash
-cd terraform/environments/poc
+cd terraform/environments/<environment>
 terraform fmt -check
 terraform validate
 ```
@@ -52,7 +55,7 @@ terraform validate
 ## Extension Points
 
 1. Add or extend a module under `terraform/modules/` for new infrastructure capabilities.
-2. Wire module inputs/outputs in the target environment entrypoint (`environments/poc` or `environments/temporal-test`).
+2. Wire module inputs/outputs in the target environment entrypoint under `terraform/environments/`.
 3. Keep IAM, networking, and runtime env vars aligned with code-level expectations.
-4. Validate with `terraform fmt -check` and `terraform validate`.
-5. Update environment walkthrough docs and this file reference as needed.
+4. Validate with `terraform fmt -check` and `terraform validate` before apply.
+5. Update environment walkthrough docs when environment behavior changes.

@@ -83,6 +83,6 @@ Activity is production-ready. No deviations found.
 
 ## Example User Prompts
 
-- "Audit `activities/graph_users.py` for Temporal retry safety and error translation."
+- "Audit `activities/identity.py` for Temporal retry safety and error translation."
 - "Generate a production-safe activity that writes to DynamoDB with proper retry classification."
 - "Review this activity for heartbeat and cancellation handling against Temporal SDK docs."

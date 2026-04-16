@@ -11,22 +11,26 @@
 
 ## File Reference
 
-| File                            | Responsibility                                                                    |
-| ------------------------------- | --------------------------------------------------------------------------------- |
-| `__init__.py`                   | Workflow package marker.                                                          |
-| `child/`                        | Reusable child workflows for enrichment, approvals, response, and deprovisioning. |
-| `defender_alert_enrichment.py`  | Parent SOC enrichment orchestration workflow.                                     |
-| `iam_onboarding.py`             | IAM lifecycle orchestration workflow.                                             |
-| `impossible_travel.py`          | Impossible-travel triage and incident response orchestration workflow.            |
-| `polling_manager.py`            | Polling-based provider event collection and downstream dispatch workflow.         |
-| `README.md`                     | Module documentation.                                                             |
-| `__pycache__/`                  | Generated Python bytecode cache directory.                                        |
+| File                           | Responsibility                                                                            |
+| ------------------------------ | ----------------------------------------------------------------------------------------- |
+| `__init__.py`                  | Workflow package marker.                                                                  |
+| `child/`                       | Reusable child workflows for enrichment, approvals, response, and deprovisioning.         |
+| `case_intake.py`               | Unified SOC intake workflow for defender alerts, impossible travel, and security signals. |
+| `customer_onboarding.py`       | Parent onboarding workflow composed from staged child workflows.                          |
+| `defender_alert_enrichment.py` | Parent SOC enrichment orchestration workflow.                                             |
+| `generic_security_signal.py`   | Generic workflow for non-alert Defender security signals.                                 |
+| `iam_onboarding.py`            | IAM lifecycle orchestration workflow.                                                     |
+| `impossible_travel.py`         | Impossible-travel triage and incident response orchestration workflow.                    |
+| `polling_bootstrap.py`         | Reconcile/start polling-manager workflows per tenant/provider/resource.                   |
+| `polling_manager.py`           | Polling-based provider event collection and downstream dispatch workflow.                 |
+| `README.md`                    | Module documentation.                                                                     |
+| `__pycache__/`                 | Generated Python bytecode cache directory.                                                |
 
 ## Key Concepts
 
 - Determinism: workflows orchestrate only; all I/O is delegated to activities.
 - Composition: parent workflows call child workflows for reusable steps and clearer failure boundaries.
-- Queue-aware orchestration: workflow registration aligns with queue partitioning in worker bootstrap.
+- Queue-aware orchestration: workflow registration aligns with queue partitioning in worker bootstrap (`user-lifecycle`, `edr`, `ticketing`, `interactions`, `audit`, `polling`).
 
 ## Usage
 

@@ -8,6 +8,8 @@ The Terraform layout currently supports:
 
 - `environments/poc` for the modular PoC stack.
 - `environments/temporal-test` for a single-node Temporal validation environment.
+- `environments/demo_tenant` for tenant-scoped demo provisioning (AWS + Azure).
+- `environments/demo_vm_aws` for standalone AWS Windows VM demo/testing.
 - `modules/*` for reusable network, security, compute, ingress, storage, and database components.
 - `scripts/*` for instance bootstrap logic.
 
@@ -18,19 +20,26 @@ See [README.md](README.md) for the canonical inventory and file-level map.
 Run Terraform from an environment folder, not from `terraform/` root.
 
 ```bash
-cd terraform/environments/poc
+cd terraform/environments/<environment>
 terraform init
 terraform plan
 terraform apply
 ```
 
-For temporal-test:
+Examples:
 
 ```bash
+# main PoC environment
+cd terraform/environments/poc
+
+# self-hosted Temporal validation environment
 cd terraform/environments/temporal-test
-terraform init
-terraform plan
-terraform apply
+
+# tenant demo footprint
+cd terraform/environments/demo_tenant
+
+# standalone AWS demo VM
+cd terraform/environments/demo_vm_aws
 ```
 
 ## Prerequisites

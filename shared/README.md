@@ -8,33 +8,33 @@
 - Define strict Envelope-first canonical contracts used across ingress, routing, and workflow dispatch.
 - Provide ingress/auth abstractions and validator wiring used by Lambda ingress paths.
 - Provide tenant/bootstrap helper utilities used by workflows and activities.
-- Host provider factory and protocol interfaces for AI and ChatOps integration.
+- Host provider factory and protocol interfaces for identity, EDR, ticketing, threat-intel, and integrations.
 
 ## File Reference
 
-| File                  | Responsibility                                                     |
-| --------------------- | ------------------------------------------------------------------ |
-| `__init__.py`         | Shared package marker.                                             |
-| `approval/`           | Approval contracts, callback normalization, and token store logic. |
-| `auth/`               | Auth contracts, registry, secret resolution, and validators.       |
-| `config.py`           | Runtime constants (Temporal settings, queue names, and defaults).  |
-| `graph_client.py`     | Graph token acquisition and token cache handling.                  |
-| `ingress/`            | Ingress pipeline contracts and error definitions.                  |
-| `models/`             | Pydantic model contracts, including strict Envelope payload variants and compatibility models. |
-| `normalization/`      | Package marker; legacy WorkflowIntent normalization contracts removed. |
-| `providers/`          | Provider protocol interfaces and concrete AI/ChatOps providers.    |
-| `README.md`           | Module documentation.                                              |
-| `routing/`            | Route contracts, route registry, and default route mappings.       |
-| `ssm_client.py`       | SSM helper methods for tenant-scoped parameter retrieval.          |
-| `temporal/`           | Temporal dispatch/signal abstraction helpers.                      |
-| `workflow_helpers.py` | Shared helper routines used by workflow bootstrap logic.           |
-| `__pycache__/`        | Generated Python bytecode cache directory.                         |
+| File                  | Responsibility                                                                                           |
+| --------------------- | -------------------------------------------------------------------------------------------------------- |
+| `__init__.py`         | Shared package marker.                                                                                   |
+| `approval/`           | Approval contracts, callback normalization, and token store logic.                                       |
+| `auth/`               | Auth contracts, registry, secret resolution, and validators.                                             |
+| `config.py`           | Runtime constants (Temporal settings, queue names, and defaults).                                        |
+| `graph_client.py`     | Graph token acquisition and token cache handling.                                                        |
+| `ingress/`            | Ingress pipeline contracts and error definitions.                                                        |
+| `models/`             | Pydantic contracts for envelope payloads, workflow inputs, and domain models.                            |
+| `normalization/`      | Case-intake normalization mappers (Defender alert/impossible-travel to security case input).             |
+| `providers/`          | Provider protocols, type mappings, factory wiring, and capability adapters.                              |
+| `README.md`           | Module documentation.                                                                                    |
+| `routing/`            | Route contracts, route registry, and default route mappings.                                             |
+| `ssm_client.py`       | SSM helper methods for tenant-scoped parameter retrieval.                                                |
+| `temporal/`           | Temporal dispatch/signal abstraction helpers.                                                            |
+| `workflow_helpers.py` | Shared bootstrap, SOC orchestration helpers, observability helpers, and idempotent child-start wrappers. |
+| `__pycache__/`        | Generated Python bytecode cache directory.                                                               |
 
 ## Key Concepts
 
 - Contract-first boundaries: ingress, workflow, and activity layers exchange typed models to keep replay and serialization behavior stable.
 - Envelope-first orchestration: ingress builds immutable `Envelope` objects with discriminated payload variants (`SecamoEventVariant`) and deterministic `event_id`.
-- Route registry abstraction: workflow dispatch routes are centrally defined and reused across ingress handlers.
+- Route registry abstraction: webhook, provider-event, and polling routes are centrally defined and reused across ingress and polling dispatch.
 - Shared auth validation: channel/provider auth checks are routed through a registry to prevent duplicated security logic in handlers.
 - Lazy AWS client initialization: shared/runtime integrations should avoid import-time boto3 client construction to keep Lambda cold-start/test behavior predictable.
 
@@ -51,7 +51,7 @@ from shared.models.canonical import Envelope
 ## Testing
 
 ```bash
-python -m pytest -q tests/test_models.py tests/test_graph_client.py tests/routing/test_route_registry.py
+python -m pytest -q tests/test_models.py tests/test_graph_client.py tests/test_case_intake_routing.py tests/test_graph_webhook_routing.py
 ```
 
 ## Extension Points

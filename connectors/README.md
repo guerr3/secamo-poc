@@ -7,13 +7,14 @@
 - Define and enforce a stable connector interface used by activities.
 - Isolate provider SDK and HTTP behavior from workflow/activity orchestration code.
 - Centralize provider registration and connector factory resolution.
-- Preserve compatibility with stub connectors for planned integrations.
+- Keep clear separation between production connectors and stub connectors.
 
 ## File Reference
 
 | File                    | Responsibility                                                                  |
 | ----------------------- | ------------------------------------------------------------------------------- |
 | `__init__.py`           | Public exports for connector interfaces and registry helpers.                   |
+| `abuseipdb.py`          | AbuseIPDB connector for IP reputation lookup.                                   |
 | `base.py`               | Abstract connector contract (`fetch_events`, `execute_action`, `health_check`). |
 | `errors.py`             | Connector-specific exception types and error taxonomy.                          |
 | `jira.py`               | Jira connector implementation.                                                  |
@@ -23,7 +24,26 @@
 | `README.md`             | Module documentation.                                                           |
 | `registry.py`           | Connector factory registry and provider key resolution.                         |
 | `stub_providers.py`     | Stub connector implementations for planned providers.                           |
+| `virustotal.py`         | VirusTotal connector for indicator reputation lookup.                           |
 | `__pycache__/`          | Generated Python bytecode cache directory.                                      |
+
+## Registered Providers
+
+Resolved in `connectors/registry.py`.
+
+| Provider key         | Implementation                    | Status |
+| -------------------- | --------------------------------- | ------ |
+| `microsoft_defender` | `MicrosoftGraphConnector`         | Active |
+| `microsoft_graph`    | `MicrosoftGraphConnector` (alias) | Active |
+| `jira`               | `JiraConnector`                   | Active |
+| `ses`                | `SesConnector`                    | Active |
+| `virustotal`         | `VirusTotalConnector`             | Active |
+| `abuseipdb`          | `AbuseIpdbConnector`              | Active |
+| `crowdstrike`        | `CrowdStrikeConnector`            | Stub   |
+| `sentinelone`        | `SentinelOneConnector`            | Stub   |
+| `halo_itsm`          | `HaloItsmConnector`               | Stub   |
+| `servicenow`         | `ServiceNowConnector`             | Stub   |
+| `misp`               | `MispConnector`                   | Stub   |
 
 ## Key Concepts
 
@@ -43,7 +63,7 @@ result = await connector.execute_action(action, payload)
 ## Testing
 
 ```bash
-python -m pytest -q tests/test_stub_connectors.py tests/test_connectors_resilience.py tests/test_jira_provisioner.py
+python -m pytest -q tests/test_stub_connectors.py tests/test_connectors_resilience.py tests/test_threat_intel_connectors.py tests/test_ses_connector.py tests/test_jira_provisioner.py
 ```
 
 ## Extension Points
