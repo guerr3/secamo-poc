@@ -21,7 +21,6 @@ from shared.models import (
     DefenderDetectionFindingEvent,
     DefenderSecuritySignalEvent,
     Envelope,
-    ImpossibleTravelEvent,
     VendorExtension,
 )
 from shared.models.mappers import build_connector_correlation, build_envelope
@@ -54,7 +53,7 @@ class MicrosoftGraphConnector(BaseConnector):
             "path": "/auditLogs/signIns",
             "occurred_field": "createdDateTime",
             "filter_field": "createdDateTime",
-            "provider_event_type": "impossible_travel",
+            "provider_event_type": "signin_log",
             "supports_orderby": False,
         },
         "intune_noncompliant_devices": {
@@ -526,6 +525,22 @@ class MicrosoftGraphConnector(BaseConnector):
         signal_id = external_id or f"{resource_type}:{provider_event_type}:{int(occurred_at.timestamp())}"
         severity_id, severity = self._severity_from_signal(item)
         status = self._status_from_signal(item)
+        user_principal_name = self._first_non_empty_str(
+            item.get("userPrincipalName"),
+            item.get("userEmail"),
+            item.get("email"),
+            item.get("upn"),
+            item.get("user", {}).get("userPrincipalName") if isinstance(item.get("user"), dict) else None,
+            item.get("initiatedBy", {}).get("user", {}).get("userPrincipalName")
+            if isinstance(item.get("initiatedBy"), dict)
+            else None,
+        )
+        device_id = self._first_non_empty_str(
+            item.get("deviceId"),
+            item.get("azureADDeviceId"),
+            item.get("azureAdDeviceId"),
+            item.get("aadDeviceId"),
+        )
 
         return DefenderSecuritySignalEvent(
             event_type="defender.security_signal",
@@ -547,10 +562,12 @@ class MicrosoftGraphConnector(BaseConnector):
             vendor_extensions={
                 "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
                 "resource_type": VendorExtension(source=self.provider, value=resource_type),
+                "user_email": VendorExtension(source=self.provider, value=user_principal_name),
                 "user_principal_name": VendorExtension(
                     source=self.provider,
-                    value=self._coerce_non_empty_str(item.get("userPrincipalName")),
+                    value=user_principal_name,
                 ),
+                "device_id": VendorExtension(source=self.provider, value=device_id),
                 "entity_id": VendorExtension(
                     source=self.provider,
                     value=self._first_non_empty_str(item.get("id"), item.get("userId"), item.get("deviceId")),
@@ -582,24 +599,6 @@ class MicrosoftGraphConnector(BaseConnector):
                     "destination_ip": VendorExtension(source=self.provider, value=evidence_fields["destination_ip"]),
                     "device_id": VendorExtension(source=self.provider, value=evidence_fields["device_id"]),
                     "user_email": VendorExtension(source=self.provider, value=evidence_fields["user_email"]),
-                },
-            )
-        elif resource_type == "entra_signin_logs":
-            user_principal_name = str(item.get("userPrincipalName") or "unknown@example.com")
-            source_ip = str(item.get("ipAddress") or "0.0.0.0")
-            destination_ip = str(item.get("resourceDisplayName") or "") or None
-            payload = ImpossibleTravelEvent(
-                event_type="defender.impossible_travel",
-                activity_id=3002,
-                activity_name="poller.fetch",
-                user_principal_name=user_principal_name,
-                source_ip=source_ip,
-                destination_ip=destination_ip,
-                severity_id=40,
-                severity="medium",
-                vendor_extensions={
-                    "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
-                    "resource_type": VendorExtension(source=self.provider, value=resource_type),
                 },
             )
         else:

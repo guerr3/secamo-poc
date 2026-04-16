@@ -155,6 +155,8 @@ async def test_graph_fetch_events_non_defender_does_not_expand_evidence(mocker, 
     events = await connector.fetch_events({"resource_type": "entra_signin_logs", "top": 1})
 
     assert len(events) == 1
+    assert isinstance(events[0].payload, DefenderSecuritySignalEvent)
+    assert events[0].payload.provider_event_type == "signin_log"
     assert "$expand" not in calls[0]["params"]
 
 

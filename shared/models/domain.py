@@ -146,7 +146,15 @@ class SecurityCaseInput(BaseModel):
     model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
-    case_type: Literal["defender_alert", "impossible_travel", "risky_user", "generic_signal"]
+    case_type: Literal[
+        "defender_alert",
+        "impossible_travel",
+        "signin_log",
+        "risky_user",
+        "noncompliant_device",
+        "audit_log",
+        "generic_signal",
+    ]
     severity: Literal["low", "medium", "high", "critical"]
     alert_id: str
     allowed_actions: list[str] = Field(default_factory=lambda: ["dismiss", "isolate", "disable_user"])
