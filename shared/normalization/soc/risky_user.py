@@ -36,7 +36,7 @@ def normalize_risky_user_case(envelope: Envelope, *, auto_remediate: bool) -> Se
         case_type="risky_user",
         severity=severity,
         alert_id=payload.signal_id,
-        allowed_actions=["dismiss", "isolate", "disable_user"],
+        allowed_actions=["confirm_compromised", "reset_password", "dismiss"],
         auto_remediate=auto_remediate,
         identity=identity,
         device=device,

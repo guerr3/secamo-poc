@@ -37,7 +37,7 @@ def normalize_noncompliant_device_case(envelope: Envelope, *, auto_remediate: bo
         case_type="noncompliant_device",
         severity=severity,
         alert_id=payload.signal_id,
-        allowed_actions=["dismiss", "isolate", "disable_user"],
+        allowed_actions=["isolate_device", "run_antivirus_scan", "dismiss"],
         auto_remediate=auto_remediate,
         identity=identity,
         device=device,

@@ -36,7 +36,7 @@ def normalize_signin_log_case(envelope: Envelope, *, auto_remediate: bool) -> Se
         case_type="signin_log",
         severity=severity,
         alert_id=payload.signal_id,
-        allowed_actions=["dismiss", "isolate", "disable_user"],
+        allowed_actions=["dismiss", "disable_user"],
         auto_remediate=auto_remediate,
         identity=identity,
         device=device,
