@@ -260,7 +260,8 @@ resource "aws_iam_role_policy" "temporal_storage" {
           module.storage.audit_table_arn,
           "${module.storage.audit_table_arn}/index/*",
           aws_dynamodb_table.tenants.arn,
-          "${aws_dynamodb_table.tenants.arn}/index/*"
+          "${aws_dynamodb_table.tenants.arn}/index/*",
+          aws_dynamodb_table.hitl_tokens.arn
         ]
       }
     ]
