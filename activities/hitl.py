@@ -153,7 +153,10 @@ def _put_token_record(request: HiTLRequest, token: str) -> None:
             "channel": {"S": "hitl"},
             "expires_at": {"N": str(expires_at)},
         },
-        ConditionExpression="attribute_not_exists(token)",
+        # Use an expression attribute name because DynamoDB expression parsing
+        # rejects reserved words in-place.
+        ConditionExpression="attribute_not_exists(#token)",
+        ExpressionAttributeNames={"#token": "token"},
     )
 
 

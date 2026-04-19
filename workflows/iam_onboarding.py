@@ -128,14 +128,17 @@ class IamOnboardingWorkflow:
                     f"(id={existing_user.user_id}). Skipped."
                 )
             else:
+                create_user_data = dict(case.user_data)
+                create_user_data.setdefault("email", user_email)
+                create_user_data.setdefault("user_id", case.user_id)
+                if config.display_name:
+                    create_user_data.setdefault("company_name", config.display_name)
+
                 new_user: IdentityUser = await workflow.execute_activity(
                     identity_create_user,
                     args=[
                         case.tenant_id,
-                        {
-                            "email": user_email,
-                            "user_id": case.user_id,
-                        },
+                        create_user_data,
                     ],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=runtime_retry,
@@ -197,17 +200,24 @@ class IamOnboardingWorkflow:
         elif action == LifecycleAction.UPDATE:
             if not existing_user:
                 raise ValueError(f"User '{user_email}' not found for update.")
-            await workflow.execute_activity(
-                identity_update_user,
-                args=[
-                    case.tenant_id,
-                    existing_user.user_id,
-                    {},
-                ],
-                start_to_close_timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-            result_msg = f"User '{existing_user.email}' updated."
+            updates = dict(case.user_data.get("updates", case.user_data))
+            updates.pop("user_id", None)
+            updates.pop("email", None)
+            updates.pop("user_email", None)
+            if not updates:
+                result_msg = f"User '{existing_user.email}' update skipped (no fields provided)."
+            else:
+                await workflow.execute_activity(
+                    identity_update_user,
+                    args=[
+                        case.tenant_id,
+                        existing_user.user_id,
+                        updates,
+                    ],
+                    start_to_close_timeout=TIMEOUT,
+                    retry_policy=runtime_retry,
+                )
+                result_msg = f"User '{existing_user.email}' updated."
 
         elif action == LifecycleAction.DELETE:
             if not existing_user:

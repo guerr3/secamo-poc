@@ -215,6 +215,164 @@ class MicrosoftGraphConnector(BaseConnector):
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
         return "".join(secrets.choice(alphabet) for _ in range(length))
 
+    @staticmethod
+    def _coerce_bool(value: Any) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "y"}:
+                return True
+            if normalized in {"false", "0", "no", "n"}:
+                return False
+        return None
+
+    @classmethod
+    def _build_graph_create_user_body(cls, user_data: dict[str, Any]) -> dict[str, Any]:
+        user_principal_name = cls._first_non_empty_str(
+            user_data.get("userPrincipalName"),
+            user_data.get("upn"),
+            user_data.get("email"),
+            user_data.get("user_email"),
+        )
+        if not user_principal_name:
+            raise ConnectorUnsupportedActionError("create_user requires payload.user_data.email")
+
+        display_name = cls._first_non_empty_str(
+            user_data.get("displayName"),
+            user_data.get("display_name"),
+        )
+        if not display_name:
+            first_name = cls._first_non_empty_str(user_data.get("first_name"), user_data.get("givenName"))
+            last_name = cls._first_non_empty_str(user_data.get("last_name"), user_data.get("surname"))
+            display_name = f"{first_name or ''} {last_name or ''}".strip() or user_principal_name
+
+        mail_nickname = cls._first_non_empty_str(
+            user_data.get("mailNickname"),
+            user_data.get("mail_nickname"),
+        )
+        if not mail_nickname:
+            mail_nickname = user_principal_name.split("@", 1)[0]
+
+        password = cls._first_non_empty_str(
+            user_data.get("temp_password"),
+            user_data.get("password"),
+        ) or cls._generate_password()
+
+        force_change_password = cls._coerce_bool(
+            user_data.get("force_change_password_next_sign_in")
+        )
+        if force_change_password is None:
+            force_change_password = cls._coerce_bool(user_data.get("forceChangePasswordNextSignIn"))
+        if force_change_password is None:
+            force_change_password = True
+
+        account_enabled = cls._coerce_bool(user_data.get("account_enabled"))
+        if account_enabled is None:
+            account_enabled = cls._coerce_bool(user_data.get("accountEnabled"))
+        if account_enabled is None:
+            account_enabled = True
+
+        body: dict[str, Any] = {
+            "accountEnabled": account_enabled,
+            "displayName": display_name,
+            "mailNickname": mail_nickname,
+            "userPrincipalName": user_principal_name,
+            "passwordProfile": {
+                "forceChangePasswordNextSignIn": force_change_password,
+                "password": password,
+            },
+        }
+
+        optional_string_fields = {
+            "companyName": ("companyName", "company_name"),
+            "givenName": ("givenName", "first_name"),
+            "surname": ("surname", "last_name"),
+            "department": ("department",),
+            "jobTitle": ("jobTitle", "job_title", "role"),
+            "officeLocation": ("officeLocation", "office_location"),
+            "usageLocation": ("usageLocation", "usage_location"),
+            "mobilePhone": ("mobilePhone", "mobile_phone"),
+            "employeeId": ("employeeId", "employee_id"),
+        }
+        for target_field, source_fields in optional_string_fields.items():
+            value = cls._first_non_empty_str(*(user_data.get(field) for field in source_fields))
+            if value is not None:
+                body[target_field] = value
+
+        return body
+
+    @classmethod
+    def _normalize_graph_user_updates(cls, updates: dict[str, Any]) -> dict[str, Any]:
+        if not isinstance(updates, dict):
+            return {}
+
+        normalized: dict[str, Any] = {}
+
+        direct_string_fields = {
+            "displayName",
+            "givenName",
+            "surname",
+            "department",
+            "jobTitle",
+            "companyName",
+            "officeLocation",
+            "mobilePhone",
+            "usageLocation",
+            "mailNickname",
+            "employeeId",
+        }
+        for field_name in direct_string_fields:
+            value = cls._coerce_non_empty_str(updates.get(field_name))
+            if value is not None:
+                normalized[field_name] = value
+
+        alias_string_fields = {
+            "display_name": "displayName",
+            "first_name": "givenName",
+            "given_name": "givenName",
+            "last_name": "surname",
+            "job_title": "jobTitle",
+            "role": "jobTitle",
+            "company_name": "companyName",
+            "office_location": "officeLocation",
+            "mobile_phone": "mobilePhone",
+            "usage_location": "usageLocation",
+            "mail_nickname": "mailNickname",
+            "employee_id": "employeeId",
+        }
+        for source_field, target_field in alias_string_fields.items():
+            if target_field in normalized:
+                continue
+            value = cls._coerce_non_empty_str(updates.get(source_field))
+            if value is not None:
+                normalized[target_field] = value
+
+        account_enabled = cls._coerce_bool(updates.get("accountEnabled"))
+        if account_enabled is None:
+            account_enabled = cls._coerce_bool(updates.get("account_enabled"))
+        if account_enabled is not None:
+            normalized["accountEnabled"] = account_enabled
+
+        if isinstance(updates.get("passwordProfile"), dict):
+            normalized["passwordProfile"] = updates["passwordProfile"]
+        else:
+            temp_password = cls._first_non_empty_str(updates.get("temp_password"), updates.get("password"))
+            if temp_password is not None:
+                force_change_password = cls._coerce_bool(
+                    updates.get("force_change_password_next_sign_in")
+                )
+                if force_change_password is None:
+                    force_change_password = cls._coerce_bool(updates.get("forceChangePasswordNextSignIn"))
+                if force_change_password is None:
+                    force_change_password = True
+                normalized["passwordProfile"] = {
+                    "forceChangePasswordNextSignIn": force_change_password,
+                    "password": temp_password,
+                }
+
+        return normalized
+
     @classmethod
     def _normalize_subscription_resource(cls, resource: str) -> str:
         normalized = resource.strip()
@@ -1215,25 +1373,8 @@ class MicrosoftGraphConnector(BaseConnector):
             token = await get_graph_token(self.secrets)
             headers = {"Authorization": f"Bearer {token}"}
             user_data = payload.get("user_data") if isinstance(payload.get("user_data"), dict) else {}
-            user_email = str(user_data.get("email") or "").strip()
-            if not user_email:
-                raise ConnectorUnsupportedActionError("create_user requires payload.user_data.email")
-
-            first_name = str(user_data.get("first_name") or "").strip()
-            last_name = str(user_data.get("last_name") or "").strip()
-            temp_password = str(user_data.get("temp_password") or self._generate_password())
-            body = {
-                "accountEnabled": True,
-                "displayName": f"{first_name} {last_name}".strip() or user_email,
-                "mailNickname": user_email.split("@")[0] if "@" in user_email else user_email,
-                "userPrincipalName": user_email,
-                "department": str(user_data.get("department") or ""),
-                "jobTitle": str(user_data.get("role") or ""),
-                "passwordProfile": {
-                    "forceChangePasswordNextSignIn": True,
-                    "password": temp_password,
-                },
-            }
+            body = self._build_graph_create_user_body(user_data)
+            user_email = str(body["userPrincipalName"])
 
             try:
                 response = await self._request_with_retry(
@@ -1264,12 +1405,16 @@ class MicrosoftGraphConnector(BaseConnector):
             if not user_id:
                 raise ConnectorUnsupportedActionError("update_user requires payload.user_id")
 
+            normalized_updates = self._normalize_graph_user_updates(updates)
+            if not normalized_updates:
+                return {"updated": False, "user_id": user_id, "skipped": True}
+
             try:
                 await self._request_with_retry(
                     "PATCH",
                     f"https://graph.microsoft.com/v1.0/users/{quote(user_id)}",
                     headers=headers,
-                    json=updates,
+                    json=normalized_updates,
                 )
             except ConnectorPermanentError as exc:
                 if self._connector_error_status(exc) == 404:

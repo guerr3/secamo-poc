@@ -41,6 +41,9 @@ def test_put_token_record_uses_child_workflow_id_not_parent(monkeypatch) -> None
     hitl_module._put_token_record(child_request, "tok-xyz")
 
     assert len(put_spy.calls) == 1
-    item = put_spy.calls[0]["Item"]
+    put_call = put_spy.calls[0]
+    item = put_call["Item"]
     assert item["workflow_id"]["S"] == "child-hitl-100"
     assert item["workflow_id"]["S"] != "parent-wf-100"
+    assert put_call["ConditionExpression"] == "attribute_not_exists(#token)"
+    assert put_call["ExpressionAttributeNames"] == {"#token": "token"}

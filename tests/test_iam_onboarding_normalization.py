@@ -43,7 +43,12 @@ def _iam_envelope(*, action: str = "create", user_id: str = "user-123") -> Envel
             activity_id=1,
             user_email="alice@example.com",
             action=action,
-            user_data={"user_id": user_id},
+            user_data={
+                "user_id": user_id,
+                "company_name": "Secamo",
+                "first_name": "Alice",
+                "last_name": "Example",
+            },
         ),
         metadata={"requester": "manager@example.com"},
     )
@@ -57,6 +62,7 @@ def test_normalize_iam_onboarding_case_maps_fields() -> None:
     assert case_input.user_id == "user-123"
     assert case_input.user_email == "alice@example.com"
     assert case_input.requester == "manager@example.com"
+    assert case_input.user_data["company_name"] == "Secamo"
 
 
 def test_normalize_iam_onboarding_case_rejects_unknown_action() -> None:
@@ -126,4 +132,10 @@ async def test_route_fanout_dispatcher_normalizes_iam_workflow_input() -> None:
         "user_id": "user-123",
         "user_email": "alice@example.com",
         "requester": "manager@example.com",
+        "user_data": {
+            "user_id": "user-123",
+            "company_name": "Secamo",
+            "first_name": "Alice",
+            "last_name": "Example",
+        },
     }

@@ -144,6 +144,7 @@ def test_iam_onboarding_workflow_input_unchanged() -> None:
     assert workflow_input["tenant_id"] == "tenant-1"
     assert workflow_input["action"] == "create"
     assert workflow_input["user_id"] == "user-123"
+    assert workflow_input["user_data"] == {"user_id": "user-123"}
     assert "event_id" not in workflow_input
 
 

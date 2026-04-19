@@ -57,4 +57,5 @@ def normalize_iam_onboarding_case(event: Envelope) -> UserLifecycleCaseInput:
         user_id=_extract_user_id(payload),
         user_email=payload.user_email,
         requester=str(event.metadata.get("requester") or "ingress-api"),
+        user_data=payload.user_data,
     )

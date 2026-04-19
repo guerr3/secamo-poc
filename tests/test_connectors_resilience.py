@@ -760,6 +760,109 @@ async def test_graph_subscription_create_clamps_security_alert_lifetime(mocker, 
 
 
 @pytest.mark.asyncio
+async def test_graph_create_user_maps_optional_fields_for_graph(mocker, graph_secrets):
+    queue = [
+        _Resp(
+            201,
+            body={
+                "id": "u-1",
+                "displayName": "Alice Example",
+                "userPrincipalName": "alice@example.com",
+                "accountEnabled": True,
+            },
+        )
+    ]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="graph-tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    result = await connector.execute_action(
+        "create_user",
+        {
+            "user_data": {
+                "email": "alice@example.com",
+                "first_name": "Alice",
+                "last_name": "Example",
+                "company_name": "Secamo",
+                "role": "Security Analyst",
+                "department": "SOC",
+            }
+        },
+    )
+
+    assert result["user_id"] == "u-1"
+    request_body = calls[0]["json"]
+    assert request_body["displayName"] == "Alice Example"
+    assert request_body["mailNickname"] == "alice"
+    assert request_body["userPrincipalName"] == "alice@example.com"
+    assert request_body["companyName"] == "Secamo"
+    assert request_body["givenName"] == "Alice"
+    assert request_body["surname"] == "Example"
+    assert request_body["jobTitle"] == "Security Analyst"
+    assert request_body["department"] == "SOC"
+
+
+@pytest.mark.asyncio
+async def test_graph_update_user_skips_empty_updates(mocker, graph_secrets):
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="graph-tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client([], calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    result = await connector.execute_action("update_user", {"user_id": "u-1", "updates": {}})
+
+    assert result["updated"] is False
+    assert result["skipped"] is True
+    assert calls == []
+
+
+@pytest.mark.asyncio
+async def test_graph_update_user_maps_alias_fields(mocker, graph_secrets):
+    queue = [_Resp(204, body={}, content=b"")]
+    calls: list[dict[str, Any]] = []
+
+    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="graph-tok"))
+    mocker.patch(
+        "connectors.microsoft_defender.httpx.AsyncClient",
+        side_effect=lambda **kwargs: _Client(queue, calls),
+    )
+
+    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
+    result = await connector.execute_action(
+        "update_user",
+        {
+            "user_id": "u-1",
+            "updates": {
+                "first_name": "Alice",
+                "last_name": "Example",
+                "company_name": "Secamo",
+                "role": "Security Analyst",
+                "account_enabled": "false",
+                "temp_password": "TempP@ssw0rd!",
+            },
+        },
+    )
+
+    assert result["updated"] is True
+    request_body = calls[0]["json"]
+    assert request_body["givenName"] == "Alice"
+    assert request_body["surname"] == "Example"
+    assert request_body["companyName"] == "Secamo"
+    assert request_body["jobTitle"] == "Security Analyst"
+    assert request_body["accountEnabled"] is False
+    assert request_body["passwordProfile"]["password"] == "TempP@ssw0rd!"
+
+
+@pytest.mark.asyncio
 async def test_graph_request_with_retry_includes_graph_error_code_and_message(mocker, graph_secrets):
     queue = [
         _Resp(400, body={"error": {"code": "BadRequest", "message": "Unsupported query parameter"}}),

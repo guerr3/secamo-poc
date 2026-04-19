@@ -15,12 +15,19 @@ class ConnectorIdentityAccessProvider:
 
     @staticmethod
     def _to_identity_user(payload: dict[str, Any], fallback_email: str | None = None, provider: str = "unknown") -> IdentityUser:
+        email = str(
+            payload.get("email")
+            or payload.get("mail")
+            or payload.get("userPrincipalName")
+            or fallback_email
+            or ""
+        )
         return IdentityUser(
             identity_provider=provider,
             user_id=str(payload.get("user_id") or payload.get("id") or ""),
-            email=str(payload.get("email") or fallback_email or ""),
-            display_name=str(payload.get("display_name") or ""),
-            account_enabled=bool(payload.get("account_enabled", True)),
+            email=email,
+            display_name=str(payload.get("display_name") or payload.get("displayName") or ""),
+            account_enabled=bool(payload.get("account_enabled", payload.get("accountEnabled", True))),
         )
 
     async def get_user(self, email: str) -> IdentityUser | None:

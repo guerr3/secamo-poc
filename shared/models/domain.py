@@ -8,7 +8,7 @@ backwards compatibility.
 
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -176,6 +176,7 @@ class UserLifecycleCaseInput(BaseModel):
     user_id: str
     user_email: str
     requester: str
+    user_data: dict[str, Any] = Field(default_factory=dict)
 
 
 class HiTLCaseInput(BaseModel):
