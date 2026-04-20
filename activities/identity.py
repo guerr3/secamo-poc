@@ -71,6 +71,29 @@ async def identity_revoke_sessions(tenant_id: str, user_id: str) -> bool:
 
 
 @activity.defn
+async def identity_disable_user(tenant_id: str, user_identifier: str) -> bool:
+    provider = await _get_identity_provider(tenant_id)
+    lookup = str(user_identifier or "").strip()
+    if not lookup:
+        raise ApplicationError(
+            "identity_disable_user requires a non-empty user identifier",
+            type="IdentityDisableUserInputError",
+            non_retryable=True,
+        )
+
+    resolved_user_id = lookup
+    if "@" in lookup:
+        resolved_user = await provider.get_user(lookup)
+        if resolved_user is None or not resolved_user.user_id:
+            return False
+        if not resolved_user.account_enabled:
+            return True
+        resolved_user_id = resolved_user.user_id
+
+    return await provider.update_user(resolved_user_id, {"accountEnabled": False})
+
+
+@activity.defn
 async def identity_assign_license(tenant_id: str, user_id: str, sku_id: str) -> bool:
     provider = await _get_identity_provider(tenant_id)
     return await provider.assign_license(user_id, sku_id)

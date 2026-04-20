@@ -143,6 +143,7 @@ def load_activities_by_queue() -> dict[str, list]:
         from activities.identity import (
             identity_assign_license,
             identity_create_user,
+            identity_disable_user,
             identity_delete_user,
             identity_get_user,
             identity_reset_password,
@@ -153,6 +154,7 @@ def load_activities_by_queue() -> dict[str, list]:
             identity_get_user,
             identity_create_user,
             identity_update_user,
+            identity_disable_user,
             identity_delete_user,
             identity_revoke_sessions,
             identity_assign_license,
@@ -160,6 +162,7 @@ def load_activities_by_queue() -> dict[str, list]:
         ])
         edr_activities.extend([
             identity_get_user,
+            identity_disable_user,
             identity_delete_user,
             identity_revoke_sessions,
         ])

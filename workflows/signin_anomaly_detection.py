@@ -8,11 +8,12 @@ from temporalio.common import RetryPolicy, SearchAttributeKey
 
 with workflow.unsafe.imports_passed_through():
     from activities.edr import edr_get_identity_risk, edr_get_signin_history
-    from shared.config import QUEUE_INTERACTIONS
+    from shared.config import QUEUE_EDR, QUEUE_INTERACTIONS
     from shared.models import (
         ApprovalDecision,
         HiTLApprovalRequest,
         HiTLRequest,
+        IncidentResponseRequest,
         IdentityRiskContext,
         SecurityCaseInput,
         TenantConfig,
@@ -25,6 +26,7 @@ with workflow.unsafe.imports_passed_through():
         emit_workflow_observability,
         resolve_threat_intel,
     )
+    from workflows.child.incident_response import IncidentResponseWorkflow
     from workflows.child.hitl_approval import HiTLApprovalWorkflow
 
 
@@ -200,13 +202,44 @@ class SigninAnomalyDetectionWorkflow:
             task_queue=QUEUE_INTERACTIONS,
         )
 
+        remediation_result = "not_triggered"
+        if (
+            decision is not None
+            and decision.approved
+            and decision.action in case_input.allowed_actions
+        ):
+            if workflow.patched("signin-incident-response-v1"):
+                remediation_result = await workflow.execute_child_workflow(
+                    IncidentResponseWorkflow.run,
+                    IncidentResponseRequest(
+                        tenant_id=case_input.tenant_id,
+                        decision=decision,
+                        user=None,
+                        user_email=case_input.identity or "unknown@example.com",
+                        device_id=case_input.device,
+                        ticket_id=ticket.ticket_id,
+                        evidence_bundle_enabled=config.evidence_bundle_enabled,
+                        edr_provider=config.edr_provider,
+                        ticketing_provider=config.ticketing_provider,
+                        parent_workflow_id=workflow.info().workflow_id,
+                        alert_id=case_input.alert_id,
+                        threat_intel=threat_intel,
+                        recent_alert_count=len(signin_history),
+                    ),
+                    id=f"{workflow.info().workflow_id}-incident-response",
+                    task_queue=QUEUE_EDR,
+                )
+            else:
+                remediation_result = "legacy_no_incident_response"
+
         await emit_workflow_observability(
             case_input.tenant_id,
             workflow_id=workflow.info().workflow_id,
             action="signin_anomaly_detection",
             result=(
                 "Sign-in anomaly case escalated for analyst decision "
-                f"(ticket={ticket.ticket_id}, decision={decision.action if decision else 'timeout_or_none'})."
+                f"(ticket={ticket.ticket_id}, decision={decision.action if decision else 'timeout_or_none'}, "
+                f"remediation={remediation_result})."
             ),
             metadata={
                 "case_type": case_input.case_type,
@@ -216,6 +249,7 @@ class SigninAnomalyDetectionWorkflow:
                 "identity_risk_level": identity_risk_level,
                 "ticket_id": ticket.ticket_id,
                 "decision": decision.action if decision else "timeout_or_none",
+                "remediation_result": remediation_result,
                 "requester": _requester(case_input),
             },
             timeout=TIMEOUT,
@@ -224,5 +258,6 @@ class SigninAnomalyDetectionWorkflow:
 
         return (
             "Signin anomaly triage completed "
-            f"(ticket={ticket.ticket_id}, decision={decision.action if decision else 'timeout_or_none'})."
+            f"(ticket={ticket.ticket_id}, decision={decision.action if decision else 'timeout_or_none'}, "
+            f"remediation={remediation_result})."
         )

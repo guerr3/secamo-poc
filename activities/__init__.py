@@ -13,6 +13,7 @@ _SYMBOL_TO_MODULE = {
     "email_send": "activities.communications",
     "identity_assign_license": "activities.identity",
     "identity_create_user": "activities.identity",
+    "identity_disable_user": "activities.identity",
     "identity_delete_user": "activities.identity",
     "identity_get_user": "activities.identity",
     "identity_reset_password": "activities.identity",

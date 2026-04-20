@@ -23,3 +23,12 @@ def test_disable_user_paths_do_not_call_identity_delete_user() -> None:
 
     assert "identity_delete_user" not in incident_source
     assert "identity_delete_user" not in deprovision_source
+
+
+def test_signin_anomaly_workflow_executes_incident_response_for_approved_actions() -> None:
+    source = Path("workflows/signin_anomaly_detection.py").read_text(encoding="utf-8")
+
+    assert "IncidentResponseWorkflow.run" in source
+    assert "IncidentResponseRequest(" in source
+    assert "decision.approved" in source
+    assert "signin-incident-response-v1" in source

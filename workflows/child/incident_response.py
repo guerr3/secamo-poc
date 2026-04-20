@@ -6,7 +6,7 @@ from temporalio.common import RetryPolicy
 with workflow.unsafe.imports_passed_through():
     from activities.edr import edr_isolate_device
     from activities.evidence import collect_evidence_bundle
-    from activities.identity import identity_revoke_sessions, identity_update_user
+    from activities.identity import identity_disable_user, identity_revoke_sessions, identity_update_user
     from activities.ticketing import ticket_update
     from shared.models import EvidenceBundle, IncidentResponseRequest
 
@@ -90,32 +90,72 @@ class IncidentResponseWorkflow:
             action_result = f"Device '{resolved_device_id}' isolated."
 
         elif request.decision.action == "disable_user":
-            if request.user:
-                await workflow.execute_activity(
-                    identity_revoke_sessions,
-                    args=[request.tenant_id, request.user.user_id],
-                    start_to_close_timeout=TIMEOUT,
-                    retry_policy=RETRY_POLICY,
+            if workflow.patched("incident-response-disable-user-activity-v1"):
+                disable_target = (
+                    request.user.user_id
+                    if request.user and request.user.user_id
+                    else request.user_email
                 )
-                await workflow.execute_activity(
-                    identity_update_user,
-                    args=[request.tenant_id, request.user.user_id, {"accountEnabled": False}],
-                    start_to_close_timeout=TIMEOUT,
-                    retry_policy=RETRY_POLICY,
-                )
-                ticket_note = (
-                    f"User {request.user_email} disabled by "
-                    f"{request.decision.reviewer}."
-                )
-                action_result = f"User '{request.user_email}' disabled."
+
+                if request.user and request.user.user_id:
+                    await workflow.execute_activity(
+                        identity_revoke_sessions,
+                        args=[request.tenant_id, request.user.user_id],
+                        start_to_close_timeout=TIMEOUT,
+                        retry_policy=RETRY_POLICY,
+                    )
+
+                if disable_target:
+                    disabled = await workflow.execute_activity(
+                        identity_disable_user,
+                        args=[request.tenant_id, disable_target],
+                        start_to_close_timeout=TIMEOUT,
+                        retry_policy=RETRY_POLICY,
+                    )
+                    if disabled:
+                        ticket_note = (
+                            f"User {request.user_email} disabled by "
+                            f"{request.decision.reviewer}."
+                        )
+                        action_result = f"User '{request.user_email}' disabled."
+                    else:
+                        ticket_note = (
+                            f"User {request.user_email} could not be resolved for disable action. "
+                            "No account state changed."
+                        )
+                        action_result = (
+                            f"User '{request.user_email}' was not disabled because identity resolution failed."
+                        )
+                else:
+                    ticket_note = "Disable action skipped because no user identifier was provided."
+                    action_result = "Disable action skipped because no user identifier was provided."
             else:
-                ticket_note = (
-                    f"User object for {request.user_email} was not resolved. "
-                    "Skipped session revoke and account disable operations."
-                )
-                action_result = (
-                    f"User '{request.user_email}' was not disabled because no identity user object was resolved."
-                )
+                if request.user:
+                    await workflow.execute_activity(
+                        identity_revoke_sessions,
+                        args=[request.tenant_id, request.user.user_id],
+                        start_to_close_timeout=TIMEOUT,
+                        retry_policy=RETRY_POLICY,
+                    )
+                    await workflow.execute_activity(
+                        identity_update_user,
+                        args=[request.tenant_id, request.user.user_id, {"accountEnabled": False}],
+                        start_to_close_timeout=TIMEOUT,
+                        retry_policy=RETRY_POLICY,
+                    )
+                    ticket_note = (
+                        f"User {request.user_email} disabled by "
+                        f"{request.decision.reviewer}."
+                    )
+                    action_result = f"User '{request.user_email}' disabled."
+                else:
+                    ticket_note = (
+                        f"User object for {request.user_email} was not resolved. "
+                        "Skipped session revoke and account disable operations."
+                    )
+                    action_result = (
+                        f"User '{request.user_email}' was not disabled because no identity user object was resolved."
+                    )
 
             await workflow.execute_activity(
                 ticket_update,
