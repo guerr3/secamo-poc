@@ -9,7 +9,7 @@ from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
 from activities.tenant import get_tenant_config
-from shared.models import IdentityUser
+from shared.models import IdentityRiskContext, IdentityUser
 from shared.providers.factory import get_identity_access_provider
 from shared.providers.types import secret_type_for_provider
 from shared.ssm_client import get_secret_bundle
@@ -103,6 +103,30 @@ async def identity_assign_license(tenant_id: str, user_id: str, sku_id: str) -> 
 async def identity_reset_password(tenant_id: str, user_id: str, temp_password: str) -> bool:
     provider = await _get_identity_provider(tenant_id)
     return await provider.reset_password(user_id, temp_password)
+
+
+@activity.defn
+async def identity_list_risky_users(tenant_id: str, min_risk_level: str) -> list[IdentityRiskContext]:
+    provider = await _get_identity_provider(tenant_id)
+    return await provider.list_risky_users(min_risk_level)
+
+
+@activity.defn
+async def identity_get_identity_risk(tenant_id: str, lookup_key: str) -> IdentityRiskContext | None:
+    provider = await _get_identity_provider(tenant_id)
+    return await provider.get_identity_risk(lookup_key)
+
+
+@activity.defn
+async def identity_confirm_user_compromised(tenant_id: str, user_id: str) -> bool:
+    provider = await _get_identity_provider(tenant_id)
+    return await provider.confirm_user_compromised(user_id)
+
+
+@activity.defn
+async def identity_dismiss_risky_user(tenant_id: str, user_id: str) -> bool:
+    provider = await _get_identity_provider(tenant_id)
+    return await provider.dismiss_risky_user(user_id)
 
 
 def _generate_temp_password(length: int = 16) -> str:

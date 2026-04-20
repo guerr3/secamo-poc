@@ -142,10 +142,14 @@ def load_activities_by_queue() -> dict[str, list]:
     try:
         from activities.identity import (
             identity_assign_license,
+            identity_confirm_user_compromised,
             identity_create_user,
             identity_disable_user,
+            identity_dismiss_risky_user,
             identity_delete_user,
+            identity_get_identity_risk,
             identity_get_user,
+            identity_list_risky_users,
             identity_reset_password,
             identity_revoke_sessions,
             identity_update_user,
@@ -162,6 +166,10 @@ def load_activities_by_queue() -> dict[str, list]:
         ])
         edr_activities.extend([
             identity_get_user,
+            identity_get_identity_risk,
+            identity_list_risky_users,
+            identity_confirm_user_compromised,
+            identity_dismiss_risky_user,
             identity_disable_user,
             identity_delete_user,
             identity_revoke_sessions,
@@ -173,17 +181,13 @@ def load_activities_by_queue() -> dict[str, list]:
 
     try:
         from activities.edr import (
-            edr_confirm_user_compromised,
-            edr_dismiss_risky_user,
             edr_enrich_alert,
             edr_fetch_events,
             edr_get_device_context,
-            edr_get_identity_risk,
             edr_get_signin_history,
             edr_get_user_alerts,
             edr_isolate_device,
             edr_list_noncompliant_devices,
-            edr_list_risky_users,
             edr_run_antivirus_scan,
             edr_unisolate_device,
         )
@@ -198,11 +202,7 @@ def load_activities_by_queue() -> dict[str, list]:
             edr_get_device_context,
             edr_run_antivirus_scan,
             edr_list_noncompliant_devices,
-            edr_get_identity_risk,
-            edr_confirm_user_compromised,
-            edr_dismiss_risky_user,
             edr_get_signin_history,
-            edr_list_risky_users,
             threat_intel_lookup, threat_intel_fanout, calculate_risk_score,
         ])
         polling_activities.extend([edr_fetch_events, polling_mark_event_processed])

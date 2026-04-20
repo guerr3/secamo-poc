@@ -5,6 +5,7 @@ import hashlib
 from typing import Any
 
 from connectors.base import BaseConnector
+from connectors.errors import ConnectorUnsupportedActionError
 from shared.models import DefenderDetectionFindingEvent, Envelope, VendorExtension
 from shared.models.mappers import build_connector_correlation, build_envelope
 
@@ -67,6 +68,16 @@ class _StubConnector(BaseConnector):
         return f"{prefix}-{seed % 10000 + 1}"
 
     async def execute_action(self, action: str, payload: dict) -> dict:
+        if action in {
+            "get_identity_risk",
+            "list_risky_users",
+            "confirm_user_compromised",
+            "dismiss_risky_user",
+        }:
+            raise ConnectorUnsupportedActionError(
+                f"Unsupported action '{action}' for provider '{self.provider}'"
+            )
+
         # Ticketing style actions
         if action in {"create_ticket", "create_issue"}:
             ticket_id = self._mock_ticket_id(payload)
@@ -161,19 +172,6 @@ class _StubConnector(BaseConnector):
                 "os_platform": "windows",
                 "compliance_state": "compliant",
                 "risk_score": "Low",
-            }
-
-        if action == "get_identity_risk":
-            lookup_key = str(payload.get("lookup_key") or "unknown@example.com")
-            high_risk = any(token in lookup_key.lower() for token in ["admin", "priv", "risk"])
-            return {
-                "success": True,
-                "provider": self.provider,
-                "found": True,
-                "subject": lookup_key,
-                "risk_level": "high" if high_risk else "low",
-                "risk_state": "atRisk" if high_risk else "none",
-                "risk_detail": "stub identity risk result",
             }
 
         return {

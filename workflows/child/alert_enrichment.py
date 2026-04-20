@@ -4,11 +4,13 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy
 
 with workflow.unsafe.imports_passed_through():
-    from activities.edr import edr_enrich_alert, edr_get_device_context, edr_get_identity_risk
+    from activities.edr import edr_enrich_alert, edr_get_device_context
+    from activities.identity import identity_get_identity_risk
     from activities.risk import calculate_risk_score
     from shared.models import (
-        AlertEnrichmentRequest,
         AlertEnrichmentResult,
+        AlertEnrichmentRequest,
+        AlertEnrichmentWorkflowResult,
         EnrichedAlert,
         ThreatIntelResult,
     )
@@ -22,14 +24,14 @@ class AlertEnrichmentWorkflow:
     """Reusable child workflow for EDR alert enrichment and risk scoring."""
 
     @workflow.run
-    async def run(self, request: AlertEnrichmentRequest) -> AlertEnrichmentResult:
+    async def run(self, request: AlertEnrichmentRequest) -> AlertEnrichmentWorkflowResult:
         workflow.logger.info(
             "AlertEnrichmentWorkflow gestart — tenant=%s alert=%s",
             request.tenant_id,
             request.alert.alert_id,
         )
 
-        enriched_payload = await workflow.execute_activity(
+        enriched_payload: AlertEnrichmentResult = await workflow.execute_activity(
             edr_enrich_alert,
             args=[request.tenant_id, request.alert.alert_id, None],
             start_to_close_timeout=TIMEOUT,
@@ -45,20 +47,21 @@ class AlertEnrichmentWorkflow:
         destination_ip = str(destination_ip_ext.value) if destination_ip_ext and destination_ip_ext.value else None
 
         enriched = EnrichedAlert(
-            alert_id=enriched_payload.get("id", request.alert.alert_id),
-            severity=(enriched_payload.get("severity") or request.alert.severity).lower(),
-            title=enriched_payload.get("title", request.alert.title),
-            description=str(enriched_payload.get("description") or request.alert.description or ""),
+            alert_id=enriched_payload.alert_id or request.alert.alert_id,
+            severity=(enriched_payload.severity or request.alert.severity).lower(),
+            title=enriched_payload.title or request.alert.title,
+            description=str(enriched_payload.description or request.alert.description or ""),
             user_display_name=(
-                (enriched_payload.get("userStates") or [{}])[0].get("userPrincipalName")
-                if enriched_payload.get("userStates")
-                else user_email
+                enriched_payload.user_display_name
+                or user_email
             ),
             device_display_name=(
-                (enriched_payload.get("deviceEvidence") or [{}])[0].get("deviceDnsName")
-                if enriched_payload.get("deviceEvidence")
-                else device_id
+                enriched_payload.device_display_name
+                or device_id
             ),
+            user_department=enriched_payload.user_department,
+            device_os=enriched_payload.device_os,
+            device_compliance=enriched_payload.device_compliance,
         )
 
         if device_id:
@@ -83,20 +86,18 @@ class AlertEnrichmentWorkflow:
                     enriched = enriched.model_copy(update={"description": description})
 
         risky_lookup_key = (
-            (enriched_payload.get("userStates") or [{}])[0].get("userId")
-            if enriched_payload.get("userStates")
-            else None
+            user_email
         ) or user_email
 
         if risky_lookup_key:
             identity_risk = await workflow.execute_activity(
-                edr_get_identity_risk,
+                identity_get_identity_risk,
                 args=[request.tenant_id, str(risky_lookup_key)],
                 start_to_close_timeout=TIMEOUT,
                 retry_policy=RETRY_POLICY,
             )
 
-            if identity_risk.risk_level:
+            if identity_risk and identity_risk.risk_level:
                 enriched = enriched.model_copy(
                     update={
                         "description": f"{enriched.description}\nIdentity risk level: {identity_risk.risk_level}"
@@ -118,4 +119,4 @@ class AlertEnrichmentWorkflow:
             retry_policy=RETRY_POLICY,
         )
 
-        return AlertEnrichmentResult(enriched_alert=enriched, risk_score=risk)
+        return AlertEnrichmentWorkflowResult(enriched_alert=enriched, risk_score=risk)

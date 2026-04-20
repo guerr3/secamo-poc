@@ -6,8 +6,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy, SearchAttributeKey
 
 with workflow.unsafe.imports_passed_through():
-    from activities.edr import edr_get_identity_risk
-    from activities.identity import identity_get_user
+    from activities.identity import identity_get_identity_risk, identity_get_user
     from shared.config import QUEUE_INTERACTIONS
     from shared.models import (
         ApprovalDecision,
@@ -79,7 +78,7 @@ class AuditLogAnomalyWorkflow:
 
         risk_lookup = identity_user.user_id if identity_user else identity_lookup
         identity_risk: IdentityRiskContext | None = await workflow.execute_activity(
-            edr_get_identity_risk,
+            identity_get_identity_risk,
             args=[case_input.tenant_id, risk_lookup],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,

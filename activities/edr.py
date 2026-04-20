@@ -17,12 +17,13 @@ from activities._tenant_secrets import load_tenant_secrets
 from activities.tenant import get_tenant_config
 from connectors.errors import ConnectorPermanentError, ConnectorTransientError
 from shared.models import (
-    ConnectorActionData,
+    AlertEnrichmentResult,
+    AlertSummary,
     ConnectorActionResult,
     ConnectorFetchData,
     ConnectorFetchResult,
     DeviceContext,
-    IdentityRiskContext,
+    SignInEvent,
 )
 from shared.providers.factory import get_edr_provider
 from shared.providers.types import secret_type_for_provider
@@ -67,7 +68,11 @@ async def edr_fetch_events(tenant_id: str, query: dict[str, Any]) -> ConnectorFe
 
 
 @activity.defn
-async def edr_enrich_alert(tenant_id: str, alert_id: str, context: dict | None = None) -> dict:
+async def edr_enrich_alert(
+    tenant_id: str,
+    alert_id: str,
+    context: dict[str, Any] | None = None,
+) -> AlertEnrichmentResult:
     """Enrich an alert via the EDR provider."""
     activity.logger.info("[%s] edr_enrich_alert alert=%s", tenant_id, alert_id)
     try:
@@ -93,7 +98,7 @@ async def edr_get_device_context(tenant_id: str, device_id: str) -> DeviceContex
 
 
 @activity.defn
-async def edr_isolate_device(tenant_id: str, device_id: str) -> bool:
+async def edr_isolate_device(tenant_id: str, device_id: str) -> ConnectorActionResult:
     """Isolate a device via the EDR provider."""
     activity.logger.info("[%s] edr_isolate_device device=%s", tenant_id, device_id)
     try:
@@ -106,7 +111,7 @@ async def edr_isolate_device(tenant_id: str, device_id: str) -> bool:
 
 
 @activity.defn
-async def edr_unisolate_device(tenant_id: str, device_id: str) -> bool:
+async def edr_unisolate_device(tenant_id: str, device_id: str) -> ConnectorActionResult:
     """Release a device from isolation via the EDR provider."""
     activity.logger.info("[%s] edr_unisolate_device device=%s", tenant_id, device_id)
     try:
@@ -128,16 +133,7 @@ async def edr_run_antivirus_scan(
     activity.logger.info("[%s] edr_run_antivirus_scan device=%s", tenant_id, device_id)
     try:
         provider = await _get_provider(tenant_id)
-        result = await provider.run_antivirus_scan(device_id, scan_type)
-        submitted = bool(result.get("submitted", False))
-        found = result.get("found") is not False
-        return ConnectorActionResult(
-            provider="edr",
-            operation_type="action",
-            success=submitted and found,
-            details="scan action submitted" if submitted else "device not found",
-            data=ConnectorActionData(action="run_antivirus_scan", payload=result),
-        )
+        return await provider.run_antivirus_scan(device_id, scan_type)
     except ApplicationError:
         raise
     except Exception as exc:
@@ -145,7 +141,7 @@ async def edr_run_antivirus_scan(
 
 
 @activity.defn
-async def edr_list_noncompliant_devices(tenant_id: str) -> list[dict]:
+async def edr_list_noncompliant_devices(tenant_id: str) -> list[DeviceContext]:
     """List noncompliant devices via the EDR provider."""
     activity.logger.info("[%s] edr_list_noncompliant_devices", tenant_id)
     try:
@@ -158,7 +154,7 @@ async def edr_list_noncompliant_devices(tenant_id: str) -> list[dict]:
 
 
 @activity.defn
-async def edr_get_user_alerts(tenant_id: str, user_email: str) -> list[dict]:
+async def edr_get_user_alerts(tenant_id: str, user_email: str) -> list[AlertSummary]:
     """Get recent alerts for a user via the EDR provider."""
     activity.logger.info("[%s] edr_get_user_alerts user=%s", tenant_id, user_email)
     try:
@@ -171,37 +167,11 @@ async def edr_get_user_alerts(tenant_id: str, user_email: str) -> list[dict]:
 
 
 @activity.defn
-async def edr_confirm_user_compromised(tenant_id: str, user_id: str) -> bool:
-    """Confirm a user as compromised via the EDR provider."""
-    activity.logger.info("[%s] edr_confirm_user_compromised user=%s", tenant_id, user_id)
-    try:
-        provider = await _get_provider(tenant_id)
-        return await provider.confirm_user_compromised(user_id)
-    except ApplicationError:
-        raise
-    except Exception as exc:
-        _raise_edr_error("confirm_user_compromised", exc)
-
-
-@activity.defn
-async def edr_dismiss_risky_user(tenant_id: str, user_id: str) -> bool:
-    """Dismiss a risky user via the EDR provider."""
-    activity.logger.info("[%s] edr_dismiss_risky_user user=%s", tenant_id, user_id)
-    try:
-        provider = await _get_provider(tenant_id)
-        return await provider.dismiss_risky_user(user_id)
-    except ApplicationError:
-        raise
-    except Exception as exc:
-        _raise_edr_error("dismiss_risky_user", exc)
-
-
-@activity.defn
 async def edr_get_signin_history(
     tenant_id: str,
     user_principal_name: str,
     top: int = 20,
-) -> list[dict]:
+) -> list[SignInEvent]:
     """Get sign-in history for a user via the EDR provider."""
     activity.logger.info("[%s] edr_get_signin_history user=%s", tenant_id, user_principal_name)
     try:
@@ -213,27 +183,3 @@ async def edr_get_signin_history(
         _raise_edr_error("get_signin_history", exc)
 
 
-@activity.defn
-async def edr_list_risky_users(tenant_id: str, min_risk_level: str) -> list[dict]:
-    """List risky users via the EDR provider."""
-    activity.logger.info("[%s] edr_list_risky_users min_level=%s", tenant_id, min_risk_level)
-    try:
-        provider = await _get_provider(tenant_id)
-        return await provider.list_risky_users(min_risk_level)
-    except ApplicationError:
-        raise
-    except Exception as exc:
-        _raise_edr_error("list_risky_users", exc)
-
-
-@activity.defn
-async def edr_get_identity_risk(tenant_id: str, lookup_key: str) -> IdentityRiskContext | None:
-    """Get identity risk context via the EDR provider."""
-    activity.logger.info("[%s] edr_get_identity_risk key=%s", tenant_id, lookup_key)
-    try:
-        provider = await _get_provider(tenant_id)
-        return await provider.get_identity_risk(lookup_key)
-    except ApplicationError:
-        raise
-    except Exception as exc:
-        _raise_edr_error("get_identity_risk", exc)

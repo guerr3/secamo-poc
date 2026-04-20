@@ -9,7 +9,7 @@ with workflow.unsafe.imports_passed_through():
     from shared.config import QUEUE_EDR, QUEUE_INTERACTIONS, QUEUE_TICKETING
     from shared.models import (
         AlertEnrichmentRequest,
-        AlertEnrichmentResult,
+        AlertEnrichmentWorkflowResult,
         ApprovalDecision,
         HiTLApprovalRequest,
         HiTLRequest,
@@ -237,7 +237,7 @@ class SocAlertTriageWorkflow:
         )
 
         alert_payload = _build_alert_payload(case_input)
-        enrichment_result: AlertEnrichmentResult = await workflow.execute_child_workflow(
+        enrichment_result: AlertEnrichmentWorkflowResult = await workflow.execute_child_workflow(
             AlertEnrichmentWorkflow.run,
             AlertEnrichmentRequest(
                 tenant_id=case_input.tenant_id,

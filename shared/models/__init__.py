@@ -11,6 +11,8 @@ from shared.models.domain import (
     AITriageConfig,
     AlertEnrichmentRequest,
     AlertEnrichmentResult,
+    AlertEnrichmentWorkflowResult,
+    AlertSummary,
     ApprovalDecision,
     ChatOpsConfig,
     ConnectorActionData,
@@ -45,6 +47,7 @@ from shared.models.domain import (
     PollingProviderConfig,
     RiskScore,
     SecurityCaseInput,
+    SignInEvent,
     TenantConfig,
     TicketData,
     TicketCreationRequest,
@@ -59,14 +62,6 @@ from shared.models.subscriptions import SubscriptionConfig, SubscriptionManagerI
 # ── AI triage and ChatOps contracts ─────────────────────────
 from shared.models.chatops import ChatOpsAction, ChatOpsMessage
 from shared.models.triage import TriageRequest, TriageResult
-from shared.providers.protocols import (
-    AITriageProvider,
-    ChatOpsProvider,
-    IdentityAccessProvider,
-    SubscriptionProvider,
-    ThreatIntelProvider,
-    TicketingProvider,
-)
 
 # ── Ingress transport models ─────────────────────────────────
 from shared.models.ingress import IamIngressRequest
@@ -104,12 +99,12 @@ __all__ = [
     "AITriageConfig",
     "AlertEnrichmentRequest",
     "AlertEnrichmentResult",
+    "AlertEnrichmentWorkflowResult",
+    "AlertSummary",
     "ApprovalDecision",
     "ChatOpsConfig",
     "ChatOpsAction",
     "ChatOpsMessage",
-    "ChatOpsProvider",
-    "IdentityAccessProvider",
     "ConnectorActionData",
     "ConnectorActionResult",
     "ConnectorFetchData",
@@ -147,19 +142,16 @@ __all__ = [
     "PollingProviderConfig",
     "RiskScore",
     "SecurityCaseInput",
+    "SignInEvent",
     "TenantConfig",
     "TicketData",
     "TicketCreationRequest",
     "TicketResult",
-    "ThreatIntelProvider",
-    "TicketingProvider",
-    "SubscriptionProvider",
     "ThreatIntelEnrichmentRequest",
     "ThreatIntelResult",
     "UserLifecycleCaseInput",
     "TriageRequest",
     "TriageResult",
-    "AITriageProvider",
     "UserDeprovisioningRequest",
     # ingress
     "IamIngressRequest",

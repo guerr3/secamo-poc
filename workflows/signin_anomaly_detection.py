@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy, SearchAttributeKey
 
 with workflow.unsafe.imports_passed_through():
-    from activities.edr import edr_get_identity_risk, edr_get_signin_history
+    from activities.edr import edr_get_signin_history
+    from activities.identity import identity_get_identity_risk
     from shared.config import QUEUE_EDR, QUEUE_INTERACTIONS
     from shared.models import (
         ApprovalDecision,
@@ -16,6 +16,7 @@ with workflow.unsafe.imports_passed_through():
         IncidentResponseRequest,
         IdentityRiskContext,
         SecurityCaseInput,
+        SignInEvent,
         TenantConfig,
         ThreatIntelResult,
         TicketResult,
@@ -49,32 +50,32 @@ def _requester(case_input: SecurityCaseInput) -> str:
     return str(case_input.source_event.metadata.get("requester") or "ingress-api")
 
 
-def _signin_has_anomaly_indicators(signin_history: list[dict[str, Any]]) -> bool:
+def _signin_has_anomaly_indicators(signin_history: list[SignInEvent]) -> bool:
     for record in signin_history:
         risk_level = str(
-            record.get("riskLevelDuringSignIn")
-            or record.get("riskLevelAggregated")
-            or record.get("riskLevel")
+            record.riskLevelDuringSignIn
+            or record.riskLevelAggregated
+            or record.riskLevel
             or ""
         ).strip().lower()
         if risk_level in {"medium", "high", "critical"}:
             return True
 
-        risk_state = str(record.get("riskState") or "").strip().lower()
+        risk_state = str(record.riskState or "").strip().lower()
         if risk_state in {"atrisk", "confirmedcompromised"}:
             return True
 
-        status = record.get("status")
+        status = record.status
         if isinstance(status, dict):
             error_code = status.get("errorCode")
             if isinstance(error_code, int) and error_code != 0:
                 return True
 
-        result = str(record.get("result") or record.get("resultType") or "").strip().lower()
+        result = str(record.result or record.resultType or "").strip().lower()
         if result in {"failure", "failed", "blocked"}:
             return True
 
-        if bool(record.get("flaggedForReview", False)):
+        if bool(record.flaggedForReview):
             return True
 
     return False
@@ -109,12 +110,12 @@ class SigninAnomalyDetectionWorkflow:
 
         lookup_key = case_input.identity or case_input.alert_id
         identity_risk: IdentityRiskContext | None = await workflow.execute_activity(
-            edr_get_identity_risk,
+            identity_get_identity_risk,
             args=[case_input.tenant_id, lookup_key],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
-        signin_history: list[dict[str, Any]] = await workflow.execute_activity(
+        signin_history: list[SignInEvent] = await workflow.execute_activity(
             edr_get_signin_history,
             args=[case_input.tenant_id, lookup_key, 20],
             start_to_close_timeout=TIMEOUT,

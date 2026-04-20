@@ -8,21 +8,20 @@ backwards compatibility.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from shared.models.canonical import CustomerOnboardingEvent, DefenderDetectionFindingEvent, Envelope
 from shared.models.subscriptions import SubscriptionConfig
-from shared.providers.types import (
-    AIProviderType,
-    ChatOpsProviderType,
-    EDRProviderType,
-    IAMProviderType,
-    NotificationProviderType,
-    ThreatIntelProviderType,
-    TicketingProviderType,
-)
+
+AIProviderType: TypeAlias = Literal["azure_openai", "aws_bedrock", "local"]
+ChatOpsProviderType: TypeAlias = Literal["ms_teams", "slack"]
+IAMProviderType: TypeAlias = Literal["microsoft_graph", "okta", "entra_id", "custom"]
+EDRProviderType: TypeAlias = Literal["microsoft_defender", "crowdstrike", "sentinelone"]
+TicketingProviderType: TypeAlias = Literal["jira", "halo_itsm", "servicenow"]
+ThreatIntelProviderType: TypeAlias = Literal["virustotal", "abuseipdb", "misp"]
+NotificationProviderType: TypeAlias = Literal["teams", "slack", "email"]
 
 
 class AITriageConfig(BaseModel):
@@ -206,6 +205,58 @@ class EnrichedAlert(BaseModel):
     device_display_name: Optional[str] = None
     device_os: Optional[str] = None
     device_compliance: Optional[str] = None
+
+
+class AlertEnrichmentResult(BaseModel):
+    """Typed EDR enrichment payload returned by edr_enrich_alert."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    success: bool = True
+    provider: str
+    details: str = ""
+    alert_id: str
+    severity: str
+    title: str
+    description: str
+    user_display_name: str | None = None
+    user_department: str | None = None
+    device_display_name: str | None = None
+    device_os: str | None = None
+    device_compliance: str | None = None
+    source_ip: str | None = None
+    destination_ip: str | None = None
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class AlertSummary(BaseModel):
+    """Typed projection of security alert summary fields from Graph/Defender."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="allow")
+
+    id: str | None = None
+    title: str | None = None
+    description: str | None = None
+    severity: str | None = None
+    createdDateTime: str | None = None
+
+
+class SignInEvent(BaseModel):
+    """Typed projection of sign-in event fields consumed by workflows."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="allow")
+
+    id: str | None = None
+    userPrincipalName: str | None = None
+    createdDateTime: str | None = None
+    riskLevelDuringSignIn: str | None = None
+    riskLevelAggregated: str | None = None
+    riskLevel: str | None = None
+    riskState: str | None = None
+    result: str | None = None
+    resultType: str | None = None
+    flaggedForReview: bool | None = None
+    status: dict[str, Any] | None = None
 
 
 class ThreatIntelResult(BaseModel):
@@ -409,7 +460,7 @@ class AlertEnrichmentRequest(BaseModel):
     threat_intel: ThreatIntelResult | None = None
 
 
-class AlertEnrichmentResult(BaseModel):
+class AlertEnrichmentWorkflowResult(BaseModel):
     model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     enriched_alert: EnrichedAlert

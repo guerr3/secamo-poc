@@ -8,12 +8,16 @@ from temporalio.common import RetryPolicy, SearchAttributeKey
 
 with workflow.unsafe.imports_passed_through():
     from activities.edr import (
-        edr_confirm_user_compromised,
-        edr_dismiss_risky_user,
-        edr_get_identity_risk,
         edr_get_signin_history,
     )
-    from activities.identity import identity_generate_temp_password, identity_reset_password, identity_revoke_sessions
+    from activities.identity import (
+        identity_confirm_user_compromised,
+        identity_dismiss_risky_user,
+        identity_generate_temp_password,
+        identity_get_identity_risk,
+        identity_reset_password,
+        identity_revoke_sessions,
+    )
     from activities.ticketing import ticket_update
     from shared.config import QUEUE_INTERACTIONS
     from shared.models import (
@@ -88,7 +92,7 @@ class RiskyUserTriageWorkflow:
 
         user_lookup = _source_entity_id(case_input) or case_input.identity or case_input.alert_id
         identity_risk: IdentityRiskContext | None = await workflow.execute_activity(
-            edr_get_identity_risk,
+            identity_get_identity_risk,
             args=[case_input.tenant_id, user_lookup],
             start_to_close_timeout=TIMEOUT,
             retry_policy=runtime_retry,
@@ -157,7 +161,7 @@ class RiskyUserTriageWorkflow:
         if decision is not None:
             if decision.action == "confirm_compromised":
                 await workflow.execute_activity(
-                    edr_confirm_user_compromised,
+                    identity_confirm_user_compromised,
                     args=[case_input.tenant_id, user_lookup],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=runtime_retry,
@@ -185,7 +189,7 @@ class RiskyUserTriageWorkflow:
                 action_taken = "reset_password"
             elif decision.action == "dismiss":
                 await workflow.execute_activity(
-                    edr_dismiss_risky_user,
+                    identity_dismiss_risky_user,
                     args=[case_input.tenant_id, user_lookup],
                     start_to_close_timeout=TIMEOUT,
                     retry_policy=runtime_retry,
