@@ -6,6 +6,8 @@ from typing import Any
 from temporalio import workflow
 from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 
+from activities.audit import create_audit_log
+from activities.communications import teams_send_notification
 from activities.tenant import get_tenant_config, validate_tenant_context
 from shared.config import QUEUE_EDR, QUEUE_TICKETING
 from shared.models import TenantConfig, ThreatIntelResult, TicketResult
@@ -132,9 +134,6 @@ async def emit_workflow_observability(
     notification_message: str | None = None,
 ) -> None:
     """Write best-effort Teams + audit observability without failing orchestration."""
-    from activities.audit import create_audit_log
-    from activities.communications import teams_send_notification
-
     if notification_message:
         try:
             await workflow.execute_activity(
