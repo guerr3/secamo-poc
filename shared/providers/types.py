@@ -19,10 +19,13 @@ NotificationProviderType: TypeAlias = Literal["teams", "slack", "email"]
 
 _SECRET_TYPE_BY_PROVIDER: dict[str, ProviderSecretType] = {
     "microsoft_defender": "graph",
+    "microsoft_defender_edr": "graph",
     "crowdstrike": "graph",
     "sentinelone": "graph",
     "defender": "graph",
     "microsoft_graph": "graph",
+    "microsoft_graph_identity": "graph",
+    "microsoft_graph_subscription": "graph",
     "entra_id": "graph",
     "jira": "ticketing",
     "halo_itsm": "ticketing",

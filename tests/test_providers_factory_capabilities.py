@@ -32,7 +32,7 @@ async def test_get_identity_access_provider_uses_connector_cache(mocker):
     assert p1 is p2
     connector_lookup.assert_called_once()
     args = connector_lookup.call_args.args
-    assert args[0] == "microsoft_graph"
+    assert args[0] == "microsoft_graph_identity"
     assert args[1] == "tenant-1"
 
 
@@ -53,7 +53,7 @@ async def test_get_identity_access_provider_maps_entra_id_to_graph_connector(moc
 
     connector_lookup.assert_called_once()
     args = connector_lookup.call_args.args
-    assert args[0] == "microsoft_graph"
+    assert args[0] == "microsoft_graph_identity"
 
 
 @pytest.mark.asyncio
@@ -107,7 +107,7 @@ async def test_get_edr_provider_uses_connector_cache(mocker):
     assert p1 is p2
     connector_lookup.assert_called_once()
     args = connector_lookup.call_args.args
-    assert args[0] == "microsoft_defender"
+    assert args[0] == "microsoft_defender_edr"
     assert args[1] == "tenant-5"
 
 
@@ -145,5 +145,5 @@ async def test_get_subscription_provider_maps_graph_and_uses_cache(mocker):
     assert p1 is p2
     connector_lookup.assert_called_once()
     args = connector_lookup.call_args.args
-    assert args[0] == "microsoft_defender"
+    assert args[0] == "microsoft_graph_subscription"
     assert args[1] == "tenant-7"

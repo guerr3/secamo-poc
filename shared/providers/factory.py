@@ -199,7 +199,7 @@ async def get_identity_access_provider(
         return cached
 
     if provider_type in {"microsoft_graph", "entra_id"}:
-        connector_provider = "microsoft_graph"
+        connector_provider = "microsoft_graph_identity"
     elif provider_type in {"okta", "custom"}:
         raise NotImplementedError(f"Identity provider '{provider_type}' is not implemented yet")
     else:
@@ -228,13 +228,18 @@ async def get_edr_provider(
 ) -> EDRProvider:
     """Resolve and cache the EDR provider for a tenant."""
     provider_type = provider.strip().lower() or "microsoft_defender"
-    cache_key = f"edr:{tenant_id}:{provider_type}"
+    connector_provider = (
+        "microsoft_defender_edr"
+        if provider_type == "microsoft_defender"
+        else provider_type
+    )
+    cache_key = f"edr:{tenant_id}:{connector_provider}"
     cached = _EDR_PROVIDER_CACHE.get(cache_key)
     if cached is not None:
         return cached
 
     tenant_secrets = _to_tenant_secrets(secrets)
-    connector = get_connector(provider_type, tenant_id, tenant_secrets)
+    connector = get_connector(connector_provider, tenant_id, tenant_secrets)
     provider_instance: EDRProvider = ConnectorEDRProvider(connector=connector)
 
     async with _CACHE_LOCK:
@@ -282,8 +287,8 @@ async def get_subscription_provider(
     """Resolve and cache the subscription provider for a tenant."""
     provider_type = provider.strip().lower() or "microsoft_defender"
     connector_provider = (
-        "microsoft_defender"
-        if provider_type in {"microsoft_graph", "entra_id"}
+        "microsoft_graph_subscription"
+        if provider_type in {"microsoft_graph", "entra_id", "microsoft_defender"}
         else provider_type
     )
     cache_key = f"subscription:{tenant_id}:{connector_provider}"

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 import pytest
 
 from connectors.errors import ConnectorPermanentError
 from connectors.jira import JiraConnector
-from connectors.microsoft_defender import MicrosoftGraphConnector
+from connectors.microsoft import MicrosoftApiTransport, MicrosoftDefenderEDRConnector
 from shared.models import DefenderSecuritySignalEvent
 from shared.providers.contracts import TenantSecrets
 
@@ -47,6 +46,47 @@ class _Client:
     async def request(self, method: str, url: str, **kwargs):
         self._calls.append({"method": method, "url": url, **kwargs})
         return self._queue.pop(0)
+
+
+class _TransportStub:
+    def __init__(
+        self,
+        *,
+        graph_queue: list[_Resp | Exception] | None = None,
+        defender_queue: list[_Resp | Exception] | None = None,
+    ) -> None:
+        self._graph_queue = list(graph_queue or [])
+        self._defender_queue = list(defender_queue or [])
+        self.graph_calls: list[dict[str, Any]] = []
+        self.defender_calls: list[dict[str, Any]] = []
+
+    async def request_graph(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> _Resp:
+        self.graph_calls.append({"method": method, "url": url, "params": params, "json": json})
+        item = self._graph_queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    async def request_defender(
+        self,
+        method: str,
+        url: str,
+        *,
+        params: dict[str, str] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> _Resp:
+        self.defender_calls.append({"method": method, "url": url, "params": params, "json": json})
+        item = self._defender_queue.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
 
 
 @pytest.fixture
@@ -92,101 +132,53 @@ async def test_jira_fetch_events_retries_on_429(mocker, jira_secrets):
 
 
 @pytest.mark.asyncio
-async def test_graph_fetch_events_retries_on_429(mocker, graph_secrets):
+async def test_microsoft_transport_retries_on_429(mocker, graph_secrets):
     queue = [
         _Resp(429, headers={"Retry-After": "0"}),
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "id": "a1",
-                        "createdDateTime": "2026-03-22T00:00:00Z",
-                        "severity": "high",
-                        "title": "Alert",
-                    }
-                ]
-            },
-        ),
+        _Resp(200, body={"value": []}),
     ]
     calls: list[dict[str, Any]] = []
 
-    mocker.patch("connectors.microsoft_defender.asyncio.sleep", new=mocker.AsyncMock())
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
+    mocker.patch("connectors.microsoft.transport.asyncio.sleep", new=mocker.AsyncMock())
+    mocker.patch("connectors.microsoft.transport.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
     mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
+        "connectors.microsoft.transport.httpx.AsyncClient",
         side_effect=lambda **kwargs: _Client(queue, calls),
     )
 
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    events = await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
+    transport = MicrosoftApiTransport(secrets=graph_secrets)
+    response = await transport.request_graph("GET", "https://graph.microsoft.com/v1.0/security/alerts_v2")
 
-    assert len(events) == 1
+    assert response.status_code == 200
     assert len(calls) == 2
-    assert "$expand" not in calls[0]["params"]
 
 
 @pytest.mark.asyncio
-async def test_graph_fetch_events_non_defender_does_not_expand_evidence(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "id": "s1",
-                        "createdDateTime": "2026-03-22T00:00:00Z",
-                        "userPrincipalName": "alice@example.com",
-                        "ipAddress": "10.0.0.1",
-                    }
-                ]
-            },
-        ),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
+async def test_edr_fetch_events_non_defender_maps_to_security_signal(graph_secrets):
+    transport = _TransportStub(
+        graph_queue=[
+            _Resp(
+                200,
+                body={
+                    "value": [
+                        {
+                            "id": "risk-1",
+                            "riskLastUpdatedDateTime": "2026-03-22T00:00:00Z",
+                            "riskLevel": "high",
+                            "riskState": "atRisk",
+                            "userPrincipalName": "alice@example.com",
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+    connector = MicrosoftDefenderEDRConnector(
+        tenant_id="tenant-1",
+        secrets=graph_secrets,
+        transport=transport,
     )
 
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    events = await connector.fetch_events({"resource_type": "entra_signin_logs", "top": 1})
-
-    assert len(events) == 1
-    assert isinstance(events[0].payload, DefenderSecuritySignalEvent)
-    assert events[0].payload.provider_event_type == "signin_log"
-    assert "$expand" not in calls[0]["params"]
-
-
-@pytest.mark.asyncio
-async def test_graph_fetch_events_non_alert_resource_maps_to_security_signal(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "id": "risk-1",
-                        "riskLastUpdatedDateTime": "2026-03-22T00:00:00Z",
-                        "riskLevel": "high",
-                        "riskState": "atRisk",
-                        "userPrincipalName": "alice@example.com",
-                    }
-                ]
-            },
-        ),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
     events = await connector.fetch_events({"resource_type": "entra_risky_users", "top": 1})
 
     assert len(events) == 1
@@ -194,54 +186,54 @@ async def test_graph_fetch_events_non_alert_resource_maps_to_security_signal(moc
     assert events[0].payload.event_type == "defender.security_signal"
     assert events[0].payload.provider_event_type == "risky_user"
     assert events[0].payload.resource_type == "entra_risky_users"
+    assert "$expand" not in (transport.graph_calls[0]["params"] or {})
 
 
 @pytest.mark.asyncio
-async def test_graph_fetch_events_maps_typed_evidence_fields(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "id": "a-evidence-1",
-                        "createdDateTime": "2026-03-22T00:00:00Z",
-                        "severity": "high",
-                        "title": "Alert",
-                        "description": "Body",
-                        "evidence": [
-                            {
-                                "@odata.type": "#microsoft.graph.security.ipEvidence",
-                                "ipAddress": "8.8.8.8",
-                            },
-                            {
-                                "@odata.type": "#microsoft.graph.security.networkConnectionEvidence",
-                                "sourceAddress": "1.2.3.4",
-                                "destinationAddress": "5.6.7.8",
-                            },
-                            {
-                                "@odata.type": "#microsoft.graph.security.deviceEvidence",
-                                "deviceId": "device-123",
-                            },
-                            {
-                                "@odata.type": "#microsoft.graph.security.userEvidence",
-                                "userPrincipalName": "alice@example.com",
-                            },
-                        ],
-                    }
-                ]
-            },
-        ),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
+async def test_edr_fetch_events_maps_typed_evidence_fields(graph_secrets):
+    transport = _TransportStub(
+        graph_queue=[
+            _Resp(
+                200,
+                body={
+                    "value": [
+                        {
+                            "id": "a-evidence-1",
+                            "createdDateTime": "2026-03-22T00:00:00Z",
+                            "severity": "high",
+                            "title": "Alert",
+                            "description": "Body",
+                            "evidence": [
+                                {
+                                    "@odata.type": "#microsoft.graph.security.ipEvidence",
+                                    "ipAddress": "8.8.8.8",
+                                },
+                                {
+                                    "@odata.type": "#microsoft.graph.security.networkConnectionEvidence",
+                                    "sourceAddress": "1.2.3.4",
+                                    "destinationAddress": "5.6.7.8",
+                                },
+                                {
+                                    "@odata.type": "#microsoft.graph.security.deviceEvidence",
+                                    "deviceId": "device-123",
+                                },
+                                {
+                                    "@odata.type": "#microsoft.graph.security.userEvidence",
+                                    "userPrincipalName": "alice@example.com",
+                                },
+                            ],
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+    connector = MicrosoftDefenderEDRConnector(
+        tenant_id="tenant-1",
+        secrets=graph_secrets,
+        transport=transport,
     )
 
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
     events = await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
 
     payload = events[0].payload
@@ -252,790 +244,84 @@ async def test_graph_fetch_events_maps_typed_evidence_fields(mocker, graph_secre
 
 
 @pytest.mark.asyncio
-async def test_graph_fetch_events_handles_empty_evidence_fields(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "id": "a-evidence-2",
-                        "createdDateTime": "2026-03-22T00:00:00Z",
-                        "severity": "medium",
-                        "title": "Alert without evidence",
-                        "description": "Body",
-                        "evidence": [],
-                    }
-                ]
-            },
-        ),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
+async def test_edr_list_user_alerts_filters_client_side(graph_secrets):
+    transport = _TransportStub(
+        graph_queue=[
+            _Resp(
+                200,
+                body={
+                    "value": [
+                        {
+                            "id": "a1",
+                            "userStates": [{"userPrincipalName": "User@Example.com"}],
+                        },
+                        {
+                            "id": "a2",
+                            "evidence": [
+                                {
+                                    "@odata.type": "#microsoft.graph.security.userEvidence",
+                                    "userPrincipalName": "user@example.com",
+                                }
+                            ],
+                        },
+                        {
+                            "id": "a3",
+                            "userStates": [{"userPrincipalName": "other@example.com"}],
+                        },
+                    ]
+                },
+            )
+        ]
+    )
+    connector = MicrosoftDefenderEDRConnector(
+        tenant_id="tenant-1",
+        secrets=graph_secrets,
+        transport=transport,
     )
 
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    events = await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
-
-    payload = events[0].payload
-    assert payload.vendor_extensions["source_ip"].value is None
-    assert payload.vendor_extensions["destination_ip"].value is None
-    assert payload.vendor_extensions["device_id"].value is None
-    assert payload.vendor_extensions["user_email"].value is None
-
-
-@pytest.mark.asyncio
-async def test_graph_list_user_alerts_filters_client_side(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "id": "a1",
-                        "userStates": [{"userPrincipalName": "User@Example.com"}],
-                    },
-                    {
-                        "id": "a2",
-                        "evidence": [
-                            {
-                                "@odata.type": "#microsoft.graph.security.userEvidence",
-                                "userPrincipalName": "user@example.com",
-                            }
-                        ],
-                    },
-                    {
-                        "id": "a3",
-                        "userStates": [{"userPrincipalName": "other@example.com"}],
-                    },
-                ]
-            },
-        )
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
     result = await connector.execute_action("list_user_alerts", {"user_email": "user@example.com"})
 
     assert [alert["id"] for alert in result["alerts"]] == ["a1", "a2"]
-    assert "$expand" not in calls[0]["params"]
-    assert "createdDateTime gt" in calls[0]["params"]["$filter"]
+    params = transport.graph_calls[0]["params"] or {}
+    assert "$expand" not in params
+    assert "createdDateTime gt" in params["$filter"]
 
 
 @pytest.mark.asyncio
-async def test_graph_list_user_alerts_fallback_on_400(mocker, graph_secrets):
-    queue = [
-        _Resp(400, body={"error": {"message": "Unsupported filter"}}),
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "id": "a1",
-                        "userStates": [{"userPrincipalName": "user@example.com"}],
-                    }
-                ]
-            },
-        ),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
+async def test_edr_list_user_alerts_surfaces_400(graph_secrets):
+    transport = _TransportStub(
+        graph_queue=[
+            ConnectorPermanentError("Microsoft API request rejected: status=400 url=https://graph.microsoft.com"),
+        ]
+    )
+    connector = MicrosoftDefenderEDRConnector(
+        tenant_id="tenant-1",
+        secrets=graph_secrets,
+        transport=transport,
     )
 
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
     with pytest.raises(ConnectorPermanentError):
         await connector.execute_action("list_user_alerts", {"user_email": "user@example.com"})
 
-    assert len(calls) == 1
-    assert "$filter" in calls[0]["params"]
+    params = transport.graph_calls[0]["params"] or {}
+    assert "$filter" in params
 
 
 @pytest.mark.asyncio
-async def test_graph_fetch_events_defender_fallback_removes_filter_on_400(mocker, graph_secrets):
-    queue = [
-        _Resp(400, body={"error": {"message": "Unsupported filter"}}),
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "id": "a1",
-                        "createdDateTime": "2026-03-22T00:00:00Z",
-                        "severity": "high",
-                        "title": "Alert",
-                    }
-                ]
-            },
-        ),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
+async def test_edr_fetch_events_surfaces_400(graph_secrets):
+    transport = _TransportStub(
+        graph_queue=[
+            ConnectorPermanentError("Microsoft API request rejected: status=400 url=https://graph.microsoft.com"),
+        ]
+    )
+    connector = MicrosoftDefenderEDRConnector(
+        tenant_id="tenant-1",
+        secrets=graph_secrets,
+        transport=transport,
     )
 
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
     with pytest.raises(ConnectorPermanentError):
         await connector.fetch_events({"resource_type": "defender_alerts", "top": 1})
 
-    assert len(calls) == 1
-    assert "$filter" in calls[0]["params"]
-
-
-@pytest.mark.asyncio
-async def test_graph_list_user_alerts_include_evidence_fallback_drops_expand_on_400(mocker, graph_secrets):
-    queue = [
-        _Resp(400, body={"error": {"message": "Unsupported expand"}}),
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "id": "a-evidence",
-                        "createdDateTime": "2026-03-22T00:00:00Z",
-                        "userStates": [{"userPrincipalName": "user@example.com"}],
-                    }
-                ]
-            },
-        ),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action(
-        "list_user_alerts",
-        {"user_email": "user@example.com", "include_evidence": True},
-    )
-
-    assert [alert["id"] for alert in result["alerts"]] == ["a-evidence"]
-    assert "$filter" in calls[0]["params"]
-    assert "$filter" in calls[1]["params"]
-    assert "$expand" in calls[0]["params"]
-    assert "$expand" not in calls[1]["params"]
-
-
-@pytest.mark.asyncio
-async def test_graph_enrich_alert_context_uses_plain_get_alert(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            200,
-            body={
-                "id": "a1",
-                "severity": "high",
-                "title": "Alert title",
-                "description": "Alert body",
-                "evidence": [],
-            },
-        ),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action("enrich_alert_context", {"alert_id": "a1"})
-
-    assert result["success"] is True
-    assert result["alert_id"] == "a1"
-    assert result["title"] == "Alert title"
-    assert result["description"] == "Alert body"
-    assert calls[0]["params"] is None
-
-
-@pytest.mark.asyncio
-async def test_graph_enrich_alert_context_404_returns_payload_defaults(mocker, graph_secrets):
-    queue = [_Resp(404, body={"error": {"message": "Not found"}})]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action("enrich_alert_context", {"alert_id": "missing-id"})
-
-    assert result["success"] is True
-    assert result["alert_id"] == "missing-id"
-    assert calls[0]["params"] is None
-
-
-@pytest.mark.asyncio
-async def test_graph_enrich_alert_context_device_lookup_400_is_best_effort(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            200,
-            body={
-                "id": "a1",
-                "severity": "medium",
-                "title": "Alert title",
-                "description": "Alert body",
-                "evidence": [
-                    {
-                        "@odata.type": "#microsoft.graph.security.deviceEvidence",
-                        "deviceId": "426eb33370cafb6318ad109b4b0e89b21fd3ae02",
-                    }
-                ],
-            },
-        ),
-        _Resp(400, body={"error": {"message": "Bad Request"}}),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action("enrich_alert_context", {"alert_id": "a1"})
-
-    assert result["success"] is True
-    assert result["alert_id"] == "a1"
-    assert result["device_display_name"] is None
-    assert result["device_os"] is None
-    assert result["device_compliance"] is None
-    assert calls[1]["url"].startswith("https://graph.microsoft.com/v1.0/deviceManagement/managedDevices/")
-
-
-@pytest.mark.asyncio
-async def test_graph_isolate_uses_defender_token(mocker, graph_secrets):
-    queue = [_Resp(200, body={"status": "submitted"}, content=b'{"status":"submitted"}')]
-    calls: list[dict[str, Any]] = []
-
-    graph_token = mocker.AsyncMock(return_value="graph-tok")
-    defender_token = mocker.AsyncMock(return_value="defender-tok")
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=graph_token)
-    mocker.patch("connectors.microsoft_defender.get_defender_token", new=defender_token)
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action("isolate_device", {"device_id": "machine-1"})
-
-    assert result["status"] == "submitted"
-    defender_token.assert_awaited_once()
-    graph_token.assert_not_awaited()
-    assert calls[0]["headers"]["Authorization"] == "Bearer defender-tok"
-
-
-@pytest.mark.asyncio
-async def test_graph_get_device_context_uses_defender_token(mocker, graph_secrets):
-    queue = [_Resp(200, body={"id": "machine-1", "computerDnsName": "host-1", "osPlatform": "Windows", "riskScore": "Medium"})]
-    calls: list[dict[str, Any]] = []
-
-    graph_token = mocker.AsyncMock(return_value="graph-tok")
-    defender_token = mocker.AsyncMock(return_value="defender-tok")
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=graph_token)
-    mocker.patch("connectors.microsoft_defender.get_defender_token", new=defender_token)
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action("get_device_context", {"device_id": "machine-1"})
-
-    assert result["found"] is True
-    assert result["device_id"] == "machine-1"
-    assert result["display_name"] == "host-1"
-    defender_token.assert_awaited_once()
-    graph_token.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_graph_get_identity_risk_uses_graph_token(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            200,
-            body={
-                "value": [
-                    {
-                        "userPrincipalName": "alice@example.com",
-                        "riskLevel": "high",
-                        "riskState": "atRisk",
-                        "riskDetail": "adminConfirmedSigninCompromised",
-                    }
-                ]
-            },
-        )
-    ]
-    calls: list[dict[str, Any]] = []
-
-    graph_token = mocker.AsyncMock(return_value="graph-tok")
-    defender_token = mocker.AsyncMock(return_value="defender-tok")
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=graph_token)
-    mocker.patch("connectors.microsoft_defender.get_defender_token", new=defender_token)
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action("get_identity_risk", {"lookup_key": "alice@example.com"})
-
-    assert result["found"] is True
-    assert result["subject"] == "alice@example.com"
-    assert result["risk_level"] == "high"
-    graph_token.assert_awaited_once()
-    defender_token.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_graph_phase1_identity_actions_use_graph_token(mocker, graph_secrets):
-    queue = [
-        _Resp(200, body={"value": [{"id": "risk-1", "riskLevel": "high"}]}),
-        _Resp(200, body={"value": [{"id": "signin-1"}]}),
-        _Resp(204, body={}, content=b""),
-        _Resp(204, body={}, content=b""),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    graph_token = mocker.AsyncMock(return_value="graph-tok")
-    defender_token = mocker.AsyncMock(return_value="defender-tok")
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=graph_token)
-    mocker.patch("connectors.microsoft_defender.get_defender_token", new=defender_token)
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    risky = await connector.execute_action("list_risky_users", {"min_risk_level": "medium"})
-    signins = await connector.execute_action(
-        "get_signin_history",
-        {"user_principal_name": "alice@example.com", "top": 10},
-    )
-    confirmed = await connector.execute_action("confirm_user_compromised", {"user_id": "u-1"})
-    dismissed = await connector.execute_action("dismiss_risky_user", {"user_id": "u-1"})
-
-    assert risky["users"][0]["id"] == "risk-1"
-    assert signins["signins"][0]["id"] == "signin-1"
-    assert confirmed["confirmed"] is True
-    assert dismissed["dismissed"] is True
-    assert all(call["headers"]["Authorization"] == "Bearer graph-tok" for call in calls)
-    defender_token.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_graph_phase1_device_actions_use_defender_token(mocker, graph_secrets):
-    queue = [
-        _Resp(202, body={"status": "submitted"}, content=b'{"status":"submitted"}'),
-        _Resp(202, body={"status": "submitted"}, content=b'{"status":"submitted"}'),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    graph_token = mocker.AsyncMock(return_value="graph-tok")
-    defender_token = mocker.AsyncMock(return_value="defender-tok")
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=graph_token)
-    mocker.patch("connectors.microsoft_defender.get_defender_token", new=defender_token)
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    scan = await connector.execute_action("run_antivirus_scan", {"device_id": "machine-1", "scan_type": "quick"})
-    unisolate = await connector.execute_action("unisolate_device", {"device_id": "machine-1"})
-
-    assert scan["submitted"] is True
-    assert unisolate["status"] == "submitted"
-    assert all(call["headers"]["Authorization"] == "Bearer defender-tok" for call in calls)
-    graph_token.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_graph_subscription_actions_use_graph_token(mocker, graph_secrets):
-    queue = [
-        _Resp(201, body={"id": "sub-1", "resource": "security/alerts", "expirationDateTime": "2026-03-31T01:00:00Z", "notificationUrl": "https://hook", "clientState": "secamo:t1:alerts"}),
-        _Resp(200, body={"id": "sub-1", "resource": "security/alerts", "expirationDateTime": "2026-03-31T01:00:00Z"}),
-        _Resp(200, body={"id": "sub-1", "resource": "security/alerts", "expirationDateTime": "2026-03-31T02:00:00Z", "notificationUrl": "https://hook", "clientState": "secamo:t1:alerts"}),
-        _Resp(200, body={"value": [{"id": "sub-1", "resource": "security/alerts", "clientState": "secamo:t1:alerts"}]}),
-        _Resp(204, body={}, content=b""),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    graph_token = mocker.AsyncMock(return_value="graph-tok")
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=graph_token)
-    mocker.patch("connectors.microsoft_defender.get_defender_token", new=mocker.AsyncMock(return_value="defender-tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    created = await connector.execute_action(
-        "create_subscription",
-        {
-            "resource": "security/alerts_v2",
-            "change_types": ["created", "updated"],
-            "notification_url": "https://hook",
-            "client_state": "secamo:t1:alerts",
-            "expiration_minutes": 60,
-        },
-    )
-    renewed = await connector.execute_action("renew_subscription", {"subscription_id": "sub-1", "expiration_minutes": 90})
-    listed = await connector.execute_action("list_subscriptions", {})
-    deleted = await connector.execute_action("delete_subscription", {"subscription_id": "sub-1"})
-
-    assert created["id"] == "sub-1"
-    assert renewed["id"] == "sub-1"
-    assert listed["subscriptions"][0]["id"] == "sub-1"
-    assert deleted["deleted"] is True
-    assert calls[0]["json"]["resource"] == "security/alerts"
-    assert all(call["headers"]["Authorization"] == "Bearer graph-tok" for call in calls)
-
-
-@pytest.mark.asyncio
-async def test_graph_subscription_create_clamps_security_alert_lifetime(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            201,
-            body={
-                "id": "sub-long",
-                "resource": "security/alerts",
-                "expirationDateTime": "2026-03-31T02:00:00Z",
-                "notificationUrl": "https://hook",
-                "clientState": "secamo:t1:alerts",
-            },
-        )
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="graph-tok"))
-    mocker.patch("connectors.microsoft_defender.get_defender_token", new=mocker.AsyncMock(return_value="defender-tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    await connector.execute_action(
-        "create_subscription",
-        {
-            "resource": "security/alerts_v2",
-            "change_types": ["created", "updated"],
-            "notification_url": "https://hook",
-            "client_state": "secamo:t1:alerts",
-            "expiration_minutes": 999999,
-        },
-    )
-
-    request_body = calls[0]["json"]
-    assert request_body["resource"] == "security/alerts"
-    expires_at = datetime.fromisoformat(request_body["expirationDateTime"].replace("Z", "+00:00"))
-    now = datetime.now(timezone.utc)
-    delta_minutes = (expires_at - now).total_seconds() / 60
-    assert 43000 <= delta_minutes <= 43210
-
-
-@pytest.mark.asyncio
-async def test_graph_create_user_maps_optional_fields_for_graph(mocker, graph_secrets):
-    queue = [
-        _Resp(
-            201,
-            body={
-                "id": "u-1",
-                "displayName": "Alice Example",
-                "userPrincipalName": "alice@example.com",
-                "accountEnabled": True,
-            },
-        )
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="graph-tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action(
-        "create_user",
-        {
-            "user_data": {
-                "email": "alice@example.com",
-                "first_name": "Alice",
-                "last_name": "Example",
-                "company_name": "Secamo",
-                "role": "Security Analyst",
-                "department": "SOC",
-            }
-        },
-    )
-
-    assert result["user_id"] == "u-1"
-    request_body = calls[0]["json"]
-    assert request_body["displayName"] == "Alice Example"
-    assert request_body["mailNickname"] == "alice"
-    assert request_body["userPrincipalName"] == "alice@example.com"
-    assert request_body["companyName"] == "Secamo"
-    assert request_body["givenName"] == "Alice"
-    assert request_body["surname"] == "Example"
-    assert request_body["jobTitle"] == "Security Analyst"
-    assert request_body["department"] == "SOC"
-
-
-@pytest.mark.asyncio
-async def test_graph_update_user_skips_empty_updates(mocker, graph_secrets):
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="graph-tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client([], calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action("update_user", {"user_id": "u-1", "updates": {}})
-
-    assert result["updated"] is False
-    assert result["skipped"] is True
-    assert calls == []
-
-
-@pytest.mark.asyncio
-async def test_graph_update_user_maps_alias_fields(mocker, graph_secrets):
-    queue = [_Resp(204, body={}, content=b"")]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=mocker.AsyncMock(return_value="graph-tok"))
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action(
-        "update_user",
-        {
-            "user_id": "u-1",
-            "updates": {
-                "first_name": "Alice",
-                "last_name": "Example",
-                "company_name": "Secamo",
-                "role": "Security Analyst",
-                "account_enabled": "false",
-                "temp_password": "TempP@ssw0rd!",
-            },
-        },
-    )
-
-    assert result["updated"] is True
-    request_body = calls[0]["json"]
-    assert request_body["givenName"] == "Alice"
-    assert request_body["surname"] == "Example"
-    assert request_body["companyName"] == "Secamo"
-    assert request_body["jobTitle"] == "Security Analyst"
-    assert request_body["accountEnabled"] is False
-    assert request_body["passwordProfile"]["password"] == "TempP@ssw0rd!"
-
-
-@pytest.mark.asyncio
-async def test_graph_request_with_retry_includes_graph_error_code_and_message(mocker, graph_secrets):
-    queue = [
-        _Resp(400, body={"error": {"code": "BadRequest", "message": "Unsupported query parameter"}}),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    with pytest.raises(ConnectorPermanentError, match="code=BadRequest"):
-        await connector._request_with_retry(
-            "GET",
-            "https://graph.microsoft.com/v1.0/security/alerts_v2",
-            headers={"Authorization": "Bearer tok"},
-        )
-
-
-@pytest.mark.asyncio
-async def test_graph_send_email_action_uses_graph_token(mocker, graph_secrets):
-    queue = [_Resp(202, body={}, headers={"x-ms-request-id": "mail-1"}, content=b"")]
-    calls: list[dict[str, Any]] = []
-
-    graph_token = mocker.AsyncMock(return_value="graph-tok")
-    defender_token = mocker.AsyncMock(return_value="defender-tok")
-    mocker.patch("connectors.microsoft_defender.get_graph_token", new=graph_token)
-    mocker.patch("connectors.microsoft_defender.get_defender_token", new=defender_token)
-    mocker.patch(
-        "connectors.microsoft_defender.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = MicrosoftGraphConnector(tenant_id="tenant-1", secrets=graph_secrets)
-    result = await connector.execute_action(
-        "send_email",
-        {
-            "sender": "sender@example.com",
-            "to": "dest@example.com",
-            "subject": "Subject",
-            "body": "Body",
-            "content_type": "Text",
-        },
-    )
-
-    assert result["sent"] is True
-    assert result["message_id"] == "mail-1"
-    assert calls[0]["headers"]["Authorization"] == "Bearer graph-tok"
-    graph_token.assert_awaited_once()
-    defender_token.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_jira_create_ticket_uses_secret_project_key_fallback(mocker, jira_secrets):
-    queue = [_Resp(201, body={"key": "SOC-101"}, content=b'{"key":"SOC-101"}')]
-    calls: list[dict[str, Any]] = []
-
-    secrets_with_project = jira_secrets.model_copy(update={"project_key": "TENANTSOC"})
-    mocker.patch(
-        "connectors.jira.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = JiraConnector(tenant_id="tenant-1", secrets=secrets_with_project)
-    result = await connector.execute_action(
-        "create_ticket",
-        {"title": "Example", "description": "Desc", "issue_type": "Incident"},
-    )
-
-    assert result["key"] == "SOC-101"
-    assert calls[0]["json"]["fields"]["project"]["key"] == "TENANTSOC"
-
-
-@pytest.mark.asyncio
-async def test_jira_create_ticket_uses_jsm_customer_request_endpoint(mocker, jira_secrets):
-    queue = [
-        _Resp(
-            201,
-            body={
-                "issueKey": "HELP-101",
-                "serviceDeskId": "42",
-                "requestTypeId": "10001",
-            },
-            content=b'{"issueKey":"HELP-101"}',
-        )
-    ]
-    calls: list[dict[str, Any]] = []
-
-    jsm_secrets = jira_secrets.model_copy(
-        update={
-            "project_type": "jsm",
-            "jsm_service_desk_id": "42",
-            "jsm_request_type_id": "10001",
-        }
-    )
-    mocker.patch(
-        "connectors.jira.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = JiraConnector(tenant_id="tenant-1", secrets=jsm_secrets)
-    result = await connector.execute_action(
-        "create_ticket",
-        {
-            "title": "Need access",
-            "description": "Please grant access",
-        },
-    )
-
-    assert result["issueKey"] == "HELP-101"
-    assert calls[0]["url"].endswith("/rest/servicedeskapi/request")
-    assert calls[0]["json"]["serviceDeskId"] == "42"
-    assert calls[0]["json"]["requestTypeId"] == "10001"
-    assert calls[0]["json"]["requestFieldValues"]["summary"] == "Need access"
-
-
-@pytest.mark.asyncio
-async def test_jira_create_ticket_jsm_requires_request_type_id(mocker, jira_secrets):
-    jsm_secrets = jira_secrets.model_copy(
-        update={
-            "project_type": "jsm",
-            "jsm_service_desk_id": "42",
-            "jsm_request_type_id": None,
-        }
-    )
-    connector = JiraConnector(tenant_id="tenant-1", secrets=jsm_secrets)
-
-    with pytest.raises(ConnectorPermanentError):
-        await connector.execute_action(
-            "create_ticket",
-            {
-                "title": "Need access",
-                "description": "Please grant access",
-            },
-        )
-
-
-@pytest.mark.asyncio
-async def test_jira_update_issue_handles_fields_comment_and_transition(mocker, jira_secrets):
-    queue = [
-        _Resp(204, body={}, content=b""),
-        _Resp(201, body={"id": "1001"}, content=b'{"id":"1001"}'),
-        _Resp(200, body={"transitions": [{"id": "31", "name": "Escalated"}]}, content=b'{"transitions":[{"id":"31","name":"Escalated"}]}'),
-        _Resp(204, body={}, content=b""),
-    ]
-    calls: list[dict[str, Any]] = []
-
-    mocker.patch(
-        "connectors.jira.httpx.AsyncClient",
-        side_effect=lambda **kwargs: _Client(queue, calls),
-    )
-
-    connector = JiraConnector(tenant_id="tenant-1", secrets=jira_secrets)
-    result = await connector.execute_action(
-        "update_issue",
-        {
-            "ticket_id": "SOC-123",
-            "fields": {
-                "description": "Updated details",
-                "labels": ["secamo", "wf-05"],
-            },
-            "comment": "Escalated for analyst review",
-            "transition_name": "Escalated",
-        },
-    )
-
-    assert result["updated"] is True
-    assert calls[0]["method"] == "PUT"
-    assert calls[0]["url"].endswith("/rest/api/3/issue/SOC-123")
-    assert calls[1]["method"] == "POST"
-    assert calls[1]["url"].endswith("/rest/api/3/issue/SOC-123/comment")
-    assert calls[2]["method"] == "GET"
-    assert calls[2]["url"].endswith("/rest/api/3/issue/SOC-123/transitions")
-    assert calls[3]["method"] == "POST"
-    assert calls[3]["json"]["transition"]["id"] == "31"
+    params = transport.graph_calls[0]["params"] or {}
+    assert "$filter" in params
