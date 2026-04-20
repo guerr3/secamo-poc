@@ -1,55 +1,53 @@
-# Workflows - deterministic orchestration layer for security automation
+# Workflows
 
-> This module defines parent orchestration workflows and composes child workflows for reusable sub-flows.
+This folder contains deterministic Temporal workflows for SOC, IAM, onboarding, and polling orchestration.
 
-## Responsibilities
+## Workflow Inventory
 
-- Orchestrate event-driven business flow execution in a deterministic manner.
-- Coordinate activity calls, child workflow execution, signals, and retries.
-- Separate parent workflow intent routing from child workflow sub-process reuse.
-- Keep direct external side effects out of workflow code.
+| File                               | Workflow Class                        | Purpose                                                             |
+| ---------------------------------- | ------------------------------------- | ------------------------------------------------------------------- |
+| `soc_alert_triage.py`              | `SocAlertTriageWorkflow`              | Main SOC triage path for alerts and fallback security signals       |
+| `signin_anomaly_detection.py`      | `SigninAnomalyDetectionWorkflow`      | Dedicated signin-log signal handling                                |
+| `risky_user_triage.py`             | `RiskyUserTriageWorkflow`             | Dedicated risky-user signal handling                                |
+| `device_compliance_remediation.py` | `DeviceComplianceRemediationWorkflow` | Dedicated noncompliant-device signal handling                       |
+| `audit_log_anomaly.py`             | `AuditLogAnomalyWorkflow`             | Dedicated audit-log signal handling                                 |
+| `iam_onboarding.py`                | `IamOnboardingWorkflow`               | IAM lifecycle orchestration with HiTL-gated license assignment path |
+| `customer_onboarding.py`           | `CustomerOnboardingWorkflow`          | Parent onboarding workflow composed from stage child workflows      |
+| `polling_bootstrap.py`             | `PollingBootstrapWorkflow`            | Polling manager bootstrap/reconciliation                            |
+| `polling_manager.py`               | `PollingManagerWorkflow`              | Poll events, dedup, route, and continue-as-new loop                 |
 
-## File Reference
+## Routing and Queue Alignment
 
-| File                           | Responsibility                                                                            |
-| ------------------------------ | ----------------------------------------------------------------------------------------- |
-| `__init__.py`                  | Workflow package marker.                                                                  |
-| `child/`                       | Reusable child workflows for enrichment, approvals, response, and deprovisioning.         |
-| `case_intake.py`               | Unified SOC intake workflow for defender alerts, impossible travel, and security signals. |
-| `customer_onboarding.py`       | Parent onboarding workflow composed from staged child workflows.                          |
-| `defender_alert_enrichment.py` | Parent SOC enrichment orchestration workflow.                                             |
-| `generic_security_signal.py`   | Generic workflow for non-alert Defender security signals.                                 |
-| `iam_onboarding.py`            | IAM lifecycle orchestration workflow.                                                     |
-| `impossible_travel.py`         | Impossible-travel triage and incident response orchestration workflow.                    |
-| `polling_bootstrap.py`         | Reconcile/start polling-manager workflows per tenant/provider/resource.                   |
-| `polling_manager.py`           | Polling-based provider event collection and downstream dispatch workflow.                 |
-| `README.md`                    | Module documentation.                                                                     |
-| `__pycache__/`                 | Generated Python bytecode cache directory.                                                |
+- Ingress and polling routing are defined in `shared/routing/defaults.py`.
+- Worker registration is defined in `workers/run_worker.py`.
+- Route and worker parity is validated at startup via `_validate_route_worker_parity`.
 
-## Key Concepts
+Primary queue mapping:
 
-- Determinism: workflows orchestrate only; all I/O is delegated to activities.
-- Composition: parent workflows call child workflows for reusable steps and clearer failure boundaries.
-- Queue-aware orchestration: workflow registration aligns with queue partitioning in worker bootstrap (`user-lifecycle`, `edr`, `ticketing`, `interactions`, `audit`, `polling`).
+- `user-lifecycle`: IAM + customer onboarding + onboarding child stages
+- `edr`: SOC parent + dedicated SOC signal workflows + selected child stages
+- `polling`: polling bootstrap and polling manager
 
-## Usage
+## Runtime Notes (Recent Changes)
 
-Workflows execute through Temporal workers and are started by ingress dispatch or scheduled/manual triggers.
+- Dedicated SOC signal workflows are active for `signin_log`, `risky_user`, `noncompliant_device`, and `audit_log`.
+- Polling manager now resolves routes from full envelopes and reuses shared route input shaping.
+- Polling manager supports optional Graph subscription renewal when poll type includes `graph_subscription_renewal`.
+
+## Run and Verify
 
 ```bash
 python -m workers.run_worker
 ```
 
-## Testing
-
 ```bash
-python -m pytest -q
+python -m pytest -q tests/test_worker_signal_registration.py tests/test_signal_workflow_structure.py tests/test_polling_manager_helpers.py tests/test_workflow_stage_registration.py
 ```
 
-## Extension Points
+## Change Checklist
 
-1. Add a new workflow file under `workflows/` or `workflows/child/`.
-2. Register the workflow in `workers/run_worker.py` for the intended queue.
-3. Add or update routes in `shared/routing/defaults.py` when ingress-triggered.
-4. Add tests covering expected orchestration branches and failure paths.
-5. Update this file reference and related architecture docs.
+1. Keep workflow code deterministic and side-effect free.
+2. Register new workflows in `workers/run_worker.py` on the correct queue.
+3. Add route mappings in `shared/routing/defaults.py` when ingress/polling-triggered.
+4. Keep workflow input shaping aligned in `shared/temporal/dispatcher.py`.
+5. Add tests for routing, worker registration, and workflow structure guardrails.

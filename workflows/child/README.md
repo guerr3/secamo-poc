@@ -1,59 +1,38 @@
-# Child Workflows - reusable sub-processes for parent orchestration flows
+# Child Workflows
 
-> This module contains child workflows that encapsulate repeatable orchestration stages used by parent workflows.
+Reusable child workflows composed by SOC, IAM, and onboarding parent workflows.
 
-## Responsibilities
+## Child Workflow Inventory
 
-- Provide reusable enrichment, approval, response, ticketing, and deprovisioning stages.
-- Keep parent workflows focused on high-level branching and sequencing logic.
-- Isolate signal/timeouts and scoped sub-process behavior in dedicated workflow classes.
-- Preserve deterministic execution semantics at child workflow boundaries.
+| File                                         | Workflow Class                                 | Purpose                                          |
+| -------------------------------------------- | ---------------------------------------------- | ------------------------------------------------ |
+| `alert_enrichment.py`                        | `AlertEnrichmentWorkflow`                      | Alert enrichment stage for SOC pipelines         |
+| `threat_intel_enrichment.py`                 | `ThreatIntelEnrichmentWorkflow`                | Threat-intel fanout and normalization stage      |
+| `incident_response.py`                       | `IncidentResponseWorkflow`                     | Response/remediation branching stage             |
+| `ticket_creation.py`                         | `TicketCreationWorkflow`                       | Ticket creation stage                            |
+| `hitl_approval.py`                           | `HiTLApprovalWorkflow`                         | Human-in-the-loop approval and signal wait stage |
+| `user_deprovisioning.py`                     | `UserDeprovisioningWorkflow`                   | User deprovisioning stage                        |
+| `onboarding_bootstrap_stage.py`              | `OnboardingBootstrapStageWorkflow`             | Tenant bootstrap/config stage                    |
+| `onboarding_subscription_reconcile_stage.py` | `OnboardingSubscriptionReconcileStageWorkflow` | Graph subscription reconciliation stage          |
+| `onboarding_communications_stage.py`         | `OnboardingCommunicationsStageWorkflow`        | Onboarding communication and ticket stage        |
+| `onboarding_compliance_evidence_stage.py`    | `OnboardingComplianceEvidenceStageWorkflow`    | Onboarding compliance evidence stage             |
 
-## File Reference
+## Runtime Notes (Current Behavior)
 
-| File                                         | Responsibility                                                          |
-| -------------------------------------------- | ----------------------------------------------------------------------- |
-| `__init__.py`                                | Child workflow export surface.                                          |
-| `alert_enrichment.py`                        | Child workflow for alert enrichment and risk context.                   |
-| `hitl_approval.py`                           | Child workflow for human-in-the-loop approval signal flow.              |
-| `incident_response.py`                       | Child workflow for decision-based incident response actions.            |
-| `onboarding_bootstrap_stage.py`              | Child workflow for tenant/bootstrap provisioning and config resolution. |
-| `onboarding_communications_stage.py`         | Child workflow for onboarding notifications and ticket creation.        |
-| `onboarding_compliance_evidence_stage.py`    | Child workflow for onboarding compliance/audit evidence.                |
-| `onboarding_subscription_reconcile_stage.py` | Child workflow for Graph subscription reconciliation.                   |
-| `README.md`                                  | Module documentation.                                                   |
-| `threat_intel_enrichment.py`                 | Child workflow for threat intel fanout stage.                           |
-| `ticket_creation.py`                         | Child workflow for ticket creation stage.                               |
-| `user_deprovisioning.py`                     | Child workflow for user deprovisioning stage.                           |
-| `__pycache__/`                               | Generated Python bytecode cache directory.                              |
+- Subscription reconcile stage is best-effort and non-blocking for failed create attempts.
+- HiTL approval stage is queue-isolated on `interactions` and receives callback signals from ingress.
+- Ticket creation stage executes on queue `ticketing` for provider isolation.
 
-## Key Concepts
-
-- Reusable orchestration units: child workflows are composed by multiple parent workflows to avoid duplication.
-- Signal-aware flow control: HiTL child workflow handles signal wait and timeout logic in one bounded module.
-- Explicit stage contracts: each child workflow has a focused role and narrow input/output expectations.
-
-## Usage
-
-Parent workflows invoke child workflows as sub-steps in larger orchestration paths.
-
-```python
-await workflow.execute_child_workflow(
-    ChildWorkflow.run,
-    child_input,
-)
-```
-
-## Testing
+## Run and Verify
 
 ```bash
-python -m pytest -q
+python -m pytest -q tests/test_hitl_child_identity_rebind.py tests/test_onboarding_subscription_reconcile_stage_policy.py tests/test_workflow_stage_registration.py
 ```
 
-## Extension Points
+## Change Checklist
 
-1. Add a new child workflow module under `workflows/child/`.
-2. Export/register the class where required for worker loading.
-3. Integrate it from parent workflows where composition is needed.
-4. Add tests for child-specific branching, signal, and timeout behavior.
-5. Update this file reference and parent workflow docs.
+1. Keep child workflows focused on one stage responsibility.
+2. Register child workflows in `workers/run_worker.py` where required.
+3. Ensure parent workflow composition calls are updated for new/renamed child workflows.
+4. Keep activity side effects out of workflow code except through `execute_activity`.
+5. Add stage-specific tests for signals, retries, and branch behavior.

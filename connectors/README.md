@@ -1,37 +1,40 @@
-# Connectors - provider adapter abstraction layer
+# Connectors
 
-> This module encapsulates provider-specific implementations behind a common adapter contract.
+This module contains provider adapters that implement the shared connector contract.
+Activities call these adapters through the registry, so workflows remain provider-agnostic.
 
-## Responsibilities
+## What This Module Owns
 
-- Define and enforce a stable connector interface used by activities.
-- Isolate provider SDK and HTTP behavior from workflow/activity orchestration code.
-- Centralize provider registration and connector factory resolution.
-- Keep clear separation between production connectors and stub connectors.
+- Provider-specific API translation for fetch/action/health operations.
+- Connector error normalization into typed connector exceptions.
+- Central provider-key to connector-factory registration.
 
-## File Reference
+## Connector Contract
 
-| File                    | Responsibility                                                                  |
-| ----------------------- | ------------------------------------------------------------------------------- |
-| `__init__.py`           | Public exports for connector interfaces and registry helpers.                   |
-| `abuseipdb.py`          | AbuseIPDB connector for IP reputation lookup.                                   |
-| `base.py`               | Abstract connector contract (`fetch_events`, `execute_action`, `health_check`). |
-| `errors.py`             | Connector-specific exception types and error taxonomy.                          |
-| `jira.py`               | Jira connector implementation.                                                  |
-| `jira_provisioner.py`   | Jira provisioning helper implementation.                                        |
-| `microsoft_defender.py` | Microsoft Defender/Graph connector implementation.                              |
-| `ses.py`                | AWS SES connector for outbound email actions.                                   |
-| `README.md`             | Module documentation.                                                           |
-| `registry.py`           | Connector factory registry and provider key resolution.                         |
-| `stub_providers.py`     | Stub connector implementations for planned providers.                           |
-| `virustotal.py`         | VirusTotal connector for indicator reputation lookup.                           |
-| `__pycache__/`          | Generated Python bytecode cache directory.                                      |
+All connectors extend `BaseConnector` and implement:
+
+- `fetch_events(query)`
+- `execute_action(action, payload)`
+- `health_check()`
+
+## File Map
+
+| File                    | Responsibility                                         |
+| ----------------------- | ------------------------------------------------------ |
+| `base.py`               | Base connector contract                                |
+| `registry.py`           | Provider-key registry and connector factory lookup     |
+| `errors.py`             | Connector error taxonomy                               |
+| `microsoft_defender.py` | Microsoft Defender and Graph-backed security connector |
+| `jira.py`               | Jira ticketing connector                               |
+| `jira_provisioner.py`   | Jira-specific provisioning/helper logic                |
+| `ses.py`                | AWS SES outbound email connector                       |
+| `virustotal.py`         | VirusTotal threat-intel connector                      |
+| `abuseipdb.py`          | AbuseIPDB threat-intel connector                       |
+| `stub_providers.py`     | Stub connectors for planned providers                  |
 
 ## Registered Providers
 
-Resolved in `connectors/registry.py`.
-
-| Provider key         | Implementation                    | Status |
+| Provider Key         | Implementation                    | Status |
 | -------------------- | --------------------------------- | ------ |
 | `microsoft_defender` | `MicrosoftGraphConnector`         | Active |
 | `microsoft_graph`    | `MicrosoftGraphConnector` (alias) | Active |
@@ -45,38 +48,22 @@ Resolved in `connectors/registry.py`.
 | `servicenow`         | `ServiceNowConnector`             | Stub   |
 | `misp`               | `MispConnector`                   | Stub   |
 
-## Key Concepts
+## Runtime Notes (Current Behavior)
 
-- Adapter pattern: activities use one connector interface while concrete classes encapsulate provider differences.
-- Registry-driven resolution: provider key strings map to connector factories in one place (`registry.py`).
-- Typed error boundaries: connector failures are translated into explicit connector error classes before activity-level retry policy handling.
+- Defender/Graph connector contains compatibility fallbacks for alert retrieval and enrichment paths (including `alerts_v2` behavior and best-effort managed device enrichment).
+- Email connector support includes `ses`; runtime email provider fallback behavior is resolved in activity layer.
+- Registry lookups are case-insensitive and fail fast when provider keys are unknown.
 
-## Usage
-
-Activities resolve connectors by provider key and execute actions without provider-specific branching in workflow code.
-
-```python
-connector = get_connector(provider, tenant_id, secrets)
-result = await connector.execute_action(action, payload)
-```
-
-## Testing
+## Run and Verify
 
 ```bash
-python -m pytest -q tests/test_stub_connectors.py tests/test_connectors_resilience.py tests/test_threat_intel_connectors.py tests/test_ses_connector.py tests/test_jira_provisioner.py
+python -m pytest -q tests/test_connectors_resilience.py tests/test_threat_intel_connectors.py tests/test_ses_connector.py tests/test_jira_provisioner.py tests/test_stub_connectors.py
 ```
 
-## Extension Points
+## Change Checklist
 
-1. Add a new connector class in `connectors/` that extends `BaseConnector`.
-2. Implement required interface methods and provider-specific auth/data handling.
-3. Register the new provider key in `connectors/registry.py`.
-4. Add tests for success/failure behavior in `tests/`.
-5. Update this file table for the added module.
-
-## SES Notes
-
-- Provider key: `ses` (registered in `connectors/registry.py`).
-- Supported action: `send_email`.
-- Runtime must have IAM permissions for `ses:SendEmail` (and optionally `ses:SendRawEmail`, `ses:GetSendQuota`).
-- `SECAMO_SENDER_EMAIL` must be a verified identity/domain in SES for the target region.
+1. Add a new connector class under `connectors/` extending `BaseConnector`.
+2. Register provider key mapping in `connectors/registry.py`.
+3. Keep provider-specific response translation inside connector code.
+4. Add tests for success, fallback, and error behavior.
+5. Update this README when provider keys or connector files change.

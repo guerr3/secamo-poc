@@ -1,64 +1,54 @@
-# Tests - verification suites for contracts, ingress, activities, and connectors
+# Tests
 
-> This module contains automated tests that validate integration boundaries and behavior without live external dependencies.
+Automated verification for routing, normalization, workflows, activities, connectors, ingress handlers, and Terraform guardrails.
 
-## Responsibilities
+## Suite Map
 
-- Validate model contracts and mapping transformations.
-- Verify ingress routing, signature handling, and callback handling paths.
-- Validate activity behavior and connector dispatch semantics.
-- Provide regression safety for workflow-adjacent helper logic.
+| Path               | Focus                                                          |
+| ------------------ | -------------------------------------------------------------- |
+| `test_activities/` | Activity behavior, retries, and provider capability boundaries |
+| `approval/`        | HiTL callback and token-store behavior                         |
+| `auth/`            | Auth validator and resolver behavior                           |
+| `contracts/`       | Contract ownership and import guardrails                       |
+| `normalization/`   | Envelope-to-case normalization behavior                        |
+| `routing/`         | Route registry and route resolution behavior                   |
+| `e2e/`             | End-to-end-oriented scenarios (mocked boundaries)              |
 
-## File Reference
+Selected root suites:
 
-| File                                  | Responsibility                                            |
-| ------------------------------------- | --------------------------------------------------------- |
-| `approval/`                           | Approval-related test suites.                             |
-| `auth/`                               | Auth validation and resolver tests.                       |
-| `conftest.py`                         | Shared pytest fixtures and configuration.                 |
-| `contracts/`                          | Guardrails for legacy contract-import and boundary rules. |
-| `e2e/`                                | End-to-end oriented test scenarios.                       |
-| `normalization/`                      | Normalization and canonical mapping tests.                |
-| `README.md`                           | Module documentation.                                     |
-| `routing/`                            | Routing and dispatch behavior tests.                      |
-| `test_activities/`                    | Activity-focused test suites.                             |
-| `test_connectors_resilience.py`       | Connector resilience and error-path tests.                |
-| `test_graph_client.py`                | Graph client token/cache tests.                           |
-| `test_graph_webhook_routing.py`       | Graph webhook route resolution tests.                     |
-| `test_hitl_child_identity_rebind.py`  | HiTL child workflow identity and signal behavior tests.   |
-| `test_ingress_graph_notifications.py` | Graph notification ingress behavior tests.                |
-| `test_ingress_hitl_respond.py`        | HiTL callback ingress endpoint behavior tests.            |
-| `test_ingress_mappers.py`             | Ingress mapper normalization tests.                       |
-| `test_jira_provisioner.py`            | Jira provisioner behavior tests.                          |
-| `test_models.py`                      | Shared model mapping and validation tests.                |
-| `test_stub_connectors.py`             | Stub connector behavior tests.                            |
-| `__pycache__/`                        | Generated Python bytecode cache directory.                |
+- `test_case_intake_routing.py`
+- `test_dispatcher_signal_normalization.py`
+- `test_signal_workflow_structure.py`
+- `test_worker_signal_registration.py`
+- `test_polling_manager_helpers.py`
+- `test_ingress_terraform_graph_validation_route.py`
+- `test_connectors_resilience.py`
+- `test_iam_onboarding_normalization.py`
 
-## Key Concepts
+## Test Principles
 
-- Boundary-first testing: tests target contracts and boundary behavior where ingress, routing, activity, and connector concerns intersect.
-- Isolation by mocking: AWS/provider/Temporal interactions are mocked to keep tests deterministic and CI-friendly.
-- Coverage by module intent: folder- and file-level suites align with architecture layers and key extension points.
+- Keep tests deterministic and offline (mock AWS/provider/Temporal boundaries).
+- Add regression tests for every bug fix in routing, normalization, workflow wiring, and connector behavior.
+- Keep structural guardrail tests in place for route/worker parity and workflow registration assumptions.
 
-## Usage
+## Run and Verify
 
-Most suites run directly from repository root with pytest.
+Run all tests:
 
 ```bash
 python -m pytest -q
 ```
 
-## Testing
+Run focused high-signal suites for recent changes:
 
 ```bash
-python -m pytest -q
-python -m pytest -q tests/test_activities
+python -m pytest -q tests/test_dispatcher_signal_normalization.py tests/test_signal_workflow_structure.py tests/test_worker_signal_registration.py tests/test_polling_manager_helpers.py tests/test_ingress_terraform_graph_validation_route.py tests/test_activities/test_hitl_token_workflow_target.py
 ```
 
-## Extension Points
+## Change Checklist
 
-1. Add new tests near the impacted behavior area (for example `test_activities/`, `routing/`, or root test files).
-2. Reuse fixtures from `conftest.py` for stable setup and teardown.
-3. Mock external systems; do not call live AWS or provider APIs.
-4. Add regression tests for bug fixes and edge-case branches.
-5. Update this file reference when a new top-level test file or folder is introduced.
+1. Add tests in the closest behavioral area (activities/routing/normalization/workflow/ingress).
+2. Keep fixtures centralized in `conftest.py`.
+3. Avoid live cloud/provider calls.
+4. Cover both success path and policy/guardrail failures.
+5. Update this README when new top-level suites or test folders are added.

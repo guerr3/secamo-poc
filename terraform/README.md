@@ -1,61 +1,53 @@
-# Terraform - infrastructure definitions for ingress, runtime, and storage layers
+# Terraform
 
-> This module provisions infrastructure for multiple isolated runtime environments.
-
-## Responsibilities
-
-- Define reusable infrastructure modules for network, security, compute, ingress, storage, and database.
-- Define environment entrypoints with isolated state and lifecycle.
-- Provide bootstrap scripts and compose assets for local/self-hosted Temporal runtime.
-- Keep runtime infrastructure aligned with ingress/worker/activity operational requirements.
+Infrastructure-as-code for ingress, runtime, storage, and environment-specific deployment topologies.
 
 ## Environment Inventory
 
-| Environment                  | Purpose                                                 |
-| ---------------------------- | ------------------------------------------------------- |
-| `environments/poc`           | Main modular AWS PoC environment.                       |
-| `environments/temporal-test` | Single-node Temporal validation environment on EC2.     |
-| `environments/demo_tenant`   | Tenant-scoped demo environment (AWS + Azure resources). |
-| `environments/demo_vm_aws`   | Standalone AWS Windows VM demo/testing environment.     |
+| Environment                  | Purpose                                                     |
+| ---------------------------- | ----------------------------------------------------------- |
+| `environments/poc`           | Main modular PoC environment                                |
+| `environments/temporal-test` | Single EC2 Temporal stack validation environment            |
+| `environments/demo_tenant`   | Tenant-scoped demo footprint (AWS SSM + Azure VM resources) |
+| `environments/demo_vm_aws`   | Standalone AWS Windows VM demo environment                  |
 
-## File Reference
+## Module Scope
 
-| File                 | Responsibility                                                      |
-| -------------------- | ------------------------------------------------------------------- |
-| `.gitignore`         | Ignore Terraform local state and cache artifacts.                   |
-| `encryption.json`    | S3 encryption policy snippet reference.                             |
-| `environments/`      | Environment-specific Terraform entrypoints and state configuration. |
-| `GUIDE.md`           | Detailed Terraform operator guide.                                  |
-| `modules/`           | Reusable Terraform modules.                                         |
-| `public-access.json` | S3 public access block policy snippet reference.                    |
-| `README.md`          | Module documentation.                                               |
-| `scripts/`           | Bootstrap scripts for infrastructure hosts.                         |
-| `temporal-compose/`  | Compose files and helper scripts for Temporal stack startup.        |
-| `walkthrough.md`     | Terraform quick-start workflow guide.                               |
+- `modules/ingress`: API Gateway + proxy/authorizer Lambdas, including Graph notification routes and HiTL callback routes.
+- `modules/storage`: evidence/audit storage resources.
+- `temporal-compose/`: local/self-hosted Temporal startup artifacts.
+- `scripts/`: bootstrap scripts for host/runtime setup.
+
+## Runtime Notes (Current Behavior)
+
+- Ingress Terraform defines both POST and GET methods for Graph notifications route (`/api/v1/graph/notifications/{tenant_id}`), where GET supports Graph validation token exchange.
+- Ingress Terraform includes HiTL callback routes (`/api/v1/hitl/respond` and `/api/v1/hitl/jira/{tenant_id}`).
+- Temporal namespace bootstrap script auto-creates required custom search attributes (`TenantId`, `CaseType`, `Severity`, `HiTLStatus`) idempotently.
+- Temporal-test environment IAM policy now includes access to HiTL token table for worker/runtime operations.
 
 ## Usage
-
-Run Terraform from an environment directory:
 
 ```bash
 cd terraform/environments/<environment>
 terraform init
+terraform fmt -check
+terraform validate
 terraform plan
 terraform apply
 ```
 
-## Validation
+## Verification
+
+Infrastructure guardrail tests:
 
 ```bash
-cd terraform/environments/<environment>
-terraform fmt -check
-terraform validate
+python -m pytest -q tests/test_ingress_terraform_graph_validation_route.py
 ```
 
-## Extension Points
+## Change Checklist
 
-1. Add or extend a module under `terraform/modules/` for new infrastructure capabilities.
-2. Wire module inputs/outputs in the target environment entrypoint under `terraform/environments/`.
-3. Keep IAM, networking, and runtime env vars aligned with code-level expectations.
+1. Keep environment variables aligned with runtime code expectations.
+2. Keep ingress routes and handler mappings aligned.
+3. Keep IAM permissions aligned with activity/runtime storage access patterns.
 4. Validate with `terraform fmt -check` and `terraform validate` before apply.
-5. Update environment walkthrough docs when environment behavior changes.
+5. Update environment-specific README files when behavior changes.

@@ -1,64 +1,47 @@
-# Shared - cross-cutting contracts, routing, auth, and runtime helpers
+# Shared
 
-> This module provides the shared types and infrastructure-facing helpers used by ingress, workflows, activities, and tests.
+This module is the cross-cutting contract and runtime boundary layer used by ingress, workflows, activities, workers, and tests.
 
-## Responsibilities
+## Contract Ownership
 
-- Define shared runtime configuration, model contracts, and normalization/routing boundaries.
-- Define strict Envelope-first canonical contracts used across ingress, routing, and workflow dispatch.
-- Provide ingress/auth abstractions and validator wiring used by Lambda ingress paths.
-- Provide tenant/bootstrap helper utilities used by workflows and activities.
-- Host provider factory and protocol interfaces for identity, EDR, ticketing, threat-intel, and integrations.
+- `shared.models` owns domain and event contracts.
+- `shared.providers` owns provider protocols/types and provider-capability boundaries.
+- Routing, normalization, and ingress dispatch utilities are centralized here to prevent drift.
 
-## File Reference
+## Package Map
 
-| File                  | Responsibility                                                                                           |
-| --------------------- | -------------------------------------------------------------------------------------------------------- |
-| `__init__.py`         | Shared package marker.                                                                                   |
-| `approval/`           | Approval contracts, callback normalization, and token store logic.                                       |
-| `auth/`               | Auth contracts, registry, secret resolution, and validators.                                             |
-| `config.py`           | Runtime constants (Temporal settings, queue names, and defaults).                                        |
-| `graph_client.py`     | Graph token acquisition and token cache handling.                                                        |
-| `ingress/`            | Ingress pipeline contracts and error definitions.                                                        |
-| `models/`             | Pydantic contracts for envelope payloads, workflow inputs, and domain models.                            |
-| `normalization/`      | Case-intake normalization mappers (Defender alert/impossible-travel to security case input).             |
-| `providers/`          | Provider protocols, type mappings, factory wiring, and capability adapters.                              |
-| `README.md`           | Module documentation.                                                                                    |
-| `routing/`            | Route contracts, route registry, and default route mappings.                                             |
-| `ssm_client.py`       | SSM helper methods for tenant-scoped parameter retrieval.                                                |
-| `temporal/`           | Temporal dispatch/signal abstraction helpers.                                                            |
-| `workflow_helpers.py` | Shared bootstrap, SOC orchestration helpers, observability helpers, and idempotent child-start wrappers. |
-| `__pycache__/`        | Generated Python bytecode cache directory.                                                               |
+| Path                  | Responsibility                                                                     |
+| --------------------- | ---------------------------------------------------------------------------------- |
+| `approval/`           | HiTL approval contracts and token-store helpers                                    |
+| `auth/`               | Auth contracts, validator registry, and secret resolution                          |
+| `config.py`           | Temporal and queue runtime constants plus shared env defaults                      |
+| `graph_client.py`     | Graph/Defender token acquisition and cache behavior                                |
+| `ingress/`            | Shared ingress pipeline contracts and orchestration helpers                        |
+| `models/`             | Canonical envelope and workflow/domain input models                                |
+| `normalization/`      | Typed normalization from inbound envelopes to workflow inputs                      |
+| `providers/`          | Provider contracts, factory wiring, and capability typing                          |
+| `routing/`            | Route contracts, route registry, and default mappings                              |
+| `ssm_client.py`       | Tenant-scoped SSM read/write helpers                                               |
+| `temporal/`           | Dispatch and workflow-starter abstractions                                         |
+| `workflow_helpers.py` | Shared workflow helper primitives (bootstrap, observability, child start wrappers) |
 
-## Key Concepts
+## Runtime Notes (Current Behavior)
 
-- Contract-first boundaries: ingress, workflow, and activity layers exchange typed models to keep replay and serialization behavior stable.
-- Envelope-first orchestration: ingress builds immutable `Envelope` objects with discriminated payload variants (`SecamoEventVariant`) and deterministic `event_id`.
-- Route registry abstraction: webhook, provider-event, and polling routes are centrally defined and reused across ingress and polling dispatch.
-- Shared auth validation: channel/provider auth checks are routed through a registry to prevent duplicated security logic in handlers.
-- Lazy AWS client initialization: shared/runtime integrations should avoid import-time boto3 client construction to keep Lambda cold-start/test behavior predictable.
+- Signal routing uses explicit rule predicates for `defender.security_signal` variants (`signin_log`, `risky_user`, `noncompliant_device`, `audit_log`).
+- `workflow_input_for_route` shapes route payloads into typed inputs for IAM and dedicated SOC signal workflows.
+- Ingress fanout and polling dispatch share the same route registry semantics.
+- Auth validation is registry-driven and centralized for ingress routes.
 
-## Usage
-
-Other modules import shared contracts and helpers instead of re-defining cross-cutting logic.
-
-```python
-from shared.config import QUEUE_EDR
-from shared.routing.defaults import build_default_route_registry
-from shared.models.canonical import Envelope
-```
-
-## Testing
+## Run and Verify
 
 ```bash
-python -m pytest -q tests/test_models.py tests/test_graph_client.py tests/test_case_intake_routing.py tests/test_graph_webhook_routing.py
+python -m pytest -q tests/test_models.py tests/test_graph_client.py tests/test_case_intake_routing.py tests/test_dispatcher_signal_normalization.py tests/test_graph_webhook_routing.py
 ```
 
-## Extension Points
+## Change Checklist
 
-1. Add new shared contracts under the relevant `shared/*` subpackage.
-2. Keep naming and typing consistent with existing Pydantic model conventions.
-3. For new dispatch behavior, update `shared/routing/defaults.py`, `shared/routing/registry.py`, and related contracts.
-4. Keep workflow dispatch boundaries Envelope-compatible and deterministic.
-5. Add tests under `tests/` that validate routing, dispatch, and caller compatibility.
-6. Update this file table when top-level module contents change.
+1. Place new contract types in the correct ownership package (`models` vs `providers`).
+2. Keep routing updates in `shared/routing/defaults.py` and verify with tests.
+3. Keep workflow input shaping in `shared/temporal/dispatcher.py`.
+4. Keep ingress auth behavior in shared auth validators/registry.
+5. Update this README when shared package responsibilities or boundaries change.
