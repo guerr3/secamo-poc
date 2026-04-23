@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from datetime import datetime, timezone
-from uuid import uuid4
 
 from shared.models.canonical import (
     Correlation,
@@ -22,6 +23,62 @@ def _severity_to_id(severity: str | None) -> int:
         "critical": 80,
     }
     return mapping.get(str(severity or "").strip().lower(), 40)
+
+
+def _deterministic_payload_hash(
+    *,
+    tenant_id: str,
+    event_type: str,
+    provider: str,
+    raw_body: dict,
+) -> str:
+    """Build a stable hash from the canonical payload when no provider ID is available."""
+    seed = {
+        "tenant_id": tenant_id,
+        "event_type": event_type,
+        "provider": provider,
+        "body": raw_body,
+    }
+    canonical = json.dumps(seed, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _resolve_provider_event_id(
+    *,
+    normalized: dict,
+    raw_body: dict,
+    tenant_id: str,
+    event_type: str,
+    provider: str,
+) -> str:
+    """Deterministic extraction chain for provider_event_id.
+
+    Order: normalized event_id → raw event_id → correlation_id →
+    request_id → deterministic payload hash composite.
+    """
+    # 1. Normalized event id
+    candidate = normalized.get("event_id")
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+
+    # 2. Raw event id
+    candidate = raw_body.get("event_id")
+    if isinstance(candidate, str) and candidate.strip():
+        return candidate.strip()
+
+    # 3. Correlation id / request id
+    for key in ("correlation_id", "request_id"):
+        candidate = normalized.get(key) or raw_body.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    # 4. Deterministic payload hash (last resort)
+    return _deterministic_payload_hash(
+        tenant_id=tenant_id,
+        event_type=event_type,
+        provider=provider,
+        raw_body=raw_body,
+    )
 
 
 def _parse_occurred_at(raw_body: dict) -> datetime:
@@ -54,7 +111,13 @@ def build_envelope(
     tenant_id: str,
     event_type: str,
 ) -> Envelope:
-    provider_event_id = str(normalized.get("event_id") or raw_body.get("event_id") or uuid4())
+    provider_event_id = _resolve_provider_event_id(
+        normalized=normalized,
+        raw_body=raw_body,
+        tenant_id=tenant_id,
+        event_type=event_type,
+        provider=provider,
+    )
     occurred_at = _parse_occurred_at(raw_body)
     correlation_id = str(normalized.get("correlation_id") or raw_body.get("correlation_id") or provider_event_id)
     request_id = str(raw_body.get("request_id") or correlation_id)

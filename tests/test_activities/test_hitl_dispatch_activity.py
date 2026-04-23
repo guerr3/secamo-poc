@@ -104,9 +104,47 @@ async def test_request_hitl_approval_raises_when_all_channels_fail(monkeypatch) 
 
 
 @pytest.mark.asyncio
-async def test_dispatch_jira_creates_ticket_with_workflow_labels(monkeypatch) -> None:
+async def test_dispatch_jira_updates_existing_ticket_with_idempotency_key(monkeypatch) -> None:
     request = _sample_request(["jira"])
     request = request.model_copy(update={"ticket_key": "SEC-5", "metadata": {"severity": "high"}})
+    binding = HitlCallbackBinding(
+        token="tok-123456789",
+        callback_endpoint="https://example.com/api/v1/hitl/respond",
+        workflow_id="child-hitl-123",
+        run_id="child-run-123",
+        allowed_actions=("dismiss", "isolate"),
+    )
+
+    captured: dict = {}
+
+    async def _fake_connector_execute_action(tenant_id, provider, action, payload):
+        captured["tenant_id"] = tenant_id
+        captured["provider"] = provider
+        captured["action"] = action
+        captured["payload"] = payload
+        return SimpleNamespace(data=SimpleNamespace(payload={"issueKey": "HELP-101"}))
+
+    async def _tenant_cfg(_tenant_id):
+        return SimpleNamespace(ticketing_provider="jira")
+
+    monkeypatch.setattr(hitl_module, "get_tenant_config", _tenant_cfg)
+    monkeypatch.setattr(hitl_module, "connector_execute_action", _fake_connector_execute_action)
+
+    result = await hitl_module._dispatch_jira(request, binding)
+
+    assert result.success is True
+    assert result.message_id == "SEC-5"
+    assert captured["provider"] == "jira"
+    assert captured["action"] == "update_issue"
+    assert captured["payload"]["ticket_id"] == "SEC-5"
+    assert "comment" in captured["payload"]
+    assert "comment_idempotency_key" in captured["payload"]
+    assert len(captured["payload"]["comment_idempotency_key"]) == 64
+
+
+@pytest.mark.asyncio
+async def test_dispatch_jira_creates_ticket_when_ticket_key_missing(monkeypatch) -> None:
+    request = _sample_request(["jira"])
     binding = HitlCallbackBinding(
         token="tok-123456789",
         callback_endpoint="https://example.com/api/v1/hitl/respond",
@@ -138,7 +176,6 @@ async def test_dispatch_jira_creates_ticket_with_workflow_labels(monkeypatch) ->
     assert captured["action"] == "create_ticket"
     assert "secamo-wf:child-hitl-123" in captured["payload"]["labels"]
     assert "secamo-run:child-run-123" in captured["payload"]["labels"]
-    assert "secamo-parent:SEC-5" in captured["payload"]["labels"]
 
 
 def test_hitl_email_provider_defaults_to_ses(monkeypatch) -> None:

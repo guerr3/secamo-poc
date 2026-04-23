@@ -226,3 +226,40 @@ async def test_hitl_respond_post_teams_payload_rejects_mismatched_workflow_id(mo
     assert result["statusCode"] == 403
     assert "Workflow identity mismatch" in result["body"]
     assert signal_spy.calls == []
+
+
+async def test_hitl_respond_signals_parent_workflow_id_for_inline_hitl_model(monkeypatch) -> None:
+    """When inline HiTL is used, the token record workflow_id is the parent workflow.
+
+    Confirm the signal is sent to the parent workflow, not a child HiTL workflow.
+    """
+    module = _load_handler_module()
+    monkeypatch.setenv("HITL_TOKEN_TABLE", "hitl-table")
+
+    # Token record carries the *parent* workflow ID (inline model).
+    module._dynamo = _DynamoStub(
+        {
+            "workflow_id": {"S": "ingress-tenant-1-SigninAnomalyDetectionWorkflow-defender.alert-evt-1"},
+            "reviewer_email": {"S": "analyst@example.com"},
+            "allowed_actions": {"SS": ["dismiss", "isolate"]},
+        }
+    )
+    signal_spy = _SignalSpy()
+    monkeypatch.setattr(module.temporal, "signal_workflow", signal_spy)
+
+    event = SimpleNamespace(
+        query_params={"token": "tok-parent-1", "action": "dismiss"},
+        headers={},
+        body={},
+        raw_body="",
+    )
+
+    result = await module.handle_hitl_respond(event)
+
+    assert result["statusCode"] == 200
+    assert len(signal_spy.calls) == 1
+    # Signal targets the parent workflow directly.
+    assert signal_spy.calls[0]["workflow_id"] == "ingress-tenant-1-SigninAnomalyDetectionWorkflow-defender.alert-evt-1"
+    assert signal_spy.calls[0]["signal"] == "approve"
+    assert signal_spy.calls[0]["payload"]["action"] == "dismiss"
+

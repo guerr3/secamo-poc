@@ -382,7 +382,29 @@ class _MicrosoftCapabilityConnector(BaseConnector):
         occurred_at: datetime,
         external_id: str,
     ) -> DefenderSecuritySignalEvent:
-        signal_id = external_id or f"{resource_type}:{provider_event_type}:{int(occurred_at.timestamp())}"
+        if external_id:
+            signal_id = external_id
+        else:
+            # Deterministic composite instead of timestamp-only fallback.
+            import hashlib as _hashlib
+            import json as _json
+
+            seed = {
+                "resource_type": resource_type,
+                "provider_event_type": provider_event_type,
+                "user": self._first_non_empty_str(
+                    item.get("userPrincipalName"),
+                    item.get("userEmail"),
+                    item.get("id"),
+                ) or "",
+                "device": self._first_non_empty_str(
+                    item.get("deviceId"),
+                    item.get("azureADDeviceId"),
+                ) or "",
+                "occurred_at": occurred_at.isoformat(),
+            }
+            canonical = _json.dumps(seed, sort_keys=True, separators=(",", ":"))
+            signal_id = f"{resource_type}:{provider_event_type}:{_hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:16]}"
         severity_id, severity = self._severity_from_signal(item)
         status = self._status_from_signal(item)
         user_principal_name = self._first_non_empty_str(
@@ -473,7 +495,20 @@ class _MicrosoftCapabilityConnector(BaseConnector):
                 external_id=external_id,
             )
 
-        correlation_id = external_id or f"{self.tenant_id}:{provider_event_type}:{int(occurred_at.timestamp())}"
+        if external_id:
+            correlation_id = external_id
+        else:
+            import hashlib as _hashlib
+            import json as _json
+
+            seed = {
+                "tenant_id": self.tenant_id,
+                "provider_event_type": provider_event_type,
+                "occurred_at": occurred_at.isoformat(),
+                "resource_type": resource_type,
+            }
+            canonical = _json.dumps(seed, sort_keys=True, separators=(",", ":"))
+            correlation_id = f"{self.tenant_id}:{provider_event_type}:{_hashlib.sha256(canonical.encode('utf-8')).hexdigest()[:16]}"
         correlation = build_connector_correlation(
             tenant_id=self.tenant_id,
             event_name=payload.event_type,

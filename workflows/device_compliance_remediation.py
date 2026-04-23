@@ -13,19 +13,18 @@ with workflow.unsafe.imports_passed_through():
         edr_isolate_device,
         edr_run_antivirus_scan,
     )
-    from shared.config import QUEUE_INTERACTIONS
+    from activities.hitl import request_hitl_approval
+    from activities.ticketing import ticket_update
     from shared.models import (
         ApprovalDecision,
         ConnectorActionResult,
         DeviceContext,
-        HiTLApprovalRequest,
         HiTLRequest,
         SecurityCaseInput,
         TenantConfig,
         TicketResult,
     )
     from shared.workflow_helpers import bootstrap_tenant, create_soc_ticket, emit_workflow_observability
-    from workflows.child.hitl_approval import HiTLApprovalWorkflow
 
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -58,6 +57,13 @@ def _is_low_device_risk(device_context: DeviceContext | None) -> bool:
 @workflow.defn
 class DeviceComplianceRemediationWorkflow:
     """Handle noncompliant-device signal cases and orchestrate analyst-guided response."""
+
+    def __init__(self) -> None:
+        self._approval: ApprovalDecision | None = None
+
+    @workflow.signal
+    async def approve(self, decision: ApprovalDecision) -> None:
+        self._approval = decision
 
     @workflow.run
     async def run(self, case_input: SecurityCaseInput) -> str:
@@ -167,21 +173,53 @@ class DeviceComplianceRemediationWorkflow:
             },
         )
 
-        decision: ApprovalDecision | None = await workflow.execute_child_workflow(
-            HiTLApprovalWorkflow.run,
-            HiTLApprovalRequest(
-                tenant_id=case_input.tenant_id,
-                hitl_request=hitl_request,
-                hitl_timeout_hours=config.hitl_timeout_hours,
-                auto_isolate_on_timeout=config.auto_isolate_on_timeout,
-                escalation_enabled=config.escalation_enabled,
-                edr_provider=config.edr_provider,
-                ticketing_provider=config.ticketing_provider,
-                device_id=device_id,
-            ),
-            id=f"{workflow.info().workflow_id}-hitl-approval",
-            task_queue=QUEUE_INTERACTIONS,
+        decision: ApprovalDecision | None
+        self._approval = None
+        hitl_request = hitl_request.model_copy(
+            update={
+                "run_id": workflow.info().run_id,
+            }
         )
+        await workflow.execute_activity(
+            request_hitl_approval,
+            args=[case_input.tenant_id, hitl_request],
+            start_to_close_timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
+        try:
+            await workflow.wait_condition(
+                lambda: self._approval is not None,
+                timeout=timedelta(hours=config.hitl_timeout_hours),
+            )
+            decision = self._approval
+        except TimeoutError:
+            if config.auto_isolate_on_timeout and device_id:
+                await workflow.execute_activity(
+                    edr_isolate_device,
+                    args=[
+                        case_input.tenant_id,
+                        device_id,
+                    ],
+                    start_to_close_timeout=TIMEOUT,
+                    retry_policy=runtime_retry,
+                )
+
+            if config.escalation_enabled and ticket.ticket_id:
+                await workflow.execute_activity(
+                    ticket_update,
+                    args=[
+                        case_input.tenant_id,
+                        config.ticketing_provider,
+                        ticket.ticket_id,
+                        {
+                            "status": "escalated",
+                            "note": "Geen beslissing binnen timeout — geescaleerd.",
+                        },
+                    ],
+                    start_to_close_timeout=TIMEOUT,
+                    retry_policy=runtime_retry,
+                )
+            decision = None
 
         action_taken = "timeout_or_none"
         if decision is not None:

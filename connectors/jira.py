@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timezone
+import json
 from typing import Any
 
 import httpx
@@ -213,6 +214,30 @@ class JiraConnector(BaseConnector):
             return fallback_id
         raise ConnectorPermanentError(f"Unable to resolve transition for issue '{issue_key}'")
 
+    async def _comment_marker_exists(self, issue_key: str, marker: str) -> bool:
+        start_at = 0
+        max_results = 50
+
+        while True:
+            response = await self._request_with_retry(
+                "GET",
+                f"{self._base_url()}/rest/api/3/issue/{issue_key}/comment",
+                params={
+                    "startAt": str(start_at),
+                    "maxResults": str(max_results),
+                },
+            )
+            body = response.json()
+            comments = body.get("comments", [])
+            for comment in comments:
+                if marker in json.dumps(comment.get("body", ""), sort_keys=True):
+                    return True
+
+            total = int(body.get("total") or 0)
+            start_at += len(comments)
+            if not comments or start_at >= total:
+                return False
+
     async def execute_action(self, action: str, payload: dict) -> dict:
         base_url = self._base_url()
 
@@ -316,11 +341,23 @@ class JiraConnector(BaseConnector):
 
             comment = payload.get("comment")
             if isinstance(comment, str) and comment.strip():
-                await self._request_with_retry(
-                    "POST",
-                    f"{base_url}/rest/api/3/issue/{issue_key}/comment",
-                    json={"body": self._adf_text(comment.strip())},
-                )
+                idempotency_key = str(payload.get("comment_idempotency_key") or "").strip()
+                marker = f"[secamo-idempotency-key:{idempotency_key}]" if idempotency_key else ""
+
+                should_post = True
+                if marker:
+                    should_post = not await self._comment_marker_exists(issue_key, marker)
+
+                comment_text = comment.strip()
+                if marker and marker not in comment_text:
+                    comment_text = f"{comment_text}\n\n{marker}"
+
+                if should_post:
+                    await self._request_with_retry(
+                        "POST",
+                        f"{base_url}/rest/api/3/issue/{issue_key}/comment",
+                        json={"body": self._adf_text(comment_text)},
+                    )
 
             transition_id = payload.get("transition_id")
             transition_name = payload.get("transition_name")

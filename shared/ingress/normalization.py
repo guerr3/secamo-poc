@@ -248,8 +248,28 @@ def normalize_event_body(provider: str, event_type: str, tenant_id: str, raw_bod
     key = (provider, event_type)
     normalizer = _NORMALIZERS.get(key)
     if normalizer is None:
+        fallback_event_id = (
+            raw_body.get("event_id")
+            or raw_body.get("id")
+            or raw_body.get("correlation_id")
+            or raw_body.get("request_id")
+        )
+        if not fallback_event_id:
+            # Deterministic hash composite to avoid dedup collisions.
+            import hashlib
+            import json as _json
+
+            seed = {
+                "provider": provider,
+                "tenant_id": tenant_id,
+                "event_type": event_type,
+                "body": raw_body,
+            }
+            canonical = _json.dumps(seed, sort_keys=True, separators=(",", ":"), default=str)
+            fallback_event_id = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
         return _build_security_event(
-            event_id=raw_body.get("event_id") or f"{provider}-{tenant_id}",
+            event_id=fallback_event_id,
             event_type=event_type,
             tenant_id=tenant_id,
             provider=provider,

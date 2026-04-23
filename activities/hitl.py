@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
+import json
 import os
 import time
 from urllib.parse import urlencode
@@ -137,6 +138,22 @@ def _name_prefix() -> str:
 def _join_query_url(base_url: str, token: str, action: str) -> str:
     separator = "&" if "?" in base_url else "?"
     return f"{base_url}{separator}{urlencode({'token': token, 'action': action})}"
+
+
+def _approval_comment_idempotency_key(request: HiTLRequest, binding: HitlCallbackBinding) -> str:
+    """Build a stable idempotency key for Jira threaded approval comments."""
+    seed = {
+        "workflow_id": request.workflow_id,
+        "run_id": request.run_id,
+        "tenant_id": request.tenant_id,
+        "ticket_key": request.ticket_key or "",
+        "title": request.title,
+        "description": request.description,
+        "allowed_actions": list(request.allowed_actions),
+        "callback_endpoint": binding.callback_endpoint,
+    }
+    canonical = json.dumps(seed, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def _put_token_record(request: HiTLRequest, token: str) -> None:
@@ -355,24 +372,40 @@ async def _dispatch_ticketing(
     ticketing_provider = cfg.ticketing_provider
 
     description = _render_jira_approval_description(request, action_urls)
-    action_result = await connector_execute_action(
-        request.tenant_id,
-        ticketing_provider,
-        "create_ticket",
-        {
-            "title": request.title,
-            "description": description,
-            "labels": labels,
-            "request_field_values": {
-                "summary": request.title,
-                "description": description,
+    if request.ticket_key:
+        action_result = await connector_execute_action(
+            request.tenant_id,
+            ticketing_provider,
+            "update_issue",
+            {
+                "ticket_id": request.ticket_key,
+                "comment": description,
+                "comment_idempotency_key": _approval_comment_idempotency_key(request, binding),
             },
-            "priority": request.metadata.get("severity"),
-        },
-    )
+        )
+    else:
+        action_result = await connector_execute_action(
+            request.tenant_id,
+            ticketing_provider,
+            "create_ticket",
+            {
+                "title": request.title,
+                "description": description,
+                "labels": labels,
+                "request_field_values": {
+                    "summary": request.title,
+                    "description": description,
+                },
+                "priority": request.metadata.get("severity"),
+            },
+        )
 
     payload = action_result.data.payload
-    ticket_ref = str(payload.get("key") or payload.get("issueKey") or payload.get("id") or "").strip()
+    ticket_ref = str(
+        payload.get("ticket_id") or payload.get("key") or payload.get("issueKey") or payload.get("id") or ""
+    ).strip()
+    if request.ticket_key:
+        ticket_ref = request.ticket_key
 
     activity.logger.info(
         "[%s] HiTL ticket dispatched workflow_id=%s provider=%s ticket_ref=%s",

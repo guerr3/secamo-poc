@@ -11,6 +11,13 @@ WORKFLOW_FILES = {
     "AuditLogAnomalyWorkflow": Path("workflows/audit_log_anomaly.py"),
 }
 
+# Workflows with inline HiTL approval that must define an approve signal handler.
+INLINE_HITL_WORKFLOW_FILES = {
+    **WORKFLOW_FILES,
+    "SocAlertTriageWorkflow": Path("workflows/soc_alert_triage.py"),
+    "IamOnboardingWorkflow": Path("workflows/iam_onboarding.py"),
+}
+
 
 def _read_source(path: Path) -> str:
     return path.read_text(encoding="utf-8")
@@ -37,6 +44,20 @@ def _find_run_method(path: Path) -> ast.AsyncFunctionDef | ast.FunctionDef | Non
             if isinstance(child, (ast.AsyncFunctionDef, ast.FunctionDef)) and child.name == "run":
                 return child
     return None
+
+
+def _find_class_method_names(path: Path) -> set[str]:
+    """Return the set of method names on the first workflow class in the file."""
+    module = ast.parse(_read_source(path))
+    names: set[str] = set()
+    for node in module.body:
+        if not isinstance(node, ast.ClassDef):
+            continue
+        for child in node.body:
+            if isinstance(child, (ast.AsyncFunctionDef, ast.FunctionDef)):
+                names.add(child.name)
+        break
+    return names
 
 
 def test_all_four_workflows_define_run_method_with_security_case_input() -> None:
@@ -98,3 +119,22 @@ def test_no_normalize_call_inside_workflow_files() -> None:
         source = _read_source(path)
         for forbidden in forbidden_normalizers:
             assert forbidden not in source
+
+
+def test_all_inline_hitl_workflows_define_approve_signal_handler() -> None:
+    """Every workflow with inline HiTL must have an 'approve' method to receive decisions."""
+    for workflow_name, path in INLINE_HITL_WORKFLOW_FILES.items():
+        method_names = _find_class_method_names(path)
+        assert "approve" in method_names, (
+            f"{workflow_name} must define an 'approve' signal handler for inline HiTL"
+        )
+
+
+def test_soc_alert_triage_workflow_defines_run_method() -> None:
+    path = INLINE_HITL_WORKFLOW_FILES["SocAlertTriageWorkflow"]
+    run_method = _find_run_method(path)
+    assert run_method is not None, "SocAlertTriageWorkflow is missing run() method"
+
+    non_self_args = [arg for arg in run_method.args.args if arg.arg != "self"]
+    assert non_self_args, "SocAlertTriageWorkflow.run() must declare an input argument"
+    assert _annotation_name(non_self_args[0].annotation) == "Envelope"

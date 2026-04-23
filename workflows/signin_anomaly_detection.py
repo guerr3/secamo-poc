@@ -6,12 +6,13 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy, SearchAttributeKey
 
 with workflow.unsafe.imports_passed_through():
-    from activities.edr import edr_get_signin_history
+    from activities.edr import edr_get_signin_history, edr_isolate_device
+    from activities.hitl import request_hitl_approval
     from activities.identity import identity_get_identity_risk
-    from shared.config import QUEUE_EDR, QUEUE_INTERACTIONS
+    from activities.ticketing import ticket_update
+    from shared.config import QUEUE_EDR
     from shared.models import (
         ApprovalDecision,
-        HiTLApprovalRequest,
         HiTLRequest,
         IncidentResponseRequest,
         IdentityRiskContext,
@@ -28,7 +29,6 @@ with workflow.unsafe.imports_passed_through():
         resolve_threat_intel,
     )
     from workflows.child.incident_response import IncidentResponseWorkflow
-    from workflows.child.hitl_approval import HiTLApprovalWorkflow
 
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -84,6 +84,13 @@ def _signin_has_anomaly_indicators(signin_history: list[SignInEvent]) -> bool:
 @workflow.defn
 class SigninAnomalyDetectionWorkflow:
     """Analyze sign-in signal cases and escalate only confirmed anomalies."""
+
+    def __init__(self) -> None:
+        self._approval: ApprovalDecision | None = None
+
+    @workflow.signal
+    async def approve(self, decision: ApprovalDecision) -> None:
+        self._approval = decision
 
     @workflow.run
     async def run(self, case_input: SecurityCaseInput) -> str:
@@ -187,21 +194,53 @@ class SigninAnomalyDetectionWorkflow:
             },
         )
 
-        decision: ApprovalDecision | None = await workflow.execute_child_workflow(
-            HiTLApprovalWorkflow.run,
-            HiTLApprovalRequest(
-                tenant_id=case_input.tenant_id,
-                hitl_request=hitl_request,
-                hitl_timeout_hours=config.hitl_timeout_hours,
-                auto_isolate_on_timeout=config.auto_isolate_on_timeout,
-                escalation_enabled=config.escalation_enabled,
-                edr_provider=config.edr_provider,
-                ticketing_provider=config.ticketing_provider,
-                device_id=case_input.device,
-            ),
-            id=f"{workflow.info().workflow_id}-hitl-approval",
-            task_queue=QUEUE_INTERACTIONS,
+        decision: ApprovalDecision | None
+        self._approval = None
+        hitl_request = hitl_request.model_copy(
+            update={
+                "run_id": workflow.info().run_id,
+            }
         )
+        await workflow.execute_activity(
+            request_hitl_approval,
+            args=[case_input.tenant_id, hitl_request],
+            start_to_close_timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
+        try:
+            await workflow.wait_condition(
+                lambda: self._approval is not None,
+                timeout=timedelta(hours=config.hitl_timeout_hours),
+            )
+            decision = self._approval
+        except TimeoutError:
+            if config.auto_isolate_on_timeout and case_input.device:
+                await workflow.execute_activity(
+                    edr_isolate_device,
+                    args=[
+                        case_input.tenant_id,
+                        case_input.device,
+                    ],
+                    start_to_close_timeout=TIMEOUT,
+                    retry_policy=runtime_retry,
+                )
+
+            if config.escalation_enabled and ticket.ticket_id:
+                await workflow.execute_activity(
+                    ticket_update,
+                    args=[
+                        case_input.tenant_id,
+                        config.ticketing_provider,
+                        ticket.ticket_id,
+                        {
+                            "status": "escalated",
+                            "note": "Geen beslissing binnen timeout — geescaleerd.",
+                        },
+                    ],
+                    start_to_close_timeout=TIMEOUT,
+                    retry_policy=runtime_retry,
+                )
+            decision = None
 
         remediation_result = "not_triggered"
         if (

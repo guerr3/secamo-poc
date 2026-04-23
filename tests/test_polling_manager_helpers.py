@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-from shared.models import Correlation, DefenderDetectionFindingEvent, Envelope, StoragePartition
+from shared.models import Correlation, DefenderDetectionFindingEvent, DefenderSecuritySignalEvent, Envelope, StoragePartition
 from workflows.polling_manager import _child_workflow_id, _extract_provider_event_id
 
 
@@ -45,6 +45,48 @@ def _build_envelope(*, provider_event_id: str | None = None) -> Envelope:
     )
 
 
+def _build_signal_envelope(*, provider_event_id: str | None = None, signal_id: str = "signal-abc") -> Envelope:
+    """Build an envelope with a DefenderSecuritySignalEvent payload (has signal_id, no alert_id)."""
+    metadata = {}
+    if provider_event_id is not None:
+        metadata["provider_event_id"] = provider_event_id
+
+    return Envelope(
+        event_id="wf-signal-event-id",
+        tenant_id="tenant-1",
+        source_provider="microsoft_defender",
+        event_name="defender.security_signal",
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=datetime(2026, 4, 15, tzinfo=timezone.utc),
+        correlation=Correlation(
+            correlation_id="corr-sig-1",
+            causation_id="corr-sig-1",
+            request_id="req-sig-1",
+            trace_id="trace-sig-1",
+            storage_partition=StoragePartition(
+                ddb_pk="TENANT#tenant-1",
+                ddb_sk="EVENT#defender#security_signal#sig-1",
+                s3_bucket="secamo-events-tenant-1",
+                s3_key_prefix="raw/defender.security_signal/sig-1",
+            ),
+        ),
+        payload=DefenderSecuritySignalEvent(
+            event_type="defender.security_signal",
+            activity_id=2100,
+            activity_name="poller.fetch",
+            signal_id=signal_id,
+            provider_event_type="risky_user",
+            resource_type="entra_risky_users",
+            title="Risky user detected",
+            severity_id=60,
+            severity="high",
+        ),
+        metadata=metadata,
+    )
+
+
 def test_extract_provider_event_id_prefers_metadata() -> None:
     event = _build_envelope(provider_event_id="alert-meta-1")
 
@@ -55,6 +97,20 @@ def test_extract_provider_event_id_falls_back_to_alert_id() -> None:
     event = _build_envelope(provider_event_id=None)
 
     assert _extract_provider_event_id(event) == "alert-fallback-1"
+
+
+def test_extract_provider_event_id_falls_back_to_signal_id() -> None:
+    """When metadata has no provider_event_id and payload has no alert_id, use signal_id."""
+    event = _build_signal_envelope(provider_event_id=None, signal_id="risky-user-42")
+
+    assert _extract_provider_event_id(event) == "risky-user-42"
+
+
+def test_extract_provider_event_id_returns_none_when_no_id_available() -> None:
+    """When neither metadata, alert_id, nor signal_id is available, return None."""
+    event = _build_signal_envelope(provider_event_id=None, signal_id="")
+
+    assert _extract_provider_event_id(event) is None
 
 
 def test_child_workflow_id_sanitizes_event_identifier() -> None:

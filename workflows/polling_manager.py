@@ -44,6 +44,10 @@ def _extract_provider_event_id(event: Envelope) -> str | None:
     if isinstance(payload_alert_id, str) and payload_alert_id.strip():
         return payload_alert_id.strip()
 
+    payload_signal_id = getattr(event.payload, "signal_id", None)
+    if isinstance(payload_signal_id, str) and payload_signal_id.strip():
+        return payload_signal_id.strip()
+
     return None
 
 
@@ -181,6 +185,15 @@ class PollingManagerWorkflow:
 
             provider_event_id = _extract_provider_event_id(event)
             dedup_event_id = provider_event_id or event.event_id
+
+            if provider_event_id is None:
+                workflow.logger.info(
+                    "PollingManager dedup_event_id derived from envelope event_id "
+                    "(no stable provider ID) tenant=%s event_id=%s dedup_id=%s",
+                    input.tenant_id,
+                    event.event_id,
+                    dedup_event_id,
+                )
 
             dedup_result = await workflow.execute_activity(
                 polling_mark_event_processed,

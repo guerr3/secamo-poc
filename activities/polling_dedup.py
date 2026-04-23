@@ -117,6 +117,17 @@ async def polling_mark_event_processed(
         f"{_safe_component(dedup_event_id)}"
     )
 
+    if not provider_event_id:
+        activity.logger.info(
+            "[%s] polling dedup using derived fallback dedup_event_id=%s "
+            "provider=%s resource_type=%s event_type=%s",
+            tenant_id,
+            dedup_event_id,
+            provider,
+            resource_type,
+            event_type,
+        )
+
     try:
         _dynamo.put_item(
             TableName=table_name,

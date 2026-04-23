@@ -132,6 +132,61 @@ async def test_jira_fetch_events_retries_on_429(mocker, jira_secrets):
 
 
 @pytest.mark.asyncio
+async def test_jira_update_issue_comment_idempotency_skips_duplicate_comment(mocker, jira_secrets):
+    connector = JiraConnector(tenant_id="tenant-1", secrets=jira_secrets)
+
+    calls: list[dict[str, Any]] = []
+    posted_comments: list[dict[str, Any]] = []
+
+    async def _fake_request(method: str, url: str, **kwargs):
+        calls.append({"method": method, "url": url, **kwargs})
+
+        if method == "GET" and url.endswith("/comment"):
+            return _Resp(
+                200,
+                body={
+                    "comments": posted_comments,
+                    "startAt": 0,
+                    "maxResults": 50,
+                    "total": len(posted_comments),
+                },
+            )
+
+        if method == "POST" and url.endswith("/comment"):
+            posted_comments.append({"body": kwargs["json"]["body"]})
+            return _Resp(201, body={"id": str(len(posted_comments))})
+
+        if method == "PUT" and "/rest/api/3/issue/" in url:
+            return _Resp(204, body={})
+
+        raise AssertionError(f"Unexpected call: {method} {url}")
+
+    mocker.patch.object(connector, "_request_with_retry", side_effect=_fake_request)
+
+    payload = {
+        "ticket_id": "SOC-101",
+        "comment": "Approval required for sign-in anomaly triage.",
+        "comment_idempotency_key": "wf-hitl-approve-001",
+    }
+
+    first = await connector.execute_action("update_issue", payload)
+    second = await connector.execute_action("update_issue", payload)
+
+    assert first == {"ticket_id": "SOC-101", "updated": True}
+    assert second == {"ticket_id": "SOC-101", "updated": True}
+
+    comment_posts = [
+        call
+        for call in calls
+        if call["method"] == "POST" and str(call["url"]).endswith("/comment")
+    ]
+    assert len(comment_posts) == 1
+
+    posted_text = comment_posts[0]["json"]["body"]["content"][0]["content"][0]["text"]
+    assert "[secamo-idempotency-key:wf-hitl-approve-001]" in posted_text
+
+
+@pytest.mark.asyncio
 async def test_microsoft_transport_retries_on_429(mocker, graph_secrets):
     queue = [
         _Resp(429, headers={"Retry-After": "0"}),

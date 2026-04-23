@@ -24,6 +24,7 @@ def _generate_legacy_temp_password(length: int = 16) -> str:
 
 with workflow.unsafe.imports_passed_through():
     from activities.audit import create_audit_log
+    from activities.hitl import request_hitl_approval
     from activities.identity import (
         identity_assign_license,
         identity_create_user,
@@ -33,9 +34,8 @@ with workflow.unsafe.imports_passed_through():
         identity_revoke_sessions,
         identity_update_user,
     )
-    from shared.config import QUEUE_INTERACTIONS
     from shared.models import (
-        HiTLApprovalRequest,
+        ApprovalDecision,
         HiTLRequest,
         IdentityUser,
         LifecycleAction,
@@ -43,7 +43,6 @@ with workflow.unsafe.imports_passed_through():
         UserLifecycleCaseInput,
     )
     from shared.workflow_helpers import bootstrap_tenant
-    from workflows.child.hitl_approval import HiTLApprovalWorkflow
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
@@ -91,6 +90,13 @@ class IamOnboardingWorkflow:
     Task Queue: user-lifecycle
     Actions: create | update | delete | password_reset
     """
+
+    def __init__(self) -> None:
+        self._approval: ApprovalDecision | None = None
+
+    @workflow.signal
+    async def approve(self, decision: ApprovalDecision) -> None:
+        self._approval = decision
 
     @workflow.run
     async def run(self, case: UserLifecycleCaseInput) -> str:
@@ -159,21 +165,27 @@ class IamOnboardingWorkflow:
                         timeout_hours=config.hitl_timeout_hours,
                     )
 
-                    decision = await workflow.execute_child_workflow(
-                        HiTLApprovalWorkflow.run,
-                        HiTLApprovalRequest(
-                            tenant_id=case.tenant_id,
-                            hitl_request=approval_request,
-                            hitl_timeout_hours=config.hitl_timeout_hours,
-                            auto_isolate_on_timeout=False,
-                            escalation_enabled=False,
-                            edr_provider=config.edr_provider,
-                            ticketing_provider=config.ticketing_provider,
-                            device_id=None,
-                        ),
-                        id=f"{workflow.info().workflow_id}-license-approval",
-                        task_queue=QUEUE_INTERACTIONS,
-                    )
+                    if workflow.patched("wf01-inline-license-hitl-v1"):
+                        self._approval = None
+                        approval_request = approval_request.model_copy(
+                            update={
+                                "run_id": workflow.info().run_id,
+                            }
+                        )
+                        await workflow.execute_activity(
+                            request_hitl_approval,
+                            args=[case.tenant_id, approval_request],
+                            start_to_close_timeout=TIMEOUT,
+                            retry_policy=runtime_retry,
+                        )
+                        try:
+                            await workflow.wait_condition(
+                                lambda: self._approval is not None,
+                                timeout=timedelta(hours=config.hitl_timeout_hours),
+                            )
+                            decision = self._approval
+                        except TimeoutError:
+                            decision = None
 
                     if decision and decision.approved and decision.action == LICENSE_APPROVE_ACTION:
                         await workflow.execute_activity(
