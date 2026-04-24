@@ -308,7 +308,6 @@ def load_workflows() -> dict:
         from workflows.signin_anomaly_detection import SigninAnomalyDetectionWorkflow
         from workflows.soc_alert_triage import SocAlertTriageWorkflow
         from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
-        from workflows.child.hitl_approval import HiTLApprovalWorkflow
         from workflows.child.incident_response import IncidentResponseWorkflow
         from workflows.child.onboarding_subscription_reconcile_stage import OnboardingSubscriptionReconcileStageWorkflow
         from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
