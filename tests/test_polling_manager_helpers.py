@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from shared.models import Correlation, DefenderDetectionFindingEvent, DefenderSecuritySignalEvent, Envelope, StoragePartition
+from shared.routing.defaults import build_default_route_registry
 from workflows.polling_manager import _child_workflow_id, _extract_provider_event_id
 
 
@@ -45,7 +48,13 @@ def _build_envelope(*, provider_event_id: str | None = None) -> Envelope:
     )
 
 
-def _build_signal_envelope(*, provider_event_id: str | None = None, signal_id: str = "signal-abc") -> Envelope:
+def _build_signal_envelope(
+    *,
+    provider_event_id: str | None = None,
+    signal_id: str = "signal-abc",
+    provider_event_type: str = "risky_user",
+    resource_type: str = "entra_risky_users",
+) -> Envelope:
     """Build an envelope with a DefenderSecuritySignalEvent payload (has signal_id, no alert_id)."""
     metadata = {}
     if provider_event_id is not None:
@@ -77,8 +86,8 @@ def _build_signal_envelope(*, provider_event_id: str | None = None, signal_id: s
             activity_id=2100,
             activity_name="poller.fetch",
             signal_id=signal_id,
-            provider_event_type="risky_user",
-            resource_type="entra_risky_users",
+            provider_event_type=provider_event_type,
+            resource_type=resource_type,
             title="Risky user detected",
             severity_id=60,
             severity="high",
@@ -153,3 +162,28 @@ def test_polling_manager_supports_graph_subscription_renewal_poll_type() -> None
     assert "subscription_renew" in source
     assert "GRAPH_RENEWAL_LOOKAHEAD_HOURS = 48" in source
     assert "GRAPH_RENEWAL_EXPIRATION_HOURS = 72" in source
+
+
+@pytest.mark.parametrize(
+    ("provider_event_type", "workflow_name"),
+    [
+        ("signin_log", "SigninAnomalyDetectionWorkflow"),
+        ("risky_user", "RiskyUserTriageWorkflow"),
+        ("noncompliant_device", "DeviceComplianceRemediationWorkflow"),
+        ("audit_log", "AuditLogAnomalyWorkflow"),
+    ],
+)
+def test_polling_signal_envelope_routes_via_exact_provider_event_type_predicates(
+    provider_event_type: str,
+    workflow_name: str,
+) -> None:
+    registry = build_default_route_registry()
+    event = _build_signal_envelope(
+        signal_id=f"signal-{provider_event_type}",
+        provider_event_type=provider_event_type,
+    )
+
+    routes = registry.resolve(event)
+
+    assert len(routes) == 1
+    assert routes[0].workflow_name == workflow_name

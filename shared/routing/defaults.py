@@ -93,27 +93,7 @@ def build_default_route_registry() -> RouteRegistry:
     )
     registry.register(
         "microsoft_defender",
-        "defender.impossible_travel",
-        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
-    )
-    registry.register(
-        "microsoft_defender",
         "alert",
-        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
-    )
-    registry.register(
-        "microsoft_defender",
-        "impossible_travel",
-        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
-    )
-    registry.register(
-        "microsoft_defender",
-        "defender.security_signal",
-        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
-    )
-    registry.register(
-        "microsoft_defender",
-        "security_signal",
         (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(
@@ -203,10 +183,10 @@ def build_default_route_registry() -> RouteRegistry:
     )
 
     registry.register_polling_resource("microsoft_defender", "defender_alerts", "alert")
-    registry.register_polling_resource("microsoft_defender", "entra_signin_logs", "impossible_travel")
-    registry.register_polling_resource("microsoft_defender", "entra_risky_users", "defender.security_signal")
-    registry.register_polling_resource("microsoft_defender", "intune_noncompliant_devices", "defender.security_signal")
-    registry.register_polling_resource("microsoft_defender", "entra_audit_logs", "defender.security_signal")
+    registry.register_polling_resource("microsoft_defender", "entra_signin_logs", "signin_log")
+    registry.register_polling_resource("microsoft_defender", "entra_risky_users", "risky_user")
+    registry.register_polling_resource("microsoft_defender", "intune_noncompliant_devices", "noncompliant_device")
+    registry.register_polling_resource("microsoft_defender", "entra_audit_logs", "audit_log")
 
     registry.register_webhook_resource("microsoft_graph", "security/alerts", "defender.alert")
     registry.register_webhook_resource("microsoft_graph", "security/alerts_v2", "defender.alert")
