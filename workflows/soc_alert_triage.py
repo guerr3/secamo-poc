@@ -24,10 +24,10 @@ with workflow.unsafe.imports_passed_through():
         ThreatIntelResult,
     )
     from shared.models.canonical import (
+        AuthenticationEvent,
         DefenderDetectionFindingEvent,
         DefenderSecuritySignalEvent,
         Envelope,
-        ImpossibleTravelEvent,
         VendorExtension,
     )
     from shared.normalization import (
@@ -74,7 +74,7 @@ def _to_security_case_input(event: Envelope) -> SecurityCaseInput:
     if isinstance(payload, DefenderDetectionFindingEvent):
         return normalize_defender_alert_case(event, auto_remediate=False)
 
-    if isinstance(payload, ImpossibleTravelEvent):
+    if isinstance(payload, AuthenticationEvent):
         return normalize_impossible_travel_case(event, auto_remediate=False)
 
     if isinstance(payload, DefenderSecuritySignalEvent):
@@ -109,7 +109,7 @@ def _build_alert_payload(case_input: SecurityCaseInput) -> DefenderDetectionFind
     if isinstance(payload, DefenderDetectionFindingEvent):
         return payload
 
-    if isinstance(payload, ImpossibleTravelEvent):
+    if isinstance(payload, AuthenticationEvent):
         vendor_extensions = dict(payload.vendor_extensions)
         if payload.source_ip:
             vendor_extensions["source_ip"] = VendorExtension(source="impossible_travel", value=payload.source_ip)
@@ -164,7 +164,7 @@ def _resolve_threat_indicator(case_input: SecurityCaseInput) -> str:
     if source_ip:
         return source_ip
 
-    if isinstance(payload, ImpossibleTravelEvent) and payload.source_ip:
+    if isinstance(payload, AuthenticationEvent) and payload.source_ip:
         return payload.source_ip
 
     return case_input.alert_id

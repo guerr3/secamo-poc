@@ -1,5 +1,4 @@
 from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
-from workflows.child.hitl_approval import HiTLApprovalWorkflow
 from workflows.child.incident_response import IncidentResponseWorkflow
 from workflows.child.onboarding_bootstrap_stage import OnboardingBootstrapStageWorkflow
 from workflows.child.onboarding_communications_stage import OnboardingCommunicationsStageWorkflow
@@ -11,7 +10,6 @@ from workflows.child.user_deprovisioning import UserDeprovisioningWorkflow
 
 __all__ = [
     "AlertEnrichmentWorkflow",
-    "HiTLApprovalWorkflow",
     "IncidentResponseWorkflow",
     "OnboardingBootstrapStageWorkflow",
     "OnboardingCommunicationsStageWorkflow",

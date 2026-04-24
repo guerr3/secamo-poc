@@ -140,12 +140,24 @@ class IdentityRiskContext(BaseModel):
     risk_detail: str | None = None
 
 
-class SecurityCaseInput(BaseModel):
-    """Normalized SOC case intake contract for unified parent orchestration."""
+class BaseCaseInput(BaseModel):
+    """Shared base for all case intake contracts.
+
+    Intentionally minimal: only ``tenant_id`` is shared.  Fields like
+    ``case_id``, ``case_type``, ``severity``, and ``source_event`` belong
+    on the concrete subclasses because ``UserLifecycleCaseInput`` has no
+    alert-identity concept — adding unused optional fields to the base
+    would blur the type boundary.
+    """
 
     model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
+
+
+class SecurityCaseInput(BaseCaseInput):
+    """Normalized SOC case intake contract for unified parent orchestration."""
+
     case_type: Literal[
         "defender_alert",
         "impossible_travel",
@@ -165,17 +177,29 @@ class SecurityCaseInput(BaseModel):
     source_event: Envelope | None = None
 
 
-class UserLifecycleCaseInput(BaseModel):
+class UserLifecycleCaseInput(BaseCaseInput):
     """Typed user-lifecycle case request for future intake extension points."""
 
-    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
-
-    tenant_id: str
     action: Literal["create", "update", "delete", "password_reset"]
     user_id: str
     user_email: str
     requester: str
     user_data: dict[str, Any] = Field(default_factory=dict)
+
+
+class CaseRecord(BaseModel):
+    """DynamoDB persistence state of a case."""
+
+    model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
+
+    case_id: str
+    tenant_id: str
+    status: Literal["open", "closed", "dismissed", "auto_remediated"] = "open"
+    created_at: str
+    updated_at: str
+    source_event_id: str | None = None
+    case_type: str | None = None
+    severity: str | None = None
 
 
 class HiTLCaseInput(BaseModel):
@@ -388,6 +412,7 @@ class HiTLRequest(BaseModel):
     allowed_actions: list[str]
     reviewer_email: str
     ticket_key: Optional[str] = None
+    case_id: Optional[str] = None
     channels: list[str] = Field(default_factory=lambda: ["email", "teams"])
     timeout_hours: int = 8
     metadata: dict = Field(default_factory=dict)

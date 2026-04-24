@@ -324,7 +324,6 @@ def load_workflows() -> dict:
             OnboardingSubscriptionReconcileStageWorkflow,
         ])
         ticketing_workflows.append(TicketCreationWorkflow)
-        interactions_workflows.append(HiTLApprovalWorkflow)
         logger.info("✓ SOC alert triage workflow geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van SOC Alert Triage Workflow: {e}")

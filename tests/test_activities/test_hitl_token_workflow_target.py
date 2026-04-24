@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from workflows.child.hitl_approval import _rebind_hitl_request_for_child
 from shared.models import HiTLRequest
 import activities.hitl as hitl_module
 
@@ -14,15 +13,20 @@ class _DynamoPutSpy:
         return {}
 
 
-def test_put_token_record_uses_child_workflow_id_not_parent(monkeypatch) -> None:
+def test_put_token_record_uses_workflow_id_from_request(monkeypatch) -> None:
+    """Verify _put_token_record writes the correct workflow_id from the HiTLRequest.
+
+    Inline HiTL workflows set workflow_id and run_id via model_copy() before
+    dispatching the approval request — the token record must reflect those values.
+    """
     monkeypatch.setenv("HITL_TOKEN_TABLE", "hitl-table")
 
     put_spy = _DynamoPutSpy()
     monkeypatch.setattr(hitl_module, "_dynamo", put_spy)
 
-    parent_request = HiTLRequest(
-        workflow_id="parent-wf-100",
-        run_id="",
+    request = HiTLRequest(
+        workflow_id="inline-wf-100",
+        run_id="inline-run-100",
         tenant_id="tenant-123",
         title="Approval",
         description="Needs decision",
@@ -32,18 +36,11 @@ def test_put_token_record_uses_child_workflow_id_not_parent(monkeypatch) -> None
         metadata={"ticket": "SEC-9"},
     )
 
-    child_request = _rebind_hitl_request_for_child(
-        parent_request,
-        child_workflow_id="child-hitl-100",
-        child_run_id="child-run-100",
-    )
-
-    hitl_module._put_token_record(child_request, "tok-xyz")
+    hitl_module._put_token_record(request, "tok-xyz")
 
     assert len(put_spy.calls) == 1
     put_call = put_spy.calls[0]
     item = put_call["Item"]
-    assert item["workflow_id"]["S"] == "child-hitl-100"
-    assert item["workflow_id"]["S"] != "parent-wf-100"
+    assert item["workflow_id"]["S"] == "inline-wf-100"
     assert put_call["ConditionExpression"] == "attribute_not_exists(#token)"
     assert put_call["ExpressionAttributeNames"] == {"#token": "token"}

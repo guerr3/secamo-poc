@@ -93,7 +93,17 @@ def build_default_route_registry() -> RouteRegistry:
     )
     registry.register(
         "microsoft_defender",
+        "defender.impossible_travel",
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register(
+        "microsoft_defender",
         "alert",
+        (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
+    )
+    registry.register(
+        "microsoft_defender",
+        "defender.security_signal",
         (WorkflowRoute(workflow_name="SocAlertTriageWorkflow", task_queue=QUEUE_EDR),),
     )
     registry.register(

@@ -121,7 +121,7 @@ class AuditLogRecord(StrictModel):
     alert_id: str | None = None
     ticket_id: str | None = None
     case_type: str | None = None
-    ttl: int | None = None
+    expires_at: int | None = None
 
 
 class DefenderDetectionFindingEvent(StrictModel):

@@ -98,6 +98,31 @@ class AuditLogAnomalyWorkflow:
             else "P2"
         )
 
+        # Gate: suppress SOC ticket for P2/low-risk anomalies — no
+        # infrastructure cost for benign signals.
+        if priority == "P2" and risk_level in {"none", "low"}:
+            await emit_workflow_observability(
+                case_input.tenant_id,
+                workflow_id=workflow.info().workflow_id,
+                action="audit_log_anomaly",
+                result=(
+                    "Audit log anomaly closed without ticket "
+                    f"(priority={priority}, risk={risk_level})."
+                ),
+                metadata={
+                    "case_type": case_input.case_type,
+                    "alert_id": case_input.alert_id,
+                    "severity": case_input.severity,
+                    "priority": priority,
+                    "identity": case_input.identity,
+                    "identity_risk_level": risk_level,
+                    "requester": _requester(case_input),
+                },
+                timeout=TIMEOUT,
+                retry_policy=runtime_retry,
+            )
+            return "Audit log anomaly completed without escalation (suppressed)."
+
         ticket: TicketResult = await create_soc_ticket(
             case_input.tenant_id,
             config,
@@ -112,30 +137,6 @@ class AuditLogAnomalyWorkflow:
             severity=priority,
             source_workflow="WF-AUDIT-LOG-ANOMALY",
         )
-
-        if priority == "P2" and risk_level in {"none", "low"}:
-            await emit_workflow_observability(
-                case_input.tenant_id,
-                workflow_id=workflow.info().workflow_id,
-                action="audit_log_anomaly",
-                result=(
-                    "Audit log anomaly closed after ticket creation "
-                    f"(ticket={ticket.ticket_id}, priority={priority}, risk={risk_level})."
-                ),
-                metadata={
-                    "case_type": case_input.case_type,
-                    "alert_id": case_input.alert_id,
-                    "severity": case_input.severity,
-                    "priority": priority,
-                    "identity": case_input.identity,
-                    "identity_risk_level": risk_level,
-                    "ticket_id": ticket.ticket_id,
-                    "requester": _requester(case_input),
-                },
-                timeout=TIMEOUT,
-                retry_policy=runtime_retry,
-            )
-            return f"Audit log anomaly completed without escalation (ticket={ticket.ticket_id})."
 
         hitl_request = HiTLRequest(
             workflow_id=workflow.info().workflow_id,
