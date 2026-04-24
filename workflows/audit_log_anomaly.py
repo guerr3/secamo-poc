@@ -19,7 +19,13 @@ with workflow.unsafe.imports_passed_through():
         TenantConfig,
         TicketResult,
     )
-    from shared.workflow_helpers import bootstrap_tenant, create_soc_ticket, emit_workflow_observability
+    from shared.workflow_helpers import (
+        bootstrap_tenant,
+        create_soc_ticket,
+        emit_workflow_observability,
+        persist_case_record,
+        update_case,
+    )
 
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -73,6 +79,18 @@ class AuditLogAnomalyWorkflow:
                 "auto_remediate": bool(config.auto_isolate_on_timeout),
                 "allowed_actions": ["dismiss"],
             }
+        )
+
+        case_id = str(workflow.uuid4())
+        await persist_case_record(
+            case_input.tenant_id,
+            case_id,
+            workflow.info().workflow_id,
+            case_input.case_type,
+            case_input.severity,
+            source_event_id=case_input.alert_id,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
         )
 
         identity_lookup = case_input.identity or case_input.alert_id
@@ -136,6 +154,13 @@ class AuditLogAnomalyWorkflow:
             ),
             severity=priority,
             source_workflow="WF-AUDIT-LOG-ANOMALY",
+        )
+
+        await update_case(
+            case_input.tenant_id, case_id, "open",
+            ticket_id=ticket.ticket_id,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
         )
 
         hitl_request = HiTLRequest(
@@ -205,6 +230,13 @@ class AuditLogAnomalyWorkflow:
                     retry_policy=runtime_retry,
                 )
             decision = None
+
+        final_status = "dismissed" if decision and decision.action == "dismiss" else "closed"
+        await update_case(
+            case_input.tenant_id, case_id, final_status,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
 
         await emit_workflow_observability(
             case_input.tenant_id,

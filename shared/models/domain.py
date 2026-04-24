@@ -194,12 +194,14 @@ class CaseRecord(BaseModel):
 
     case_id: str
     tenant_id: str
+    workflow_id: str
     status: Literal["open", "closed", "dismissed", "auto_remediated"] = "open"
     created_at: str
     updated_at: str
     source_event_id: str | None = None
     case_type: str | None = None
     severity: str | None = None
+    ticket_id: str | None = None
 
 
 class HiTLCaseInput(BaseModel):

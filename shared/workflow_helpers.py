@@ -7,6 +7,7 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 
 from activities.audit import create_audit_log
+from activities.case_record import create_case_record, update_case_status
 from activities.communications import teams_send_notification
 from activities.tenant import get_tenant_config, validate_tenant_context
 from shared.config import QUEUE_EDR, QUEUE_TICKETING
@@ -154,3 +155,48 @@ async def emit_workflow_observability(
         )
     except Exception as exc:
         workflow.logger.warning("Audit log write failed, continuing workflow: %s", exc)
+
+
+async def persist_case_record(
+    tenant_id: str,
+    case_id: str,
+    workflow_id: str,
+    case_type: str,
+    severity: str,
+    *,
+    source_event_id: str | None = None,
+    timeout: timedelta,
+    retry_policy: RetryPolicy,
+) -> str:
+    """Best-effort case record creation — never fails the parent workflow."""
+    try:
+        return await workflow.execute_activity(
+            create_case_record,
+            args=[tenant_id, case_id, workflow_id, case_type, severity, source_event_id],
+            start_to_close_timeout=timeout,
+            retry_policy=retry_policy,
+        )
+    except Exception as exc:
+        workflow.logger.warning("Case record creation failed, continuing workflow: %s", exc)
+        return case_id
+
+
+async def update_case(
+    tenant_id: str,
+    case_id: str,
+    status: str,
+    *,
+    ticket_id: str | None = None,
+    timeout: timedelta,
+    retry_policy: RetryPolicy,
+) -> None:
+    """Best-effort case status update — never fails the parent workflow."""
+    try:
+        await workflow.execute_activity(
+            update_case_status,
+            args=[tenant_id, case_id, status, ticket_id],
+            start_to_close_timeout=timeout,
+            retry_policy=retry_policy,
+        )
+    except Exception as exc:
+        workflow.logger.warning("Case status update failed, continuing workflow: %s", exc)

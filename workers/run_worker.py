@@ -239,12 +239,19 @@ def load_activities_by_queue() -> dict[str, list]:
 
     try:
         from activities.audit import create_audit_log
+        from activities.case_record import create_case_record, update_case_status, get_case_record
         from activities.evidence import collect_evidence_bundle
         user_lifecycle_activities.append(create_audit_log)
-        edr_activities.extend([create_audit_log, collect_evidence_bundle])
+        edr_activities.extend([
+            create_audit_log,
+            collect_evidence_bundle,
+            create_case_record,
+            update_case_status,
+            get_case_record,
+        ])
         audit_activities.extend([create_audit_log, collect_evidence_bundle])
         polling_activities.append(create_audit_log)
-        logger.info("✓ Audit activities geladen")
+        logger.info("✓ Audit + case record activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van Audit activities: {e}")
         sys.exit(1)

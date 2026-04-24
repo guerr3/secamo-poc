@@ -8,6 +8,8 @@ _SYMBOL_TO_MODULE = {
     "calculate_risk_score": "activities.risk",
     "collect_evidence_bundle": "activities.evidence",
     "create_audit_log": "activities.audit",
+    "create_case_record": "activities.case_record",
+    "get_case_record": "activities.case_record",
     "provision_customer_secrets": "activities.onboarding",
     "register_customer_tenant": "activities.onboarding",
     "email_send": "activities.communications",
@@ -49,6 +51,7 @@ _SYMBOL_TO_MODULE = {
     "teams_send_notification": "activities.communications",
     "threat_intel_fanout": "activities.threat_intel",
     "threat_intel_lookup": "activities.threat_intel",
+    "update_case_status": "activities.case_record",
 }
 
 __all__ = sorted(_SYMBOL_TO_MODULE.keys())

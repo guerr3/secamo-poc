@@ -24,7 +24,13 @@ with workflow.unsafe.imports_passed_through():
         TenantConfig,
         TicketResult,
     )
-    from shared.workflow_helpers import bootstrap_tenant, create_soc_ticket, emit_workflow_observability
+    from shared.workflow_helpers import (
+        bootstrap_tenant,
+        create_soc_ticket,
+        emit_workflow_observability,
+        persist_case_record,
+        update_case,
+    )
 
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -86,6 +92,18 @@ class DeviceComplianceRemediationWorkflow:
                 "auto_remediate": bool(config.auto_isolate_on_timeout),
                 "allowed_actions": ["isolate_device", "run_antivirus_scan", "dismiss"],
             }
+        )
+
+        case_id = str(workflow.uuid4())
+        await persist_case_record(
+            case_input.tenant_id,
+            case_id,
+            workflow.info().workflow_id,
+            case_input.case_type,
+            case_input.severity,
+            source_event_id=case_input.alert_id,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
         )
 
         device_id = case_input.device
@@ -154,6 +172,13 @@ class DeviceComplianceRemediationWorkflow:
             source_workflow="WF-DEVICE-COMPLIANCE-REMEDIATION",
         )
 
+        await update_case(
+            case_input.tenant_id, case_id, "open",
+            ticket_id=ticket.ticket_id,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
+
         hitl_request = HiTLRequest(
             workflow_id=workflow.info().workflow_id,
             run_id="",
@@ -220,6 +245,16 @@ class DeviceComplianceRemediationWorkflow:
                     retry_policy=runtime_retry,
                 )
             decision = None
+
+        final_status = "auto_remediated" if decision is None and config.auto_isolate_on_timeout else (
+            "dismissed" if decision and decision.action == "dismiss" else
+            "closed" if decision else "closed"
+        )
+        await update_case(
+            case_input.tenant_id, case_id, final_status,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
 
         action_taken = "timeout_or_none"
         if decision is not None:

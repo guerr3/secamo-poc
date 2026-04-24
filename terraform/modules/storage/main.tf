@@ -106,6 +106,18 @@ resource "aws_dynamodb_table" "audit" {
     enabled        = true
   }
 
+  attribute {
+    name = "case_id"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "GSI3-CaseId"
+    hash_key        = "case_id"
+    range_key       = "SK"
+    projection_type = "ALL"
+  }
+
   point_in_time_recovery {
     enabled = true
   }

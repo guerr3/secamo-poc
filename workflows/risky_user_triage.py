@@ -34,7 +34,9 @@ with workflow.unsafe.imports_passed_through():
         bootstrap_tenant,
         create_soc_ticket,
         emit_workflow_observability,
+        persist_case_record,
         resolve_threat_intel,
+        update_case,
     )
 
 
@@ -102,6 +104,18 @@ class RiskyUserTriageWorkflow:
             }
         )
 
+        case_id = str(workflow.uuid4())
+        await persist_case_record(
+            case_input.tenant_id,
+            case_id,
+            workflow.info().workflow_id,
+            case_input.case_type,
+            case_input.severity,
+            source_event_id=case_input.alert_id,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
+
         user_lookup = _source_entity_id(case_input) or case_input.identity or case_input.alert_id
         identity_risk: IdentityRiskContext | None = await workflow.execute_activity(
             identity_get_identity_risk,
@@ -140,6 +154,13 @@ class RiskyUserTriageWorkflow:
             ),
             severity=case_input.severity,
             source_workflow="WF-RISKY-USER-TRIAGE",
+        )
+
+        await update_case(
+            case_input.tenant_id, case_id, "open",
+            ticket_id=ticket.ticket_id,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
         )
 
         hitl_request = HiTLRequest(
@@ -210,6 +231,16 @@ class RiskyUserTriageWorkflow:
                     retry_policy=runtime_retry,
                 )
             decision = None
+
+        final_status = "auto_remediated" if decision is None and config.auto_isolate_on_timeout else (
+            "dismissed" if decision and decision.action == "dismiss" else
+            "closed" if decision else "closed"
+        )
+        await update_case(
+            case_input.tenant_id, case_id, final_status,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
 
         action_taken = "timeout_or_none"
         if decision is not None:
