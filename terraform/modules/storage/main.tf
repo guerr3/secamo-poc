@@ -89,6 +89,23 @@ resource "aws_dynamodb_table" "audit" {
     projection_type = "ALL"
   }
 
+  attribute {
+    name = "alert_id"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "GSI2-AlertId"
+    hash_key        = "alert_id"
+    range_key       = "SK"
+    projection_type = "ALL"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
   point_in_time_recovery {
     enabled = true
   }

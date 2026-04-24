@@ -116,6 +116,10 @@ async def polling_mark_event_processed(
         f"{_safe_component(event_type)}#"
         f"{_safe_component(dedup_event_id)}"
     )
+    # NOTE: For entra_risky_users, the provider event id (userId) remains
+    # stable but the dedup_event_id is derived from a composite that includes
+    # riskLastUpdatedDateTime, so risk-level changes intentionally produce a
+    # new dedup key and trigger reprocessing of the same user entity.
 
     if not provider_event_id:
         activity.logger.info(

@@ -27,9 +27,15 @@ with workflow.unsafe.imports_passed_through():
         IdentityRiskContext,
         SecurityCaseInput,
         TenantConfig,
+        ThreatIntelResult,
         TicketResult,
     )
-    from shared.workflow_helpers import bootstrap_tenant, create_soc_ticket, emit_workflow_observability
+    from shared.workflow_helpers import (
+        bootstrap_tenant,
+        create_soc_ticket,
+        emit_workflow_observability,
+        resolve_threat_intel,
+    )
 
 
 RETRY_POLICY = RetryPolicy(maximum_attempts=3)
@@ -110,6 +116,15 @@ class RiskyUserTriageWorkflow:
             retry_policy=runtime_retry,
         )
 
+        # Threat intel enrichment before ticket creation (consistent with
+        # SigninAnomalyDetectionWorkflow ordering)
+        threat_indicator = case_input.identity or user_lookup
+        threat_intel: ThreatIntelResult = await resolve_threat_intel(
+            case_input.tenant_id,
+            threat_indicator,
+            config,
+        )
+
         ticket: TicketResult = await create_soc_ticket(
             case_input.tenant_id,
             config,
@@ -120,7 +135,8 @@ class RiskyUserTriageWorkflow:
                 f"Identity: {case_input.identity or 'unknown'}\n"
                 f"User lookup key: {user_lookup}\n"
                 f"Risk level: {_risk_level(identity_risk)}\n"
-                f"Sign-in records inspected: {len(signin_history)}"
+                f"Sign-in records inspected: {len(signin_history)}\n"
+                f"Threat intel: {threat_intel.details}"
             ),
             severity=case_input.severity,
             source_workflow="WF-RISKY-USER-TRIAGE",

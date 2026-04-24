@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from shared.models import SecurityCaseInput
-from shared.models.canonical import Envelope, ImpossibleTravelEvent
+from shared.models.canonical import Envelope, AuthenticationEvent
 
 
 def normalize_impossible_travel_case(envelope: Envelope, *, auto_remediate: bool) -> SecurityCaseInput:
     """Normalize a defender.impossible_travel envelope into SecurityCaseInput."""
 
-    if not isinstance(envelope.payload, ImpossibleTravelEvent):
+    if not isinstance(envelope.payload, AuthenticationEvent):
         raise ValueError("normalize_impossible_travel_case requires impossible_travel payload")
 
     payload = envelope.payload

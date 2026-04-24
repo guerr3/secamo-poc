@@ -12,12 +12,12 @@ from datetime import datetime, timezone
 import pytest
 
 from shared.models.canonical import (
+    AuthenticationEvent,
     Correlation,
     DefenderDetectionFindingEvent,
     DefenderSecuritySignalEvent,
     Envelope,
     HitlApprovalEvent,
-    ImpossibleTravelEvent,
     StoragePartition,
 )
 from shared.routing.defaults import build_default_route_registry
@@ -203,7 +203,7 @@ async def test_unknown_route_key_raises_unroutable_error() -> None:
                 s3_key_prefix="raw/unknown_event/evt-2",
             ),
         ),
-        payload=ImpossibleTravelEvent(
+        payload=AuthenticationEvent(
             event_type="defender.impossible_travel",
             activity_id=3002,
             user_principal_name="unknown@example.com",
@@ -277,8 +277,11 @@ def test_default_registry_resolves_signal_routes_by_exact_provider_event_type(
     assert routes[0].workflow_name == workflow_name
 
 
-def test_default_registry_has_no_microsoft_defender_generic_signal_fallback() -> None:
+def test_default_registry_routes_unknown_microsoft_defender_signal_to_soc_alert_triage() -> None:
+    """Unknown signal types from microsoft_defender fall back to SocAlertTriageWorkflow
+    via the defender.security_signal event-type fallback route."""
     registry = build_default_route_registry()
 
-    with pytest.raises(UnroutableEventError):
-        registry.resolve(_sample_signal_envelope("unknown_signal"))
+    routes = registry.resolve(_sample_signal_envelope("unknown_signal"))
+    assert len(routes) == 1
+    assert routes[0].workflow_name == "SocAlertTriageWorkflow"

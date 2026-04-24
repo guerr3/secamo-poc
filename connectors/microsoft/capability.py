@@ -325,10 +325,11 @@ class _MicrosoftCapabilityConnector(BaseConnector):
             "high": 60,
             "medium": 40,
             "low": 20,
+            "informational": 10,
         }
         if normalized in {"noncompliant", "atrisk", "compromised"}:
             return 60, "high"
-        if normalized in {"compliant", "none", "unknown", "informational"}:
+        if normalized in {"compliant", "none", "unknown"}:
             return 20, "low"
         return mapping.get(normalized, 30), (normalized if normalized in mapping else "medium")
 
@@ -481,6 +482,7 @@ class _MicrosoftCapabilityConnector(BaseConnector):
 
         if resource_type == "defender_alerts":
             evidence_fields = self._extract_alert_evidence_fields(item)
+            severity_id, severity = self._severity_from_signal(item)
             payload = DefenderDetectionFindingEvent(
                 event_type="defender.alert",
                 activity_id=2004,
@@ -488,8 +490,8 @@ class _MicrosoftCapabilityConnector(BaseConnector):
                 alert_id=external_id,
                 title=str(item.get("title") or external_id),
                 description=str(item.get("description") or ""),
-                severity_id=40,
-                severity=(item.get("severity") or "medium").lower(),
+                severity_id=severity_id,
+                severity=severity,
                 vendor_extensions={
                     "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
                     "resource_type": VendorExtension(source=self.provider, value=resource_type),

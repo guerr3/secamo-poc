@@ -46,7 +46,7 @@ class SignalGateway:
         """Dispatch typed signal payload through configured transport.
 
         ApprovalSignal payloads are converted to ApprovalDecision-compatible
-        dicts so the HiTLApprovalWorkflow signal handler receives the expected
+        dicts so the inline workflow signal handler receives the expected
         field names (actor → reviewer).
         """
         if isinstance(payload, ApprovalSignal):

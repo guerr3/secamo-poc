@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from workflows.child.hitl_approval import _rebind_hitl_request_for_child
 from shared.models import HiTLRequest
 
 
-def test_rebind_hitl_request_for_child_overrides_parent_identity() -> None:
+def test_hitl_request_model_copy_overrides_identity() -> None:
+    """Verify HiTLRequest.model_copy preserves all fields while overriding workflow identity.
+
+    This replaces the legacy _rebind_hitl_request_for_child test — inline HiTL
+    workflows now use model_copy() directly instead of a child-workflow rebind helper.
+    """
     original = HiTLRequest(
         workflow_id="parent-wf-123",
         run_id="",
@@ -19,10 +23,11 @@ def test_rebind_hitl_request_for_child_overrides_parent_identity() -> None:
         metadata={"source": "wf-parent"},
     )
 
-    rebound = _rebind_hitl_request_for_child(
-        original,
-        child_workflow_id="child-hitl-999",
-        child_run_id="child-run-abc",
+    rebound = original.model_copy(
+        update={
+            "workflow_id": "child-hitl-999",
+            "run_id": "child-run-abc",
+        }
     )
 
     assert rebound.workflow_id == "child-hitl-999"
@@ -31,5 +36,6 @@ def test_rebind_hitl_request_for_child_overrides_parent_identity() -> None:
     assert rebound.ticket_key == original.ticket_key
     assert rebound.metadata == original.metadata
 
+    # Original is frozen and unchanged
     assert original.workflow_id == "parent-wf-123"
     assert original.run_id == ""

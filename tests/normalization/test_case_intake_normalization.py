@@ -5,11 +5,11 @@ from datetime import datetime, timezone
 import pytest
 
 from shared.models.canonical import (
+    AuthenticationEvent,
     Correlation,
     DefenderDetectionFindingEvent,
     DefenderSecuritySignalEvent,
     Envelope,
-    ImpossibleTravelEvent,
     StoragePartition,
     VendorExtension,
 )
@@ -83,7 +83,7 @@ def test_normalize_impossible_travel_case_sets_expected_defaults() -> None:
         ocsf_version="1.1.0",
         occurred_at=datetime.now(timezone.utc),
         correlation=_correlation(),
-        payload=ImpossibleTravelEvent(
+        payload=AuthenticationEvent(
             event_type="defender.impossible_travel",
             activity_id=3002,
             user_principal_name="user@example.com",
