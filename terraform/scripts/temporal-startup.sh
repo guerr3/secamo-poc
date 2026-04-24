@@ -8,16 +8,17 @@
 # local stack (Temporal + worker).
 #
 # Template variables (injected by Terraform):
-#   ${temporal_namespace}   — Namespace to create
-#   ${github_repo_url}      — GitHub repo URL to clone
-#   ${environment}          — Environment identifier (e.g. test)
-#   ${region}               — AWS region
-#   ${evidence_bucket}      — S3 bucket for evidence artifacts
-#   ${audit_table}          — DynamoDB table for audit records
-#   ${tenant_table}         — DynamoDB table for tenant metadata
-#   ${hitl_token_table}     — DynamoDB table for HiTL approval tokens
-#   ${secamo_sender_email}  — Sender email for notification activities
-#   ${email_provider}       — Fallback connector provider for outbound email
+#   ${temporal_namespace}        — Namespace to create
+#   ${github_repo_url}           — GitHub repo URL to clone
+#   ${environment}               — Environment identifier (e.g. test)
+#   ${region}                    — AWS region
+#   ${evidence_bucket}           — S3 bucket for evidence artifacts
+#   ${audit_table}               — DynamoDB table for audit records
+#   ${processed_events_table}    — DynamoDB table for polling dedup
+#   ${tenant_table}              — DynamoDB table for tenant metadata
+#   ${hitl_token_table}          — DynamoDB table for HiTL approval tokens
+#   ${secamo_sender_email}       — Sender email for notification activities
+#   ${email_provider}            — Fallback connector provider for outbound email
 # ──────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -94,6 +95,7 @@ set_env_var "ENVIRONMENT" "${environment}" "$TEMPORAL_DIR/.env"
 set_env_var "AWS_REGION" "${region}" "$TEMPORAL_DIR/.env"
 set_env_var "EVIDENCE_BUCKET_NAME" "${evidence_bucket}" "$TEMPORAL_DIR/.env"
 set_env_var "AUDIT_TABLE_NAME" "${audit_table}" "$TEMPORAL_DIR/.env"
+set_env_var "PROCESSED_EVENTS_TABLE_NAME" "${processed_events_table}" "$TEMPORAL_DIR/.env"
 
 # Runtime env file mounted into secamo containers
 cat > "$REPO_DIR/.env" <<EOF
@@ -103,6 +105,7 @@ TEMPORAL_ADDRESS=temporal:7233
 TEMPORAL_NAMESPACE=${temporal_namespace}
 EVIDENCE_BUCKET_NAME=${evidence_bucket}
 AUDIT_TABLE_NAME=${audit_table}
+PROCESSED_EVENTS_TABLE_NAME=${processed_events_table}
 TENANT_TABLE_NAME=${tenant_table}
 HITL_TOKEN_TABLE=${hitl_token_table}
 SECAMO_SENDER_EMAIL=${secamo_sender_email}
@@ -149,6 +152,7 @@ echo "Temporal UI:      0.0.0.0:8080"
 echo "Namespace:        ${temporal_namespace}"
 echo "Evidence Bucket:  ${evidence_bucket}"
 echo "Audit Table:      ${audit_table}"
+echo "Dedup Table:      ${processed_events_table}"
 echo "Worker:           secamo-worker (running)"
 echo ""
 echo "View logs: cd /opt/temporal-compose && docker compose logs -f"

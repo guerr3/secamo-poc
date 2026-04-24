@@ -12,6 +12,7 @@ from connectors.errors import ConnectorPermanentError
 from connectors.errors import ConnectorUnsupportedActionError
 from connectors.microsoft.transport import MicrosoftApiTransport
 from shared.models import (
+    AuthenticationEvent,
     DefenderDetectionFindingEvent,
     DefenderSecuritySignalEvent,
     Envelope,
@@ -350,15 +351,27 @@ class _MicrosoftCapabilityConnector(BaseConnector):
         provider_event_type: str,
         signal_id: str,
     ) -> str:
-        candidate = cls._first_non_empty_str(
-            item.get("title"),
-            item.get("displayName"),
-            item.get("activityDisplayName"),
-            item.get("userPrincipalName"),
-            item.get("userDisplayName"),
-            item.get("deviceName"),
-            item.get("id"),
-        )
+        # For risky_users, prefer userDisplayName over displayName to avoid
+        # returning the risk-detection display name instead of the user's name.
+        if resource_type == "entra_risky_users":
+            candidate = cls._first_non_empty_str(
+                item.get("title"),
+                item.get("userDisplayName"),
+                item.get("displayName"),
+                item.get("userPrincipalName"),
+                item.get("deviceName"),
+                item.get("id"),
+            )
+        else:
+            candidate = cls._first_non_empty_str(
+                item.get("title"),
+                item.get("displayName"),
+                item.get("activityDisplayName"),
+                item.get("userPrincipalName"),
+                item.get("userDisplayName"),
+                item.get("deviceName"),
+                item.get("id"),
+            )
         if candidate is not None:
             return candidate
         suffix = signal_id or "signal"
@@ -485,6 +498,47 @@ class _MicrosoftCapabilityConnector(BaseConnector):
                     "device_id": VendorExtension(source=self.provider, value=evidence_fields["device_id"]),
                     "user_email": VendorExtension(source=self.provider, value=evidence_fields["user_email"]),
                 },
+            )
+        elif resource_type == "entra_signin_logs":
+            # Map sign-in logs to the generalised AuthenticationEvent (OCSF 3002).
+            severity_id, severity = self._severity_from_signal(item)
+            location_obj = item.get("location") or {}
+            city = self._coerce_non_empty_str(location_obj.get("city")) if isinstance(location_obj, dict) else None
+            country = self._coerce_non_empty_str(
+                location_obj.get("countryOrRegion")
+            ) if isinstance(location_obj, dict) else None
+            location_str = ", ".join(filter(None, [city, country])) or None
+
+            source_ip = self._first_non_empty_str(
+                item.get("ipAddress"),
+                item.get("sourceIpAddress"),
+            )
+
+            extensions: dict[str, VendorExtension] = {
+                "provider_event_type": VendorExtension(source=self.provider, value=provider_event_type),
+                "resource_type": VendorExtension(source=self.provider, value=resource_type),
+                "is_interactive": VendorExtension(source=self.provider, value=item.get("isInteractive")),
+            }
+            risk_event_types = item.get("riskEventTypes_v2")
+            if risk_event_types is not None:
+                extensions["riskEventTypes_v2"] = VendorExtension(source=self.provider, value=risk_event_types)
+            error_code = item.get("status", {}).get("errorCode") if isinstance(item.get("status"), dict) else None
+            if error_code is not None:
+                extensions["errorCode"] = VendorExtension(source=self.provider, value=error_code)
+
+            payload = AuthenticationEvent(
+                event_type="defender.impossible_travel",
+                activity_id=3002,
+                activity_name="poller.fetch",
+                user_principal_name=self._first_non_empty_str(
+                    item.get("userPrincipalName"),
+                    item.get("userDisplayName"),
+                ) or external_id,
+                source_ip=source_ip or "0.0.0.0",
+                location=location_str,
+                severity_id=severity_id,
+                severity=severity,
+                vendor_extensions=extensions,
             )
         else:
             payload = self._map_security_signal_event(

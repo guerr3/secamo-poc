@@ -91,8 +91,8 @@ class CustomerOnboardingEvent(StrictModel):
     vendor_extensions: VendorExtensions = Field(default_factory=dict)
 
 
-class ImpossibleTravelEvent(StrictModel):
-    """OCSF Authentication payload for impossible-travel detections."""
+class AuthenticationEvent(StrictModel):
+    """OCSF Authentication payload for sign-in events (Class 3002)."""
 
     event_type: Literal["defender.impossible_travel"]
     category_uid: Literal[3] = 3
@@ -107,6 +107,21 @@ class ImpossibleTravelEvent(StrictModel):
     severity: str | None = None
     message: str | None = None
     vendor_extensions: VendorExtensions = Field(default_factory=dict)
+
+
+class AuditLogRecord(StrictModel):
+    """Structured audit log record for workflow lifecycle tracking."""
+
+    PK: str
+    SK: str
+    workflow_id: str
+    tenant_id: str
+    event_type: str
+    message: str
+    alert_id: str | None = None
+    ticket_id: str | None = None
+    case_type: str | None = None
+    ttl: int | None = None
 
 
 class DefenderDetectionFindingEvent(StrictModel):
@@ -170,7 +185,7 @@ class HitlApprovalEvent(StrictModel):
 SecamoEventVariant: TypeAlias = Annotated[
     IamOnboardingEvent
     | CustomerOnboardingEvent
-    | ImpossibleTravelEvent
+    | AuthenticationEvent
     | DefenderDetectionFindingEvent
     | DefenderSecuritySignalEvent
     | HitlApprovalEvent,
@@ -226,6 +241,8 @@ def derive_event_id(
 
 
 __all__ = [
+    "AuditLogRecord",
+    "AuthenticationEvent",
     "Correlation",
     "CustomerOnboardingEvent",
     "DefenderDetectionFindingEvent",
@@ -233,7 +250,6 @@ __all__ = [
     "Envelope",
     "HitlApprovalEvent",
     "IamOnboardingEvent",
-    "ImpossibleTravelEvent",
     "SecamoEventVariant",
     "SecamoEventVariantAdapter",
     "StoragePartition",

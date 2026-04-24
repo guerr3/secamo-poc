@@ -21,3 +21,13 @@ output "audit_table_arn" {
   description = "ARN of the DynamoDB audit table"
   value       = aws_dynamodb_table.audit.arn
 }
+
+output "processed_events_table_name" {
+  description = "Name of the DynamoDB processed events dedup table"
+  value       = aws_dynamodb_table.processed_events.name
+}
+
+output "processed_events_table_arn" {
+  description = "ARN of the DynamoDB processed events dedup table"
+  value       = aws_dynamodb_table.processed_events.arn
+}

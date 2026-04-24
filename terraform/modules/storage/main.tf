@@ -102,6 +102,42 @@ resource "aws_dynamodb_table" "audit" {
   })
 }
 
+# ── DynamoDB Table — Processed Events Dedup ───────────────────
+
+resource "aws_dynamodb_table" "processed_events" {
+  name         = "${var.name_prefix}-processed-events"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "PK"
+  range_key    = "SK"
+
+  attribute {
+    name = "PK"
+    type = "S"
+  }
+
+  attribute {
+    name = "SK"
+    type = "S"
+  }
+
+  ttl {
+    attribute_name = "expires_at"
+    enabled        = true
+  }
+
+  point_in_time_recovery {
+    enabled = true
+  }
+
+  server_side_encryption {
+    enabled = true
+  }
+
+  tags = merge(var.extra_tags, {
+    Name = "${var.name_prefix}-processed-events"
+  })
+}
+
 # ── Data Sources ─────────────────────────────────────────────
 
 data "aws_caller_identity" "current" {}

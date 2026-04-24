@@ -17,7 +17,7 @@ from temporalio import activity
 
 from shared.config import AUDIT_TABLE_NAME, PROCESSED_EVENTS_TABLE_NAME
 
-_DEFAULT_TTL_DAYS = 90
+_DEFAULT_TTL_DAYS = 30
 
 
 class _LazyDynamoClient:
@@ -106,7 +106,7 @@ async def polling_mark_event_processed(
 
     ttl_days = _resolve_ttl_days()
     now = datetime.now(timezone.utc)
-    ttl = int((now + timedelta(days=ttl_days)).timestamp())
+    expires_at = int((now + timedelta(days=ttl_days)).timestamp())
 
     pk = f"TENANT#{_safe_component(tenant_id)}"
     sk = (
@@ -141,7 +141,7 @@ async def polling_mark_event_processed(
                 "provider_event_id": {"S": provider_event_id or ""},
                 "workflow_event_id": {"S": workflow_event_id},
                 "created_at": {"S": now.isoformat()},
-                "ttl": {"N": str(ttl)},
+                "expires_at": {"N": str(expires_at)},
             },
             ConditionExpression="attribute_not_exists(PK) AND attribute_not_exists(SK)",
         )

@@ -10,6 +10,7 @@ from datetime import datetime
 from typing import Any
 
 from shared.models.canonical import (
+    AuthenticationEvent,
     Correlation,
     CustomerOnboardingEvent,
     DefenderDetectionFindingEvent,
@@ -17,7 +18,6 @@ from shared.models.canonical import (
     Envelope,
     HitlApprovalEvent,
     IamOnboardingEvent,
-    ImpossibleTravelEvent,
     StoragePartition,
     VendorExtension,
     derive_event_id,
@@ -48,6 +48,7 @@ def build_connector_correlation(
     event_name: str,
     correlation_id: str,
     provider_event_id: str | None,
+    parent_event_id: str | None = None,
 ) -> Correlation:
     """Build connector-centric correlation where request/trace align with correlation id."""
 
@@ -56,6 +57,7 @@ def build_connector_correlation(
         causation_id=correlation_id,
         request_id=correlation_id,
         trace_id=correlation_id,
+        parent_event_id=parent_event_id,
         storage_partition=_storage_partition(tenant_id, event_name, provider_event_id),
     )
 
@@ -68,7 +70,7 @@ def build_envelope(
     payload: (
         DefenderDetectionFindingEvent
         | DefenderSecuritySignalEvent
-        | ImpossibleTravelEvent
+        | AuthenticationEvent
         | IamOnboardingEvent
         | CustomerOnboardingEvent
         | HitlApprovalEvent

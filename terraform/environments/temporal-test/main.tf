@@ -259,6 +259,7 @@ resource "aws_iam_role_policy" "temporal_storage" {
         Resource = [
           module.storage.audit_table_arn,
           "${module.storage.audit_table_arn}/index/*",
+          module.storage.processed_events_table_arn,
           aws_dynamodb_table.tenants.arn,
           "${aws_dynamodb_table.tenants.arn}/index/*",
           aws_dynamodb_table.hitl_tokens.arn
@@ -306,16 +307,17 @@ resource "aws_instance" "temporal" {
   key_name               = var.key_pair_name != "" ? var.key_pair_name : null
 
   user_data = templatefile("${path.module}/../../scripts/temporal-startup.sh", {
-    temporal_namespace  = var.temporal_namespace
-    github_repo_url     = var.github_repo_url
-    environment         = "temporal-test"
-    region              = data.aws_region.current.name
-    evidence_bucket     = module.storage.evidence_bucket_name
-    audit_table         = module.storage.audit_table_name
-    tenant_table        = aws_dynamodb_table.tenants.name
-    hitl_token_table    = aws_dynamodb_table.hitl_tokens.name
-    secamo_sender_email = var.secamo_sender_email
-    email_provider      = var.email_provider
+    temporal_namespace       = var.temporal_namespace
+    github_repo_url          = var.github_repo_url
+    environment              = "temporal-test"
+    region                   = data.aws_region.current.name
+    evidence_bucket          = module.storage.evidence_bucket_name
+    audit_table              = module.storage.audit_table_name
+    processed_events_table   = module.storage.processed_events_table_name
+    tenant_table             = aws_dynamodb_table.tenants.name
+    hitl_token_table         = aws_dynamodb_table.hitl_tokens.name
+    secamo_sender_email      = var.secamo_sender_email
+    email_provider           = var.email_provider
   })
 
   user_data_replace_on_change = true

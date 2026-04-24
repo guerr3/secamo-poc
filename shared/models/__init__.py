@@ -69,6 +69,8 @@ from shared.models.ingress import GraphNotificationEnvelope, GraphNotificationIt
 
 # ── Canonical event ──────────────────────────────────────────
 from shared.models.canonical import (
+    AuditLogRecord,
+    AuthenticationEvent,
     Correlation,
     CustomerOnboardingEvent,
     DefenderDetectionFindingEvent,
@@ -76,7 +78,6 @@ from shared.models.canonical import (
     Envelope,
     HitlApprovalEvent,
     IamOnboardingEvent,
-    ImpossibleTravelEvent,
     StoragePartition,
     VendorExtension,
     VendorExtensions,
@@ -156,6 +157,8 @@ __all__ = [
     # ingress
     "IamIngressRequest",
     # canonical
+    "AuditLogRecord",
+    "AuthenticationEvent",
     "Correlation",
     "CustomerOnboardingEvent",
     "DefenderDetectionFindingEvent",
@@ -163,7 +166,6 @@ __all__ = [
     "Envelope",
     "HitlApprovalEvent",
     "IamOnboardingEvent",
-    "ImpossibleTravelEvent",
     "StoragePartition",
     "VendorExtension",
     "VendorExtensions",
