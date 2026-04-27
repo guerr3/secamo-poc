@@ -466,10 +466,9 @@ async def handle_event(event: IngressEvent) -> dict:
 
 
 async def handle_graph_notification(event: IngressEvent) -> dict:
-    tenant_id = _authorizer_tenant_id(event)
-    if not tenant_id:
-        return response.error(401, "Missing verified tenant context")
-
+    # Handle Microsoft Graph subscription validation before any auth check.
+    # Microsoft sends an unauthenticated POST with ?validationToken=... and expects
+    # HTTP 200 plain-text echo within 10 seconds (no credentials are provided).
     validation_token = str((event.query_params or {}).get("validationToken", "")).strip()
     if validation_token:
         return {
@@ -477,6 +476,10 @@ async def handle_graph_notification(event: IngressEvent) -> dict:
             "headers": {"Content-Type": "text/plain"},
             "body": validation_token,
         }
+
+    tenant_id = _authorizer_tenant_id(event)
+    if not tenant_id:
+        return response.error(401, "Missing verified tenant context")
 
     if not isinstance(event.body, dict):
         return response.error(400, "Request body must be a JSON object")
