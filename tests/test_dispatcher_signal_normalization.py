@@ -3,11 +3,14 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from shared.models.canonical import (
+    AuthenticationEvent,
     Correlation,
+    DefenderDetectionFindingEvent,
     DefenderSecuritySignalEvent,
     Envelope,
     IamOnboardingEvent,
     StoragePartition,
+    VendorExtension,
 )
 from shared.routing.contracts import WorkflowRoute
 from shared.temporal.dispatcher import _WorkflowRouteDispatcher, workflow_input_for_route
@@ -49,6 +52,55 @@ def _security_signal_envelope(*, provider_event_type: str) -> Envelope:
             title=f"Title {provider_event_type}",
             severity_id=40,
             severity="medium",
+        ),
+    )
+
+
+def _defender_alert_envelope() -> Envelope:
+    return Envelope(
+        event_id="evt-alert-1",
+        tenant_id="tenant-1",
+        source_provider="microsoft_defender",
+        event_name="defender.alert",
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=datetime.now(timezone.utc),
+        correlation=_correlation(),
+        payload=DefenderDetectionFindingEvent(
+            event_type="defender.alert",
+            activity_id=2004,
+            alert_id="alert-1",
+            title="Test Alert",
+            severity_id=60,
+            severity="high",
+            vendor_extensions={
+                "user_email": VendorExtension(source="test", value="analyst@example.com"),
+                "device_id": VendorExtension(source="test", value="device-123"),
+            },
+        ),
+    )
+
+
+def _impossible_travel_envelope() -> Envelope:
+    return Envelope(
+        event_id="evt-it-1",
+        tenant_id="tenant-1",
+        source_provider="microsoft_defender",
+        event_name="defender.impossible_travel",
+        schema_version="1.0.0",
+        event_version="1.0.0",
+        ocsf_version="1.1.0",
+        occurred_at=datetime.now(timezone.utc),
+        correlation=_correlation(),
+        payload=AuthenticationEvent(
+            event_type="defender.impossible_travel",
+            activity_id=3002,
+            user_principal_name="user@example.com",
+            source_ip="10.1.1.10",
+            destination_ip="10.1.1.11",
+            severity_id=60,
+            severity="high",
         ),
     )
 
@@ -117,6 +169,39 @@ def test_audit_log_anomaly_workflow_input_is_security_case_input() -> None:
 
     assert workflow_input["case_type"] == "audit_log"
     assert "event_id" not in workflow_input
+
+
+def test_soc_alert_triage_workflow_input_for_defender_alert_is_security_case_input() -> None:
+    workflow_input = _WorkflowRouteDispatcher._workflow_input_for_route(
+        _route("SocAlertTriageWorkflow"),
+        _defender_alert_envelope(),
+    )
+
+    assert workflow_input["case_type"] == "defender_alert"
+    assert workflow_input["alert_id"] == "alert-1"
+    assert "event_id" not in workflow_input
+
+
+def test_soc_alert_triage_workflow_input_for_impossible_travel_is_security_case_input() -> None:
+    workflow_input = _WorkflowRouteDispatcher._workflow_input_for_route(
+        _route("SocAlertTriageWorkflow"),
+        _impossible_travel_envelope(),
+    )
+
+    assert workflow_input["case_type"] == "impossible_travel"
+    assert workflow_input["alert_id"] == "evt-it-1"
+    assert "event_id" not in workflow_input
+
+
+def test_soc_alert_triage_workflow_input_for_unknown_signal_defaults_generic_signal() -> None:
+    workflow_input = _WorkflowRouteDispatcher._workflow_input_for_route(
+        _route("SocAlertTriageWorkflow"),
+        _security_signal_envelope(provider_event_type="unknown_future_signal"),
+    )
+
+    assert workflow_input["case_type"] == "generic_signal"
+    assert workflow_input["alert_id"] == "sig-unknown_future_signal"
+    assert workflow_input["auto_remediate"] is False
 
 
 def test_dispatcher_auto_remediate_defaults_to_false() -> None:

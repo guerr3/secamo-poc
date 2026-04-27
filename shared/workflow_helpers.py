@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import Any
+from typing import Any, Callable
 
 from temporalio import workflow
 from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
@@ -9,9 +9,12 @@ from temporalio.common import RetryPolicy, WorkflowIDReusePolicy
 from activities.audit import create_audit_log
 from activities.case_record import create_case_record, update_case_status
 from activities.communications import teams_send_notification
+from activities.edr import edr_isolate_device
+from activities.hitl import request_hitl_approval
 from activities.tenant import get_tenant_config, validate_tenant_context
+from activities.ticketing import ticket_update
 from shared.config import QUEUE_EDR, QUEUE_TICKETING
-from shared.models import TenantConfig, ThreatIntelResult, TicketResult
+from shared.models import ApprovalDecision, HiTLRequest, TenantConfig, ThreatIntelResult, TicketResult
 
 
 async def bootstrap_tenant(
@@ -200,3 +203,60 @@ async def update_case(
         )
     except Exception as exc:
         workflow.logger.warning("Case status update failed, continuing workflow: %s", exc)
+
+
+async def request_hitl_decision(
+    tenant_id: str,
+    hitl_request: HiTLRequest,
+    *,
+    approval_getter: Callable[[], ApprovalDecision | None],
+    clear_approval: Callable[[], None],
+    config: TenantConfig,
+    ticket_id: str | None,
+    device_id: str | None,
+    timeout: timedelta,
+    retry_policy: RetryPolicy,
+) -> ApprovalDecision | None:
+    """Request HiTL approval and handle timeout escalation in one reusable block."""
+    clear_approval()
+    hitl_request = hitl_request.model_copy(update={"run_id": workflow.info().run_id})
+
+    await workflow.execute_activity(
+        request_hitl_approval,
+        args=[tenant_id, hitl_request],
+        start_to_close_timeout=timeout,
+        retry_policy=retry_policy,
+    )
+
+    try:
+        await workflow.wait_condition(
+            lambda: approval_getter() is not None,
+            timeout=timedelta(hours=config.hitl_timeout_hours),
+        )
+        return approval_getter()
+    except TimeoutError:
+        if config.auto_isolate_on_timeout and device_id:
+            await workflow.execute_activity(
+                edr_isolate_device,
+                args=[tenant_id, device_id],
+                start_to_close_timeout=timeout,
+                retry_policy=retry_policy,
+            )
+
+        if config.escalation_enabled and ticket_id:
+            await workflow.execute_activity(
+                ticket_update,
+                args=[
+                    tenant_id,
+                    config.ticketing_provider,
+                    ticket_id,
+                    {
+                        "status": "escalated",
+                        "note": "Geen beslissing binnen timeout — geescaleerd.",
+                    },
+                ],
+                start_to_close_timeout=timeout,
+                retry_policy=retry_policy,
+            )
+
+        return None

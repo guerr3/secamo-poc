@@ -66,12 +66,20 @@ def test_audit_log_workflow_uses_inline_hitl() -> None:
     assert "HiTLApprovalWorkflow" not in source
 
 
-def test_soc_alert_workflow_uses_inline_hitl() -> None:
+def test_soc_alert_workflow_uses_shared_hitl_helper() -> None:
     source = Path("workflows/soc_alert_triage.py").read_text(encoding="utf-8")
 
-    assert "request_hitl_approval" in source
-    assert "workflow.wait_condition" in source
+    assert "request_hitl_decision" in source
+    assert "request_hitl_approval" not in source
+    assert "workflow.wait_condition" not in source
     assert "HiTLApprovalWorkflow" not in source
+
+
+def test_soc_alert_workflow_persists_case_record_lifecycle() -> None:
+    source = Path("workflows/soc_alert_triage.py").read_text(encoding="utf-8")
+
+    assert "persist_case_record" in source
+    assert "update_case(" in source
 
 
 def test_iam_workflow_has_inline_license_approval_path() -> None:

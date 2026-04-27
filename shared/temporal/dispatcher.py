@@ -8,9 +8,13 @@ from __future__ import annotations
 
 from typing import Any, Protocol, runtime_checkable
 
+from shared.models import SecurityCaseInput
+from shared.models.canonical import DefenderSecuritySignalEvent
 from shared.normalization.iam.onboarding_event import normalize_iam_onboarding_case
 from shared.normalization.soc import (
     normalize_audit_log_case,
+    normalize_defender_alert_case,
+    normalize_impossible_travel_case,
     normalize_noncompliant_device_case,
     normalize_risky_user_case,
     normalize_signin_log_case,
@@ -28,6 +32,52 @@ _SOC_SIGNAL_NORMALIZERS = {
 }
 
 
+def _safe_severity(value: str | None, default: str) -> str:
+    normalized = str(value or default).strip().lower() or default
+    return normalized if normalized in {"low", "medium", "high", "critical"} else default
+
+
+def _vendor_string(payload: object, key: str) -> str | None:
+    vendor_extensions = getattr(payload, "vendor_extensions", None)
+    if not isinstance(vendor_extensions, dict):
+        return None
+
+    extension = vendor_extensions.get(key)
+    if extension is None:
+        return None
+
+    value = getattr(extension, "value", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _soc_alert_case_input(envelope: Envelope) -> SecurityCaseInput:
+    if envelope.payload.event_type == "defender.alert":
+        return normalize_defender_alert_case(envelope, auto_remediate=False)
+
+    if envelope.payload.event_type == "defender.impossible_travel":
+        return normalize_impossible_travel_case(envelope, auto_remediate=False)
+
+    payload = envelope.payload
+    if isinstance(payload, DefenderSecuritySignalEvent):
+        return SecurityCaseInput(
+            tenant_id=envelope.tenant_id,
+            case_type="generic_signal",
+            severity=_safe_severity(payload.severity, "medium"),
+            alert_id=payload.signal_id,
+            allowed_actions=["dismiss", "isolate", "disable_user"],
+            auto_remediate=False,
+            identity=_vendor_string(payload, "user_email"),
+            device=_vendor_string(payload, "device_id"),
+            source_event=envelope,
+        )
+
+    raise ValueError(
+        "SocAlertTriageWorkflow requires defender.alert, impossible_travel, or security_signal payload"
+    )
+
+
 def workflow_input_for_route(
     route: WorkflowRoute,
     envelope: Envelope,
@@ -38,6 +88,10 @@ def workflow_input_for_route(
 
     if route.workflow_name == "IamOnboardingWorkflow":
         case_input = normalize_iam_onboarding_case(envelope)
+        return case_input.model_dump(mode="json")
+
+    if route.workflow_name == "SocAlertTriageWorkflow":
+        case_input = _soc_alert_case_input(envelope)
         return case_input.model_dump(mode="json")
 
     normalizer = _SOC_SIGNAL_NORMALIZERS.get(route.workflow_name)

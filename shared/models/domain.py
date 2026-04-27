@@ -12,7 +12,7 @@ from typing import Any, Literal, Optional, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from shared.models.canonical import CustomerOnboardingEvent, DefenderDetectionFindingEvent, Envelope
+from shared.models.canonical import CustomerOnboardingEvent, Envelope
 from shared.models.subscriptions import SubscriptionConfig
 
 AIProviderType: TypeAlias = Literal["azure_openai", "aws_bedrock", "local"]
@@ -481,7 +481,8 @@ class AlertEnrichmentRequest(BaseModel):
     model_config = ConfigDict(from_attributes=True, frozen=True, extra="forbid")
 
     tenant_id: str
-    alert: DefenderDetectionFindingEvent
+    case_input: SecurityCaseInput
+    threat_indicator: str | None = None
     edr_provider: str
     identity_provider: str | None = None
     threat_intel: ThreatIntelResult | None = None

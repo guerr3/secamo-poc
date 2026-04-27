@@ -19,38 +19,86 @@ RETRY_POLICY = RetryPolicy(maximum_attempts=3)
 TIMEOUT = timedelta(seconds=30)
 
 
+def _source_vendor_string(request: AlertEnrichmentRequest, key: str) -> str | None:
+    source_event = request.case_input.source_event
+    if source_event is None:
+        return None
+
+    vendor_extensions = getattr(source_event.payload, "vendor_extensions", None)
+    if not isinstance(vendor_extensions, dict):
+        return None
+
+    extension = vendor_extensions.get(key)
+    if extension is None:
+        return None
+
+    value = getattr(extension, "value", None)
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return None
+
+
+def _source_ip_hints(request: AlertEnrichmentRequest) -> tuple[str | None, str | None]:
+    source_ip = _source_vendor_string(request, "source_ip")
+    destination_ip = _source_vendor_string(request, "destination_ip")
+
+    source_event = request.case_input.source_event
+    if source_event is None:
+        return source_ip, destination_ip
+
+    payload = source_event.payload
+    raw_source_ip = getattr(payload, "source_ip", None)
+    raw_destination_ip = getattr(payload, "destination_ip", None)
+
+    if source_ip is None and isinstance(raw_source_ip, str) and raw_source_ip.strip():
+        source_ip = raw_source_ip.strip()
+
+    if destination_ip is None and isinstance(raw_destination_ip, str) and raw_destination_ip.strip():
+        destination_ip = raw_destination_ip.strip()
+
+    return source_ip, destination_ip
+
+
 @workflow.defn
 class AlertEnrichmentWorkflow:
     """Reusable child workflow for EDR alert enrichment and risk scoring."""
 
     @workflow.run
     async def run(self, request: AlertEnrichmentRequest) -> AlertEnrichmentWorkflowResult:
+        case_input = request.case_input
         workflow.logger.info(
             "AlertEnrichmentWorkflow gestart — tenant=%s alert=%s",
             request.tenant_id,
-            request.alert.alert_id,
+            case_input.alert_id,
         )
+
+        enrichment_context = {
+            "case_type": case_input.case_type,
+            "severity": case_input.severity,
+            "identity": case_input.identity,
+            "device": case_input.device,
+            "indicator": request.threat_indicator,
+        }
 
         enriched_payload: AlertEnrichmentResult = await workflow.execute_activity(
             edr_enrich_alert,
-            args=[request.tenant_id, request.alert.alert_id, None],
+            args=[request.tenant_id, case_input.alert_id, enrichment_context],
             start_to_close_timeout=TIMEOUT,
             retry_policy=RETRY_POLICY,
         )
-        user_email_ext = request.alert.vendor_extensions.get("user_email")
-        device_id_ext = request.alert.vendor_extensions.get("device_id")
-        source_ip_ext = request.alert.vendor_extensions.get("source_ip")
-        destination_ip_ext = request.alert.vendor_extensions.get("destination_ip")
-        user_email = str(user_email_ext.value) if user_email_ext and user_email_ext.value else None
-        device_id = str(device_id_ext.value) if device_id_ext and device_id_ext.value else None
-        source_ip = str(source_ip_ext.value) if source_ip_ext and source_ip_ext.value else None
-        destination_ip = str(destination_ip_ext.value) if destination_ip_ext and destination_ip_ext.value else None
+        user_email = (
+            case_input.identity
+            or _source_vendor_string(request, "user_email")
+            or _source_vendor_string(request, "user_principal_name")
+        )
+        device_id = case_input.device or _source_vendor_string(request, "device_id")
+        source_ip, destination_ip = _source_ip_hints(request)
 
         enriched = EnrichedAlert(
-            alert_id=enriched_payload.alert_id or request.alert.alert_id,
-            severity=(enriched_payload.severity or request.alert.severity).lower(),
-            title=enriched_payload.title or request.alert.title,
-            description=str(enriched_payload.description or request.alert.description or ""),
+            alert_id=enriched_payload.alert_id or case_input.alert_id,
+            severity=(enriched_payload.severity or case_input.severity).lower(),
+            title=enriched_payload.title or f"SOC case {case_input.case_type}",
+            description=str(enriched_payload.description or ""),
             user_display_name=(
                 enriched_payload.user_display_name
                 or user_email
@@ -85,9 +133,7 @@ class AlertEnrichmentWorkflow:
                 if description != enriched.description:
                     enriched = enriched.model_copy(update={"description": description})
 
-        risky_lookup_key = (
-            user_email
-        ) or user_email
+        risky_lookup_key = user_email
 
         if risky_lookup_key:
             identity_risk = await workflow.execute_activity(
@@ -105,7 +151,7 @@ class AlertEnrichmentWorkflow:
                 )
 
         threat_intel = request.threat_intel or ThreatIntelResult(
-            indicator=source_ip or destination_ip or "",
+            indicator=request.threat_indicator or source_ip or destination_ip or case_input.alert_id,
             is_malicious=False,
             provider="disabled",
             reputation_score=0.0,

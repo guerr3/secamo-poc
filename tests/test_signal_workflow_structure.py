@@ -137,4 +137,4 @@ def test_soc_alert_triage_workflow_defines_run_method() -> None:
 
     non_self_args = [arg for arg in run_method.args.args if arg.arg != "self"]
     assert non_self_args, "SocAlertTriageWorkflow.run() must declare an input argument"
-    assert _annotation_name(non_self_args[0].annotation) == "Envelope"
+    assert _annotation_name(non_self_args[0].annotation) == "SecurityCaseInput"

@@ -6,9 +6,6 @@ from temporalio import workflow
 from temporalio.common import RetryPolicy, SearchAttributeKey
 
 with workflow.unsafe.imports_passed_through():
-    from activities.edr import edr_isolate_device
-    from activities.hitl import request_hitl_approval
-    from activities.ticketing import ticket_update
     from shared.config import QUEUE_EDR, QUEUE_TICKETING
     from shared.models import (
         AlertEnrichmentRequest,
@@ -23,18 +20,13 @@ with workflow.unsafe.imports_passed_through():
         ThreatIntelEnrichmentRequest,
         ThreatIntelResult,
     )
-    from shared.models.canonical import (
-        AuthenticationEvent,
-        DefenderDetectionFindingEvent,
-        DefenderSecuritySignalEvent,
-        Envelope,
-        VendorExtension,
+    from shared.workflow_helpers import (
+        bootstrap_tenant,
+        emit_workflow_observability,
+        persist_case_record,
+        request_hitl_decision,
+        update_case,
     )
-    from shared.normalization import (
-        normalize_defender_alert_case,
-        normalize_impossible_travel_case,
-    )
-    from shared.workflow_helpers import bootstrap_tenant, emit_workflow_observability
     from workflows.child.alert_enrichment import AlertEnrichmentWorkflow
     from workflows.child.incident_response import IncidentResponseWorkflow
     from workflows.child.threat_intel_enrichment import ThreatIntelEnrichmentWorkflow
@@ -48,13 +40,12 @@ CASE_TYPE_SEARCH_ATTRIBUTE = SearchAttributeKey.for_keyword("CaseType")
 SEVERITY_SEARCH_ATTRIBUTE = SearchAttributeKey.for_keyword("Severity")
 
 
-def _safe_severity(value: str | None, default: str) -> str:
-    normalized = str(value or default).strip().lower() or default
-    return normalized if normalized in {"low", "medium", "high", "critical"} else default
+def _source_vendor_string(case_input: SecurityCaseInput, key: str) -> str | None:
+    source_event = case_input.source_event
+    if source_event is None:
+        return None
 
-
-def _vendor_string(payload: object, key: str) -> str | None:
-    vendor_extensions = getattr(payload, "vendor_extensions", None)
+    vendor_extensions = getattr(source_event.payload, "vendor_extensions", None)
     if not isinstance(vendor_extensions, dict):
         return None
 
@@ -68,104 +59,22 @@ def _vendor_string(payload: object, key: str) -> str | None:
     return None
 
 
-def _to_security_case_input(event: Envelope) -> SecurityCaseInput:
-    payload = event.payload
-
-    if isinstance(payload, DefenderDetectionFindingEvent):
-        return normalize_defender_alert_case(event, auto_remediate=False)
-
-    if isinstance(payload, AuthenticationEvent):
-        return normalize_impossible_travel_case(event, auto_remediate=False)
-
-    if isinstance(payload, DefenderSecuritySignalEvent):
-        case_type = (
-            "risky_user"
-            if "riskyuser" in payload.resource_type.replace("_", "").lower()
-            else "generic_signal"
-        )
-        return SecurityCaseInput(
-            tenant_id=event.tenant_id,
-            case_type=case_type,
-            severity=_safe_severity(payload.severity, "medium"),
-            alert_id=payload.signal_id,
-            allowed_actions=["dismiss", "isolate", "disable_user"],
-            auto_remediate=False,
-            identity=_vendor_string(payload, "user_email"),
-            device=_vendor_string(payload, "device_id"),
-            source_event=event,
-        )
-
-    raise ValueError(
-        "SocAlertTriageWorkflow requires defender.alert, impossible_travel, or security_signal payload"
-    )
-
-
-def _build_alert_payload(case_input: SecurityCaseInput) -> DefenderDetectionFindingEvent:
-    source_event = case_input.source_event
-    if source_event is None:
-        raise ValueError("SecurityCaseInput.source_event is required for enrichment chain")
-
-    payload = source_event.payload
-    if isinstance(payload, DefenderDetectionFindingEvent):
-        return payload
-
-    if isinstance(payload, AuthenticationEvent):
-        vendor_extensions = dict(payload.vendor_extensions)
-        if payload.source_ip:
-            vendor_extensions["source_ip"] = VendorExtension(source="impossible_travel", value=payload.source_ip)
-        if payload.destination_ip:
-            vendor_extensions["destination_ip"] = VendorExtension(source="impossible_travel", value=payload.destination_ip)
-        if payload.user_principal_name:
-            vendor_extensions["user_email"] = VendorExtension(
-                source="impossible_travel",
-                value=payload.user_principal_name,
-            )
-        if case_input.device:
-            vendor_extensions["device_id"] = VendorExtension(source="impossible_travel", value=case_input.device)
-
-        return DefenderDetectionFindingEvent(
-            event_type="defender.alert",
-            activity_id=2004,
-            activity_name="impossible_travel_promoted",
-            alert_id=case_input.alert_id,
-            title=f"Impossible travel detection for {payload.user_principal_name}",
-            description=payload.message or "Impossible travel detection converted to SOC alert case.",
-            severity_id=payload.severity_id,
-            severity=case_input.severity,
-            status="open",
-            vendor_extensions=vendor_extensions,
-        )
-
-    if isinstance(payload, DefenderSecuritySignalEvent):
-        vendor_extensions = dict(payload.vendor_extensions)
-        return DefenderDetectionFindingEvent(
-            event_type="defender.alert",
-            activity_id=2004,
-            activity_name="security_signal_promoted",
-            alert_id=case_input.alert_id,
-            title=payload.title,
-            description=payload.description,
-            severity_id=payload.severity_id,
-            severity=case_input.severity,
-            status=payload.status,
-            vendor_extensions=vendor_extensions,
-        )
-
-    raise ValueError("Unsupported source event for alert enrichment mapping")
+def _requester(case_input: SecurityCaseInput) -> str:
+    if case_input.source_event is None:
+        return "ingress-api"
+    return str(case_input.source_event.metadata.get("requester") or "ingress-api")
 
 
 def _resolve_threat_indicator(case_input: SecurityCaseInput) -> str:
-    source_event = case_input.source_event
-    if source_event is None:
-        return case_input.alert_id
-
-    payload = source_event.payload
-    source_ip = _vendor_string(payload, "source_ip")
+    source_ip = _source_vendor_string(case_input, "source_ip")
     if source_ip:
         return source_ip
 
-    if isinstance(payload, AuthenticationEvent) and payload.source_ip:
-        return payload.source_ip
+    source_event = case_input.source_event
+    if source_event is not None:
+        payload_source_ip = getattr(source_event.payload, "source_ip", None)
+        if isinstance(payload_source_ip, str) and payload_source_ip.strip():
+            return payload_source_ip.strip()
 
     return case_input.alert_id
 
@@ -177,14 +86,15 @@ class SocAlertTriageWorkflow:
     def __init__(self) -> None:
         self._approval: ApprovalDecision | None = None
 
+    def _clear_approval(self) -> None:
+        self._approval = None
+
     @workflow.signal
     async def approve(self, decision: ApprovalDecision) -> None:
         self._approval = decision
 
     @workflow.run
-    async def run(self, event: Envelope) -> str:
-        workflow.patched("soc-alert-triage-rename-v1")
-        case_input = _to_security_case_input(event)
+    async def run(self, case_input: SecurityCaseInput) -> str:
 
         workflow.upsert_search_attributes(
             [
@@ -201,6 +111,18 @@ class SocAlertTriageWorkflow:
         )
         runtime_retry = RetryPolicy(maximum_attempts=config.max_activity_attempts)
         case_input = case_input.model_copy(update={"auto_remediate": bool(config.auto_isolate_on_timeout)})
+
+        case_id = str(workflow.uuid4())
+        await persist_case_record(
+            case_input.tenant_id,
+            case_id,
+            workflow.info().workflow_id,
+            case_input.case_type,
+            case_input.severity,
+            source_event_id=case_input.alert_id,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
 
         workflow.logger.info(
             "SocAlertTriageWorkflow started tenant=%s case_type=%s alert_id=%s",
@@ -222,11 +144,20 @@ class SocAlertTriageWorkflow:
                     "case_type": case_input.case_type,
                     "alert_id": case_input.alert_id,
                     "severity": case_input.severity,
-                    "requester": str(event.metadata.get("requester") or "ingress-api"),
+                    "requester": _requester(case_input),
                 },
                 timeout=TIMEOUT,
                 retry_policy=runtime_retry,
             )
+
+            await update_case(
+                case_input.tenant_id,
+                case_id,
+                "closed",
+                timeout=TIMEOUT,
+                retry_policy=runtime_retry,
+            )
+
             return "Case intake complete (generic signal audit path)."
 
         indicator = _resolve_threat_indicator(case_input)
@@ -244,12 +175,12 @@ class SocAlertTriageWorkflow:
             execution_timeout=timedelta(minutes=5),
         )
 
-        alert_payload = _build_alert_payload(case_input)
         enrichment_result: AlertEnrichmentWorkflowResult = await workflow.execute_child_workflow(
             AlertEnrichmentWorkflow.run,
             AlertEnrichmentRequest(
                 tenant_id=case_input.tenant_id,
-                alert=alert_payload,
+                case_input=case_input,
+                threat_indicator=indicator,
                 edr_provider=config.edr_provider,
                 identity_provider=config.iam_provider,
                 threat_intel=threat_intel,
@@ -283,6 +214,15 @@ class SocAlertTriageWorkflow:
             execution_timeout=timedelta(minutes=5),
         )
 
+        await update_case(
+            case_input.tenant_id,
+            case_id,
+            "open",
+            ticket_id=ticket.ticket_id,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
+
         hitl_request = HiTLRequest(
             workflow_id=workflow.info().workflow_id,
             run_id="",
@@ -308,53 +248,17 @@ class SocAlertTriageWorkflow:
             },
         )
 
-        decision: ApprovalDecision | None
-        self._approval = None
-        hitl_request = hitl_request.model_copy(
-            update={
-                "run_id": workflow.info().run_id,
-            }
-        )
-        await workflow.execute_activity(
-            request_hitl_approval,
-            args=[case_input.tenant_id, hitl_request],
-            start_to_close_timeout=TIMEOUT,
+        decision = await request_hitl_decision(
+            case_input.tenant_id,
+            hitl_request,
+            approval_getter=lambda: self._approval,
+            clear_approval=self._clear_approval,
+            config=config,
+            ticket_id=ticket.ticket_id,
+            device_id=case_input.device,
+            timeout=TIMEOUT,
             retry_policy=runtime_retry,
         )
-        try:
-            await workflow.wait_condition(
-                lambda: self._approval is not None,
-                timeout=timedelta(hours=config.hitl_timeout_hours),
-            )
-            decision = self._approval
-        except TimeoutError:
-            if config.auto_isolate_on_timeout and case_input.device:
-                await workflow.execute_activity(
-                    edr_isolate_device,
-                    args=[
-                        case_input.tenant_id,
-                        case_input.device,
-                    ],
-                    start_to_close_timeout=TIMEOUT,
-                    retry_policy=runtime_retry,
-                )
-
-            if config.escalation_enabled and ticket.ticket_id:
-                await workflow.execute_activity(
-                    ticket_update,
-                    args=[
-                        case_input.tenant_id,
-                        config.ticketing_provider,
-                        ticket.ticket_id,
-                        {
-                            "status": "escalated",
-                            "note": "Geen beslissing binnen timeout — geescaleerd.",
-                        },
-                    ],
-                    start_to_close_timeout=TIMEOUT,
-                    retry_policy=runtime_retry,
-                )
-            decision = None
 
         remediation_result = "remediation skipped"
         if (
@@ -385,6 +289,17 @@ class SocAlertTriageWorkflow:
                 execution_timeout=timedelta(minutes=5),
             )
 
+        final_status = "auto_remediated" if decision is None and config.auto_isolate_on_timeout and case_input.device else (
+            "dismissed" if decision and decision.action == "dismiss" else "closed"
+        )
+        await update_case(
+            case_input.tenant_id,
+            case_id,
+            final_status,
+            timeout=TIMEOUT,
+            retry_policy=runtime_retry,
+        )
+
         await emit_workflow_observability(
             case_input.tenant_id,
             workflow_id=workflow.info().workflow_id,
@@ -400,7 +315,7 @@ class SocAlertTriageWorkflow:
                 "risk_level": risk.level,
                 "risk_score": risk.score,
                 "decision": decision.action if decision else "timeout_or_none",
-                "requester": str(event.metadata.get("requester") or "ingress-api"),
+                "requester": _requester(case_input),
             },
             timeout=TIMEOUT,
             retry_policy=runtime_retry,
