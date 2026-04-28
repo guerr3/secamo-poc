@@ -245,6 +245,42 @@ async def test_edr_fetch_events_non_defender_maps_to_security_signal(graph_secre
 
 
 @pytest.mark.asyncio
+async def test_edr_fetch_events_entra_signin_logs_maps_to_security_signal(graph_secrets):
+    transport = _TransportStub(
+        graph_queue=[
+            _Resp(
+                200,
+                body={
+                    "value": [
+                        {
+                            "id": "signin-1",
+                            "createdDateTime": "2026-04-28T00:00:00Z",
+                            "riskLevelDuringSignIn": "high",
+                            "userPrincipalName": "user@example.com",
+                            "ipAddress": "1.2.3.4",
+                            "location": {"city": "Amsterdam", "countryOrRegion": "NL"},
+                        }
+                    ]
+                },
+            )
+        ]
+    )
+    connector = MicrosoftDefenderEDRConnector(
+        tenant_id="tenant-1",
+        secrets=graph_secrets,
+        transport=transport,
+    )
+
+    events = await connector.fetch_events({"resource_type": "entra_signin_logs", "top": 1})
+
+    assert len(events) == 1
+    assert isinstance(events[0].payload, DefenderSecuritySignalEvent)
+    assert events[0].payload.event_type == "defender.security_signal"
+    assert events[0].payload.provider_event_type == "signin_log"
+    assert events[0].payload.resource_type == "entra_signin_logs"
+
+
+@pytest.mark.asyncio
 async def test_edr_fetch_events_maps_typed_evidence_fields(graph_secrets):
     transport = _TransportStub(
         graph_queue=[
