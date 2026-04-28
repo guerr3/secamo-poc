@@ -54,7 +54,7 @@ class GraphNotificationHelper:
         if "alerts" in value:
             return "defender.alert"
         if "signin" in value or "risky" in value:
-            return "defender.impossible_travel"
+            return "defender.security_signal"
         return ""
 
     @staticmethod

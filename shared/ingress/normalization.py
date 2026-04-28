@@ -208,6 +208,49 @@ def _normalize_jira_issue_updated(tenant_id: str, raw_body: dict[str, Any], prov
     return payload
 
 
+def _normalize_graph_security_signal(tenant_id: str, raw_body: dict[str, Any], provider: str) -> dict[str, Any]:
+    """Normalize a microsoft_graph defender.security_signal notification into the canonical signal shape.
+
+    Derives provider_event_type (signin_log | risky_user) from the Graph resource path so that
+    downstream routing predicates can distinguish signal subtypes without requiring a new model field.
+    """
+    resource = str(raw_body.get("resource") or "").lower()
+    if "signin" in resource:
+        provider_event_type = "signin_log"
+        resource_type = "auditLogs/signIns"
+    elif "risky" in resource:
+        provider_event_type = "risky_user"
+        resource_type = "identityProtection/riskyUsers"
+    else:
+        provider_event_type = "unknown"
+        resource_type = resource or "unknown"
+
+    alert_src = raw_body.get("alert") if isinstance(raw_body.get("alert"), dict) else raw_body
+    alert = {
+        "alert_id": alert_src.get("id") or alert_src.get("alert_id") or "unknown-signal",
+        "severity": _coerce_severity(alert_src.get("severity")),
+        "title": alert_src.get("title") or alert_src.get("riskEventType") or "Graph security signal",
+        "description": alert_src.get("description") or alert_src.get("riskDetail") or "",
+        "device_id": alert_src.get("deviceId") or alert_src.get("device_id"),
+        "user_email": alert_src.get("userPrincipalName") or alert_src.get("user_email"),
+        "source_ip": alert_src.get("ipAddress") or alert_src.get("source_ip"),
+    }
+    result = _build_security_event(
+        event_id=alert["alert_id"],
+        event_type="defender.security_signal",
+        tenant_id=tenant_id,
+        provider=provider,
+        requester=raw_body.get("requester", "ingress-api"),
+        severity=alert["severity"],
+        alert=alert,
+        user={"user_principal_name": alert.get("user_email")},
+        metadata={},
+    )
+    result["provider_event_type"] = provider_event_type
+    result["resource_type"] = resource_type
+    return result
+
+
 NormalizerFn = Callable[[str, dict[str, Any], str], dict[str, Any]]
 
 _NORMALIZERS: dict[tuple[str, str], NormalizerFn] = {
@@ -215,6 +258,7 @@ _NORMALIZERS: dict[tuple[str, str], NormalizerFn] = {
     ("microsoft_defender", "impossible_travel"): _normalize_ms_defender_impossible_travel,
     ("microsoft_graph", "defender.alert"): _normalize_ms_defender_alert,
     ("microsoft_graph", "defender.impossible_travel"): _normalize_ms_defender_impossible_travel,
+    ("microsoft_graph", "defender.security_signal"): _normalize_graph_security_signal,
     ("crowdstrike", "detection_summary"): _normalize_crowdstrike_detection_summary,
     ("crowdstrike", "impossible_travel"): _normalize_crowdstrike_impossible_travel,
     ("sentinelone", "alert"): _normalize_sentinelone_alert,

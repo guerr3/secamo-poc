@@ -170,6 +170,30 @@ def build_envelope(
             "action": action,
             "user_data": user.get("user_data") if isinstance(user.get("user_data"), dict) else {},
         }
+    elif event_key == "defender.security_signal":
+        alert = normalized.get("alert") if isinstance(normalized.get("alert"), dict) else {}
+        severity = str(alert.get("severity") or normalized.get("severity") or "medium").lower()
+        provider_event_type = str(normalized.get("provider_event_type") or "unknown")
+        resource_type = str(normalized.get("resource_type") or provider_event_type)
+        _signal_activity_ids: dict[str, int] = {"signin_log": 5001, "risky_user": 5002}
+        payload_candidate = {
+            "event_type": "defender.security_signal",
+            "activity_id": _signal_activity_ids.get(provider_event_type, 5000),
+            "activity_name": provider_event_type,
+            "signal_id": str(alert.get("alert_id") or provider_event_id),
+            "provider_event_type": provider_event_type,
+            "resource_type": resource_type,
+            "title": str(alert.get("title") or "Graph security signal"),
+            "description": str(alert.get("description") or ""),
+            "severity_id": _severity_to_id(severity),
+            "severity": severity,
+            "vendor_extensions": {
+                "user_email": VendorExtension(source="ingress", value=alert.get("user_email")),
+                "user_principal_name": VendorExtension(source="ingress", value=alert.get("user_email")),
+                "device_id": VendorExtension(source="ingress", value=alert.get("device_id")),
+                "source_ip": VendorExtension(source="ingress", value=alert.get("source_ip")),
+            },
+        }
     elif event_key == "hitl.approval":
         payload_candidate = {
             "event_type": "hitl.approval",

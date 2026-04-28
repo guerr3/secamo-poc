@@ -200,7 +200,7 @@ def build_default_route_registry() -> RouteRegistry:
 
     registry.register_webhook_resource("microsoft_graph", "security/alerts", "defender.alert")
     registry.register_webhook_resource("microsoft_graph", "security/alerts_v2", "defender.alert")
-    registry.register_webhook_resource("microsoft_graph", "auditlogs/signins", "defender.impossible_travel")
+    registry.register_webhook_resource("microsoft_graph", "auditlogs/signins", "defender.security_signal")
     registry.register_webhook_resource("microsoft_graph", "identityprotection/riskyusers", "defender.security_signal")
 
     return registry
