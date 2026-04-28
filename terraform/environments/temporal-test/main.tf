@@ -8,6 +8,7 @@
 
 locals {
   name_prefix = "secamo-temporal-test"
+  callback_base_url = trimspace(var.secamo_public_base_url) != "" ? trimspace(var.secamo_public_base_url) : module.ingress.api_invoke_url
 }
 
 module "storage" {
@@ -318,6 +319,7 @@ resource "aws_instance" "temporal" {
     hitl_token_table         = aws_dynamodb_table.hitl_tokens.name
     secamo_sender_email      = var.secamo_sender_email
     email_provider           = var.email_provider
+    secamo_public_base_url   = trimspace(var.secamo_public_base_url)
   })
 
   user_data_replace_on_change = true
@@ -699,15 +701,12 @@ resource "aws_ssm_parameter" "hitl_endpoint_base_url" {
   name        = "/${local.name_prefix}/hitl/endpoint_base_url"
   description = "HiTL callback base URL for signed approval links"
   type        = "String"
-  value       = "PLACEHOLDER"
+  value       = local.callback_base_url
 
   tags = {
     Name = "${local.name_prefix}-hitl-endpoint-base-url"
   }
 
-  lifecycle {
-    ignore_changes = [value]
-  }
 }
 
 resource "aws_ssm_parameter" "hitl_jira_webhook_secret" {

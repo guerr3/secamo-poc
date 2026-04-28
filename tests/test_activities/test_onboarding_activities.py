@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from temporalio.exceptions import ApplicationError
 
-from activities.onboarding import provision_customer_secrets, register_customer_tenant
+from activities.onboarding import _normalize_base_url, provision_customer_secrets, register_customer_tenant
 from shared.models.canonical import CustomerOnboardingEvent
 
 
@@ -116,3 +116,9 @@ async def test_register_customer_tenant_requires_table_name(monkeypatch: pytest.
 
     assert exc.value.type == "MissingTenantTableConfig"
     assert exc.value.non_retryable is True
+
+
+def test_normalize_base_url_preserves_stage_path() -> None:
+    normalized = _normalize_base_url("https://ppb4g3e284.execute-api.eu-west-1.amazonaws.com/v1/")
+
+    assert normalized == "https://ppb4g3e284.execute-api.eu-west-1.amazonaws.com/v1"

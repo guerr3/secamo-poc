@@ -19,6 +19,7 @@
 #   ${hitl_token_table}          — DynamoDB table for HiTL approval tokens
 #   ${secamo_sender_email}       — Sender email for notification activities
 #   ${email_provider}            — Fallback connector provider for outbound email
+#   ${secamo_public_base_url}    — Optional explicit callback base URL override
 # ──────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -110,6 +111,7 @@ TENANT_TABLE_NAME=${tenant_table}
 HITL_TOKEN_TABLE=${hitl_token_table}
 SECAMO_SENDER_EMAIL=${secamo_sender_email}
 EMAIL_PROVIDER=${email_provider}
+SECAMO_PUBLIC_BASE_URL=${secamo_public_base_url}
 EOF
 
 # ── Start Temporal Stack ─────────────────────────────────────

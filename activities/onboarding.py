@@ -50,7 +50,9 @@ def _normalize_base_url(value: str) -> str:
     parsed = urlparse(value)
     if not parsed.scheme or not parsed.netloc:
         raise ValueError("Invalid public callback base URL")
-    return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
+    # Keep any configured base path (for example API Gateway stages like "/v1").
+    base_path = (parsed.path or "").rstrip("/")
+    return f"{parsed.scheme}://{parsed.netloc}{base_path}"
 
 
 def _resolve_callback_base_url() -> str:

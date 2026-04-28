@@ -130,6 +130,37 @@ async def test_handle_graph_notification_dispatches_supported_items(monkeypatch)
     assert result["body"]["ignored"] == 1
 
 
+async def test_handle_graph_notification_uses_path_tenant_id_without_authorizer_context(monkeypatch) -> None:
+    module = _load_handler_module()
+
+    class _FakePipeline:
+        async def dispatch_graph_notifications(self, *, tenant_id, body, headers, raw_body_text):
+            assert tenant_id == "tenant-demo-001"
+            return SimpleNamespace(
+                accepted=True,
+                status_code=202,
+                received=0,
+                dispatched=0,
+                ignored=0,
+            )
+
+    monkeypatch.setattr(module, "_get_ingress_pipeline", lambda: _FakePipeline())
+
+    event = SimpleNamespace(
+        tenant_id="unknown",
+        path_params={"tenant_id": "tenant-demo-001"},
+        query_params={},
+        headers={"authorization": "Bearer test"},
+        body={"value": []},
+        raw_body="{}",
+    )
+
+    result = await module.handle_graph_notification(event)
+
+    assert result["statusCode"] == 202
+    assert result["body"]["tenant_id"] == "tenant-demo-001"
+
+
 async def test_dispatch_provider_event_uses_canonical_event_type_for_jira(monkeypatch) -> None:
     captured: dict[str, str] = {}
 

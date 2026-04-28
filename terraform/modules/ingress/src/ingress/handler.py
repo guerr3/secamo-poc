@@ -218,9 +218,13 @@ def _extract_hitl_callback_fields(event: IngressEvent) -> tuple[str, str, str, s
 
 def _authorizer_tenant_id(event: IngressEvent) -> str:
     tenant_id = str(getattr(event, "tenant_id", "") or "").strip()
-    if not tenant_id or tenant_id.lower() == "unknown":
-        return ""
-    return tenant_id
+    if tenant_id and tenant_id.lower() != "unknown":
+        return tenant_id
+
+    # Graph notification route is intentionally unauthenticated at API Gateway level.
+    # Fall back to path parameters when authorizer context is not present.
+    path_tenant_id = str((getattr(event, "path_params", {}) or {}).get("tenant_id", "") or "").strip()
+    return path_tenant_id
 
 
 # -- Route: /api/v1/hitl/respond -----------------------------------------------

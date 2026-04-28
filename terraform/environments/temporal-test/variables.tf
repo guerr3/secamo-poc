@@ -80,3 +80,9 @@ variable "email_provider" {
   type        = string
   default     = "ses"
 }
+
+variable "secamo_public_base_url" {
+  description = "Optional public ingress base URL override (must include API Gateway stage path, for example https://<api-id>.execute-api.<region>.amazonaws.com/v1)"
+  type        = string
+  default     = ""
+}

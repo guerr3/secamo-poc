@@ -32,6 +32,11 @@ output "ingress_api_url" {
   value       = module.ingress.api_invoke_url
 }
 
+output "callback_base_url" {
+  description = "Effective callback base URL used for onboarding-generated Graph/HiTL callback endpoints"
+  value       = trimspace(var.secamo_public_base_url) != "" ? trimspace(var.secamo_public_base_url) : module.ingress.api_invoke_url
+}
+
 output "hitl_respond_url" {
   description = "Full invoke URL for the HiTL signed-link callback endpoint"
   value       = module.ingress.hitl_respond_url
