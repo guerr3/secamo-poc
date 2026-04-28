@@ -232,6 +232,8 @@ def load_activities_by_queue() -> dict[str, list]:
     try:
         from activities.hitl import request_hitl_approval
         interactions_activities.append(request_hitl_approval)
+        edr_activities.append(request_hitl_approval)
+        user_lifecycle_activities.append(request_hitl_approval)
         logger.info("✓ HiTL activities geladen")
     except ImportError as e:
         logger.error(f"✗ Fout bij het laden van HiTL activities: {e}")
